@@ -84,7 +84,7 @@ def material_evidence(textures, color_target, shader):
         return {2: "Diffuse"}, 2
     # Hair may bind its vector atlas later, after smaller auxiliary resources.
     mask = by_slot.get(3, {})
-    if (image(0, {"BC3_UNORM"}) and image(1, color)
+    if (image(0, {"BC1_UNORM", "BC3_UNORM"}) and image(1, color)
             and image(2, {"B8G8R8A8_UNORM"}) and mask.get("format") in {"BC1_UNORM", "B8G8R8A8_UNORM"}
             and mask.get("height", 0) >= 128 and mask.get("width") == 2 * mask["height"]
             and image(5, {"BC7_UNORM"})
@@ -181,11 +181,17 @@ def _face_atlas_evidence(by_slot):
             if (mask["width"] < data["width"] <= atlas["width"]
                     and scaled(data["width"], mask["width"]) and scaled(atlas["width"], data["width"])):
                 specificity = 2
-            # Equal-size mask/data maps need the trailing lookup and a double-size
-            # color atlas. This full face family outranks color-led hair passes.
-            elif (mask["width"] == data["width"] and atlas["width"] == 2 * data["width"]
-                  and _color_lookup(by_slot.get(data_slot + 2, {}))):
-                specificity = 4
+            # Equal-size mask/data maps require a lookup. Equal color/data atlases
+            # additionally require that lookup's exact repeated resource binding.
+            elif mask["width"] == data["width"]:
+                lookup, repeated = (by_slot.get(data_slot + offset, {}) for offset in (2, 3))
+                if _color_lookup(lookup) and (
+                    atlas["width"] == 2 * data["width"]
+                    or (atlas["width"] == data["width"] and _color_lookup(repeated)
+                        and lookup["resource"] == repeated["resource"]
+                        and (lookup["width"], lookup["height"]) == (repeated["width"], repeated["height"]))
+                ):
+                    specificity = 4
             if specificity:
                 candidates[slot + 1] = max(candidates.get(slot + 1, 0), specificity)
     return next(iter(candidates.items())) if len(candidates) == 1 else (None, 0)

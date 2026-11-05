@@ -12,6 +12,14 @@ along with the geometry.
 
 Extraction is available for all registered Asset Folder types. It reads captured
 resource history and validated stream layouts without requiring a game marker.
+All three games use position-buffer hash folders with object-local geometry,
+textures and metadata. GIMI/ZZMI use `hash.json`; WWMI retains native metadata
+and binary component formats. The viewer indexes the parent as one
+Asset. Components using the same position-buffer hash stay together; IB hashes
+and draw ranges retain their original identities. Shared textures are copied
+within each object, without references or hardlinks across object folders.
+These are geometry groups, not automatic Body/Face/Weapon labels; all supported
+parts remain included. Existing flat and nested facial Assets remain readable.
 The engine reconstructs supported stream-output skinning layouts and declared
 direct position/normal/UV streams. Stream-output inputs support the existing
 40-byte position/normal/tangent layout and a declared 24-byte position/normal
@@ -113,19 +121,22 @@ a lookup width of at least 128 pixels, height between 2 and 127 pixels, and widt
 at least four times its height. Smaller layouts remain unclassified by these
 signatures; scale relationships alone do not establish their roles.
 
-When reconstructed expression data and recognized facial material evidence agree,
-the extractor groups those components in `Face/` with their own `hash.json`.
-Face geometry and face-only textures go there; shared textures stay at the asset
-root. Loading the parent asset includes both metadata files. Component names,
-numbers and vertical position do not determine this grouping. Unproven components
-keep their existing location. A selection containing only facial components stays
-at the root so it remains a loadable standalone asset.
-GIMI grouping is automatic when one bilateral native Eyes reference and a matching
-eye-loop surface establish a face family with shared diffuse/light payloads.
+Layered GIMI eye materials identify their base iris diffuse through the complete
+bound family: scaled reflection/effect atlases and an exact repeated constant
+resource/version/payload. Other eye layers remain selectable candidates. This
+family takes priority over inherited primary bindings; replaced ramp snapshots
+are not used to establish it.
+
+There is no special `Face/` output folder. Facial geometry follows the same
+hash-folder and texture-ownership rules as body, hair and weapon geometry.
+GIMI face recognition requires a unique connected face surface with two comparable
+open eye boundaries inside its enclosing contour, plus shared diffuse/light
+payloads on related geometry. Legacy split eye rings can instead use a bilateral
+native Eyes reference and matching eye-loop fit.
 Additional recognized maps, such as NormalMap, and unclassified texture candidates
 do not prevent grouping; duplicate passes still require matching recognized maps.
-Related nearby direct meshes receive the face labels used by the viewer's existing
-alignment. Equivalent captured facial passes are excluded by default while their
+Related nearby direct meshes receive facial labels independently of placement.
+Equivalent captured facial passes are excluded by default while their
 provenance remains in the report; differing UVs or ambiguous references stay separate.
 Some GIMI face captures also contain a separate shell over the eye openings.
 When its UV tags, contiguous index range, bounds and shared outer boundary prove
@@ -146,8 +157,24 @@ to `unproven_candidates`, without triggering a partial warning or increasing
 does not establish that the missing geometry belongs to the asset. A non-partial
 result is not a completeness guarantee. Supported direct candidates can also be
 explicitly selected through the internal API; no new component-selection UI is
-provided. Direct-only GIMI dumps without a native Eyes reference cannot establish
-a facial family and therefore cannot be extracted through Add/Update.
+provided. A proven open-eye face can establish its family without native Eyes.
+Extraction derives placement from captured face/body object matrices and a native
+bone palette verified by replaying the captured stream-output positions. One
+consistent transform must satisfy the supported head-local axis convention across
+the facial draws and matching used bones. Bone IDs and constant-buffer slots may
+vary. Missing or conflicting evidence retains captured coordinates and reports a
+partial extraction; it never falls back to fitting the new face to eye geometry.
+Proven placement is baked into exported facial positions and directions, with
+matrix, resource versions, source hashes and replay evidence retained in the report.
+Original position-buffer bytes are retained under the object's `source_geometry`
+directory and referenced by the placement metadata. UVs, indices and capture files
+remain unchanged. Native skinned facial
+parts already use body rest coordinates and receive no extra transform.
+Hash metadata records the coordinate space and placement status, preventing loader
+realignment, including standalone face selections. Legacy exports without this
+metadata retain the existing geometry-derived compatibility alignment when a
+standalone native Eyes component is available. Re-extract experimental exports
+that depended on embedded eye geometry to obtain captured-matrix placement.
 
 ZZMI/GIMI compact metadata names each component's VB file, each range's IB file and each
 texture payload relative to its `hash.json`. These associations keep captured
@@ -157,10 +184,12 @@ matching; unresolved distinct same-hash geometry stays unbound.
 GIMI/ZZMI compact texture filenames include the asset name, component, role and native hash,
 such as `Asset_001-Body-Diffuse-12345678.dds`. Distinct payloads sharing one hash
 also retain a content suffix. Metadata references each file explicitly; identical
-hash/payload pairs share one file named for their first owning component, including
-across components and parts. Shared face/body textures remain at the asset root.
+hash/payload pairs share one file named for their first owning component within
+the same object, including across its components and parts. Another object's
+copy stays in that object's folder.
 Distinct native hash aliases and differing payloads stay separately addressable;
-identical bytes can additionally share storage through output-only hardlinks.
+identical bytes can additionally share storage through output-only hardlinks
+within one object.
 
 WWMI component metadata also retains explicit `texture_hashes` file/role records;
 `TextureUsage.json` contains captured `Component N` / `ps-tN` hash/shader evidence.

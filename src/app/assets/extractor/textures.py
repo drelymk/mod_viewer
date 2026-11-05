@@ -1,10 +1,12 @@
 from collections import defaultdict
 import hashlib
 from pathlib import Path
-from .profiles.zzz import material_roles, auxiliary
-from .profiles.gimi import material_roles as gimi_material_roles
+import re
+from .profiles.zzz import material_evidence as zzz_material_evidence, auxiliary
+from .profiles.gimi import material_evidence as gimi_material_evidence
 from .profiles.wwmi import material_evidence as wwmi_material_evidence
 from .image_headers import image_metadata
+from .capture import FILE
 
 
 def digest(path):
@@ -16,12 +18,11 @@ def digest(path):
 
 
 def _captured_roles(inv, draw, images, color):
-    if inv.zzz_evidence or not color or not (inv.gimi_evidence or inv.wwmi_evidence):
+    if not inv.zzz_evidence and (not color or not (inv.gimi_evidence or inv.wwmi_evidence)):
         return {}, False
     by_slot = defaultdict(list)
     for slot, h, ext, name in images:
-        if not inv.gimi_evidence or slot <= 2:
-            by_slot[slot].append((ext != ".dds", ext != ".png", h, name))
+        by_slot[slot].append((ext != ".dds", ext != ".png", h, name))
     textures = []
     for slot, variants in by_slot.items():
         _, _, h, name = min(variants)
@@ -29,16 +30,13 @@ def _captured_roles(inv, draw, images, color):
         textures.append(dict(slot=slot, hash=h, resource=vars(resource) if resource else {},
                              format=inv.formats.get(name, "unknown"), contaminated="!" in name,
                              **image_metadata(inv.path(name))))
+        if inv.gimi_evidence and 0 < textures[-1].get("width", 0) <= 4 and 0 < textures[-1].get("height", 0) <= 4:
+            textures[-1]["sha256"] = digest(inv.path(name))
+    if inv.zzz_evidence:
+        return zzz_material_evidence(textures, color, draw.shaders.get("ps", ""))
     if not inv.gimi_evidence:
         return wwmi_material_evidence(textures, color, draw.shaders.get("ps", ""))
-    roles = gimi_material_roles(textures, color, draw.shaders.get("ps", ""))
-    diffuse = next((t for t in textures if roles.get(t["slot"]) == "Diffuse"), None)
-    complete = inv.gimi_evidence and diffuse is not None and len(textures) == 3 and all(
-        t["format"] == ("BC7_UNORM_SRGB" if roles.get(t["slot"]) == "Diffuse" else "BC7_UNORM")
-        and t["width"] >= diffuse["width"] / 4 and t["height"] >= diffuse["height"] / 4
-        and (t["resource"] or {}).get("hash") == t["hash"] and not t["contaminated"]
-        for t in textures)
-    return roles, complete
+    return gimi_material_evidence(textures, color, draw.shaders.get("ps", ""))
 
 
 def collect(inv, draws, context):
@@ -55,7 +53,17 @@ def collect(inv, draws, context):
                     inv.path(name)
                 except FileNotFoundError:
                     continue
-                images.append((int(slot[4:]), h, ext, name))
+                identity = h
+                if not identity:
+                    # Replacement snapshots may omit their hash in the draw filename.
+                    # Only the exact logged payload alias supplies that missing identity;
+                    # an earlier slot binding can still describe the replaced resource.
+                    target = inv.targets.get(name, "")
+                    match = re.fullmatch(r"deduped/([a-f0-9]{8})-[^/\\.]+" + re.escape(ext),
+                                         target, re.IGNORECASE)
+                    if match:
+                        identity = match[1].lower()
+                images.append((int(slot[4:]), identity, ext, name))
         color = any(slot == "o0" for slot, _hash, _ext in entries)
         if images:
             candidates.append((color, len({s for s, *_ in images}), draw, images))
@@ -80,7 +88,9 @@ def collect(inv, draws, context):
                            vertex_shader=draw.shaders.get("vs", ""),
                            resource=vars(draw.bindings["ps-t"][slot]) if slot in draw.bindings["ps-t"] else None,
                            contaminated="!" in name, role_confidence="unknown", **image_metadata(inv.path(name))))
-    roles = material_roles(result, color, draw.shaders.get("ps", "")) if inv.zzz_evidence else captured_roles[draw.id][0]
+        if h and (entry := FILE.match(name)) and not entry[3]:
+            result[-1]["hash_source"] = "logged_dedup"
+    roles = captured_roles[draw.id][0]
     pass_kind = ("outline" if roles.get(2) == "Diffuse" else "color" if roles.get(3) == "Diffuse" else "unknown") if inv.zzz_evidence else "color" if roles else "unknown"
     for t in result:
         t["pass_kind"] = pass_kind
@@ -88,6 +98,8 @@ def collect(inv, draws, context):
             t["role"] = roles[t["slot"]]
             profile = "zzz" if inv.zzz_evidence else "gimi" if inv.gimi_evidence else "wwmi"
             t["role_confidence"] = f"inferred_{profile}_pass_format_bindings"
+            if inv.gimi_evidence and not inv.zzz_evidence and captured_roles[draw.id][1] == 2:
+                t["role_note"] = "Base iris diffuse identified by the complete layered GIMI eye material family."
         t["auxiliary"] = t["slot"] not in roles and auxiliary(t)
         if inv.zzz_evidence and roles.get(3) == "Diffuse" and t["slot"] == 4 and t["format"] == "R16G16B16A16_FLOAT":
             t.update(auxiliary=True, role_confidence="unsupported_face_normal_encoding",
@@ -115,6 +127,9 @@ def collect(inv, draws, context):
                              role_confidence="dynamic_alternate", auxiliary=True,
                              resource=vars(candidate.bindings["ps-t"][slot]) if slot in candidate.bindings["ps-t"] else None,
                              contaminated="!" in name, **image_metadata(inv.path(name)))
+            alternate.pop("hash_source", None)
+            if (entry := FILE.match(name)) and not entry[3]:
+                alternate["hash_source"] = "logged_dedup"
             result.append(alternate)
     # Decode only during extraction, after all reliable signatures and exclusions.
     from .pixel_roles import apply_fallback

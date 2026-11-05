@@ -5,12 +5,12 @@ import struct
 from .geometry import codec, encoder
 
 
-def texture_plan(meshes, refs):
+def texture_plan(meshes, refs, folders):
     """Name each object-local payload for every native component that uses it."""
     ordinals, users, identities, contents = {}, {}, {}, {}
     for mesh in meshes:
         c = mesh.component
-        group = c.streams["position"]["hash"]
+        group = folders[c.id]
         for part_index, part in enumerate(c.parts):
             ordinal = ordinals.get(group, 0)
             ordinals[group] = ordinal + 1

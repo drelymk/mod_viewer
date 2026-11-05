@@ -4,7 +4,6 @@ import copy
 import json
 import struct
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -21,6 +20,8 @@ from app.assets.extractor.export import (
 )
 from app.assets.extractor.textures import collect, digest
 from app.assets.extractor.profiles.gimi import material_roles as gimi_material_roles
+from app.assets.extractor.profiles.gimi import material_evidence as gimi_material_evidence
+from app.assets.extractor.profiles.zzz import material_evidence as zzz_material_evidence
 from app.bridge.access import FolderAccess
 from app.bridge.registry import AssetFolderRegistry
 from app.settings import paths
@@ -39,6 +40,106 @@ def library(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "config_path", lambda: str(config))
     monkeypatch.setattr(paths, "asset_index_dir", lambda: str(tmp_path / "indexes"))
     return root, make_capture(tmp_path)
+
+
+def _zzz_material_specs(kind):
+    constant = (0, "R8G8B8A8_UNORM_SRGB", 4, 4)
+    color = (3, "BC7_UNORM_SRGB", 512, 512)
+    if kind == "outline":
+        return [constant, (2, "BC7_UNORM_SRGB", 512, 512),
+                (3, "R16_UNORM", 2, 2), (4, "R16_UNORM", 2, 2),
+                (5, "BC6H_UF16", 512, 512), (6, "BC6H_UF16", 512, 512)]
+    if kind == "screen":
+        return [(0, "R16G16B16A16_FLOAT", 128, 64), (1, "R8G8B8A8_UNORM", 128, 64),
+                (2, "A8_UNORM", 64, 16), color, (4, "R8G8B8A8_UNORM", 256, 256),
+                (5, "BC7_UNORM", 512, 512), (6, "BC7_UNORM", 512, 512)]
+    prefix = [constant, (2, "BC1_UNORM", 128, 128), color]
+    return prefix + ([(4, "R16G16B16A16_FLOAT", 256, 256), (5, "R16_UNORM", 2, 2)]
+                     if kind == "face" else [(4, "R8G8B8A8_UNORM", 256, 256),
+                         (5, "BC7_UNORM", 512, 512), (6, "BC7_UNORM", 512, 512)])
+
+
+@pytest.mark.parametrize("kind", ["body", "face"])
+@pytest.mark.parametrize("overlap", [True, False])
+def test_zzz_primary_material_and_face_outline_survive_export(tmp_path, kind, overlap):
+    dump = make_capture(tmp_path)
+    log = dump / "log.txt"
+    text = log.read_text()
+
+    def material(call, family):
+        specs = _zzz_material_specs(family)
+        bindings, aliases = [], []
+        for slot, fmt, width, height in specs:
+            source = 3 if family == "outline" and slot == 4 else slot
+            identity = f"{int(call) * 16 + source:08x}"
+            ext = ".dds" if fmt.startswith("BC") else ".png"
+            name = f"{call}-ps-t{slot}={identity}{ext}"
+            if ext == ".dds":
+                size = width * height // (2 if fmt == "BC1_UNORM" else 1)
+                code = {"BC1_UNORM": 71, "BC7_UNORM_SRGB": 99, "BC7_UNORM": 98, "BC6H_UF16": 95}[fmt]
+                (dump / name).write_bytes(dx10_dds(bytes(size), dxgi_format=code, width=width, height=height))
+            else:
+                Image.new("RGB", (width, height), (128, 128, 255)).save(dump / name)
+            bindings.append(f"       {slot}: resource=0x{int(call) * 16 + source:x}0 hash={identity}\n")
+            aliases.append(f"{call} 3DMigoto Dumping capture\\{name} -> deduped\\{identity}-{fmt}{ext}\n")
+        Image.new("RGB", (16, 16)).save(dump / f"{call}-o0=aaaaaaaa.png")
+        return (f"{call} PSSetShader(pPixelShader:0x90) hash={'c' if family == 'screen' else 'd'}{'a' * 15}\n"
+                f"{call} PSSetShaderResources(StartSlot:0, NumViews:7)\n" + "".join(bindings + aliases))
+
+    for call, family in (("000002", kind), ("000003", "screen")):
+        text = text.replace(f"{call} DrawIndexed", material(call, family) + f"{call} DrawIndexed")
+    original_ib = next(dump.glob("000002-ib=*.txt"))
+    target_ib = dump / "000004-ib=88888888.txt"
+    target_ib.write_bytes(original_ib.read_bytes())
+    target_ib.with_suffix(".buf").write_bytes(original_ib.with_suffix(".buf").read_bytes())
+    text += (material("000004", "outline")
+             + "000004 IASetIndexBuffer(pIndexBuffer:0x80, Format:57, Offset:0) hash=88888888\n"
+             + f"000004 DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:{1 if overlap else 0})\n")
+    log.write_text(text)
+    analysis = analyze(dump)
+    primary, outline = analysis.components
+    diffuse, = [t for t in primary.parts[0].textures if t["role"] == "Diffuse"]
+    assert diffuse["draw"] == "000002" and diffuse["hash"] == "00000023"
+    assert outline.default_included is not overlap
+    assert bool(outline.provenance.get("duplicate_outline_pass")) == overlap
+    assert extract(analysis, Selection(ids=[outline.id])).meshes[0].component.id == outline.id
+    package = extract(analysis, Selection("Asset_001"))
+    assert len(package.meshes) == (1 if overlap else 2)
+    report = export(package, tmp_path / "exports")
+    root = str(Path(report.output).parent)
+    loaded = loader.load_asset_parts("ZZMI", root, index.build_index("ZZMI", root)["assets"][0])
+    part = next(p for p in loaded.parts if p.component_name == primary.name)
+    assert digest(Path(part.textures["diffuse"].path)) == diffuse["sha256"]
+    assert not loaded.warnings
+
+
+@pytest.mark.parametrize("change", ["constant", "depth_identity", "depth_version", "depth_unbound",
+                                 "depth_contaminated", "depth_dimensions", "missing_data", "data_dimensions", "no_shader"])
+def test_zzz_face_outline_requires_complete_bound_family(change):
+    textures = {}
+    for slot, fmt, width, height in _zzz_material_specs("outline"):
+        source = 3 if slot == 4 else slot
+        identity = f"{source + 16:08x}"
+        textures[slot] = dict(slot=slot, format=fmt, width=width, height=height, hash=identity,
+                              resource=dict(hash=identity, address=f"0x{source + 16:x}0", version=0))
+    if change == "constant":
+        textures[0]["width"] = textures[0]["height"] = 8
+    elif change == "depth_identity":
+        textures[4]["resource"]["address"] = "0x900"
+    elif change == "depth_version":
+        textures[4]["resource"]["version"] = 1
+    elif change == "depth_unbound":
+        textures[4]["resource"] = None
+    elif change == "depth_contaminated":
+        textures[4]["contaminated"] = True
+    elif change == "depth_dimensions":
+        textures[4]["width"] = textures[4]["height"] = 4
+    elif change == "missing_data":
+        del textures[6]
+    elif change == "data_dimensions":
+        textures[6]["width"] = textures[6]["height"] = 256
+    assert zzz_material_evidence(list(textures.values()), True,
+                                 "" if change == "no_shader" else "a" * 16) == ({}, 0)
 
 
 @pytest.mark.parametrize("case,hashed,excluded", [
@@ -340,7 +441,7 @@ def test_direct_mesh_export_keeps_coordinates_and_nested_metadata(tmp_path):
     combined = extract(analysis, Selection("Asset_001", renames={direct.id: "Attachment"}))
     report = export(combined, tmp_path / "exports")
     asset = Path(report.output)
-    metadata = json.loads((asset / "Face" / "hash.json").read_text(encoding="utf-8"))
+    metadata = json.loads((asset / "77777777" / "hash.json").read_text(encoding="utf-8"))
     component, = metadata["components"]
     assert component["blend_vb"] == ""
     assert component["position_vb"] == "77777777"
@@ -359,11 +460,11 @@ def test_direct_mesh_export_keeps_coordinates_and_nested_metadata(tmp_path):
     assert digest(Path(attachment.texture_candidates[0].path)) == digest(image)
     details = json.loads(Path(report.report_path).read_text(encoding="utf-8"))
     direct_output, = [o for o in details["outputs"] if o["component"] == direct.id]
-    assert direct_output["metadata"] == "Face/hash.json"
+    assert direct_output["metadata"] == "77777777/hash.json"
     assert (asset / direct_output["vb"]).is_file()
-    assert direct_output["textures"][0]["output"].startswith("Face/")
+    assert direct_output["textures"][0]["output"].startswith("77777777/")
     standalone = export(package, tmp_path / "standalone")
-    assert (Path(standalone.output) / "hash.json").is_file()
+    assert (Path(standalone.output) / "77777777" / "hash.json").is_file()
     assert not (Path(standalone.output) / "Face").exists()
 
 
@@ -505,7 +606,7 @@ def test_gimi_material_pass_exports_named_diffuse_and_loads_automatically(tmp_pa
     report = export(extract(analysis, Selection("Asset_001")), tmp_path / "exports")
     asset = Path(report.output)
     expected = f"Asset_001-Component001-Diffuse-{diffuse['hash']}.dds"
-    assert (asset / expected).is_file()
+    assert (asset / "11111111" / expected).is_file()
     current = index.build_index("GIMI", str(asset.parent))
     loaded = loader.load_asset("GIMI", str(asset.parent), current["assets"][0], geometry=GeometryBlob())
     part, = loaded.parts
@@ -524,7 +625,7 @@ def test_gimi_material_pass_exports_named_diffuse_and_loads_automatically(tmp_pa
     debug = export(extract(analysis, Selection("Asset_001")), tmp_path / "debug",
                    options=ExportOptions(debug_assets=True))
     if report.omitted_texture_associations:
-        assert list((Path(debug.output) / "assets").iterdir())
+        assert list((Path(debug.output) / "11111111" / "assets").iterdir())
     log.write_text(text.replace("GIMIv8", "Unrecognized"), encoding="utf-8")
     unrecognized = analyze(dump)
     assert all(t["role"].startswith("TextureSlot") for c in unrecognized.components
@@ -579,6 +680,131 @@ def test_gimi_complete_material_pass_precedes_larger_inherited_bindings(tmp_path
     assert diffuse["draw"] == "000003"
     assert diffuse["slot"] == 2
     assert all(t["draw"] == "000003" for t in component.parts[0].textures)
+
+
+def _layered_eye_textures():
+    records = []
+    for slot in range(10):
+        width, height = (256, 8) if slot in (0, 4) else ((4, 4) if slot in (3, 9)
+                       else (512, 512) if slot == 2 else (128, 128) if slot == 6 else (256, 256))
+        identity = f"{slot + 16:08x}"
+        records.append(dict(slot=slot, width=width, height=height,
+                            format="R8G8B8A8_UNORM_SRGB" if slot in (0, 3, 4, 9) else "BC7_UNORM_SRGB",
+                            hash=identity, resource=dict(hash=identity, address=f"texture-{slot}", version=0),
+                            sha256=f"{slot:064x}", contaminated=slot in (0, 4)))
+    records[9] = dict(copy.deepcopy(records[3]), slot=9)
+    return records
+
+
+@pytest.mark.parametrize("case", ["valid", "scaled", "no_ramps", "no_color", "no_shader", "missing_layer",
+                                 "reflection_scale", "layer_scale", "layer_format", "unbound_base",
+                                 "contaminated_base", "contaminated_layer", "constant_address",
+                                 "constant_version", "missing_version", "constant_payload", "constant_identity"])
+def test_gimi_layered_eye_requires_complete_bound_material_family(case):
+    textures = _layered_eye_textures()
+    if case == "scaled":
+        for t in textures:
+            if t["slot"] not in (0, 3, 4, 9):
+                t["width"] *= 2
+                t["height"] *= 2
+    elif case == "no_ramps":
+        textures = [t for t in textures if t["slot"] not in (0, 4)]
+    elif case == "missing_layer":
+        textures.pop(7)
+    elif case in {"reflection_scale", "layer_scale"}:
+        textures[2 if case == "reflection_scale" else 6]["width"] += 1
+    elif case == "layer_format":
+        textures[8]["format"] = "BC7_UNORM"
+    elif case == "unbound_base":
+        textures[1]["resource"]["hash"] = "ffffffff"
+    elif case in {"contaminated_base", "contaminated_layer"}:
+        textures[1 if case == "contaminated_base" else 5]["contaminated"] = True
+    elif case == "constant_address":
+        textures[9]["resource"]["address"] = "other-resource"
+    elif case == "constant_version":
+        textures[9]["resource"]["version"] = 1
+    elif case == "missing_version":
+        textures[3]["resource"].pop("version")
+        textures[9]["resource"].pop("version")
+    elif case == "constant_payload":
+        textures[9]["sha256"] = "f" * 64
+    elif case == "constant_identity":
+        textures[9]["hash"] = "ffffffff"
+    roles, strength = gimi_material_evidence(textures, case != "no_color",
+                                             "" if case == "no_shader" else "a" * 16)
+    assert (roles, strength) == (({1: "Diffuse"}, 2) if case in {"valid", "scaled", "no_ramps"} else ({}, 0))
+
+
+def test_gimi_layered_eye_diffuse_round_trip_precedes_inherited_primary_material(tmp_path):
+    dump = make_capture(tmp_path)
+    log = dump / "log.txt"
+    text = log.read_text().replace("ZZMIv1", "GIMIv8")
+    inherited = [dict(slot=i, width=128, height=128, format="BC7_UNORM_SRGB" if i == 2 else "BC7_UNORM",
+                      hash=f"{i + 32:08x}", contaminated=False) for i in range(14)]
+    for call, textures in (("000002", inherited), ("000003", _layered_eye_textures())):
+        bindings, aliases = [], []
+        for t in textures:
+            slot, identity = t["slot"], t["hash"]
+            width, height = t["width"], t["height"]
+            ext = ".png" if t["contaminated"] else ".dds"
+            filename = f"{call}-ps-t{slot}=" + ("!S!=" if t["contaminated"] else "") + identity + ext
+            if ext == ".png":
+                Image.new("RGBA", (width, height), (90, 100, 110, 255)).save(dump / filename)
+            else:
+                code = {"BC7_UNORM": 98, "BC7_UNORM_SRGB": 99, "R8G8B8A8_UNORM_SRGB": 29}[t["format"]]
+                (dump / filename).write_bytes(dx10_dds(bytes(width * height * (4 if code == 29 else 1)),
+                                                      width=width, height=height, dxgi_format=code))
+            address = 3 if call == "000003" and slot == 9 else slot
+            bindings.append(f"       {slot}: resource=0x{address + 256:x} hash={identity}\n")
+            aliases.append(f"{call} 3DMigoto Dumping capture\\{filename} -> dedup\\{identity}-{t['format']}{ext}\n")
+        setup = (f"{call} PSSetShader(pPixelShader:0x90) hash=cccccccccccccccc\n"
+                 f"{call} PSSetShaderResources(StartSlot:0, NumViews:14)\n" + "".join(bindings + aliases))
+        text = text.replace(call + " DrawIndexed", setup + call + " DrawIndexed")
+        Image.new("RGB", (16, 16)).save(dump / f"{call}-o0=aaaaaaaa.png")
+    log.write_text(text)
+    analysis = analyze(dump)
+    component, = analysis.components
+    diffuse, = [t for t in component.parts[0].textures if t["role"] == "Diffuse"]
+    assert (diffuse["draw"], diffuse["slot"], diffuse["hash"]) == ("000003", 1, "00000011")
+    assert all(t["role"] == "Diffuse" or t["role"].startswith("TextureSlot") for t in component.parts[0].textures)
+    report = export(extract(analysis, Selection("Sample")), tmp_path / "exports")
+    root = Path(report.output).parent
+    record, = index.build_index("GIMI", str(root))["assets"]
+    loaded = loader.load_asset_parts("GIMI", str(root), record)
+    part, = loaded.parts
+    assert set(part.textures) == {"diffuse"}
+    assert digest(Path(part.textures["diffuse"].path)) == diffuse["sha256"]
+    assert len(part.texture_candidates) == 7
+
+
+@pytest.mark.parametrize("evidence", ["slot_only", "other_snapshot", "invalid_alias", "wrong_extension", "unlogged_file"])
+def test_hashless_texture_cannot_borrow_an_unproven_identity(tmp_path, evidence):
+    dump = make_capture(tmp_path)
+    name = "000002-ps-t0.png"
+    Image.new("RGB", (16, 16), (80, 100, 120)).save(dump / name)
+    deduped = dump / "deduped"
+    deduped.mkdir()
+    target = "12345678-R8G8B8A8_UNORM.png"
+    if evidence == "invalid_alias":
+        target = "123456789abcdef0-R8G8B8A8_UNORM.png"
+    elif evidence == "wrong_extension":
+        target = "12345678-R8G8B8A8_UNORM.dds"
+    if evidence != "slot_only":
+        (deduped / target).write_bytes((dump / name).read_bytes())
+    alias = ""
+    if evidence not in ("slot_only", "unlogged_file"):
+        source_name = "000002-ps-t1.png" if evidence == "other_snapshot" else name
+        alias = f"000002 3DMigoto Dumping capture\\{source_name} -> deduped\\{target}\n"
+    log = dump / "log.txt"
+    log.write_text(log.read_text().replace(
+        "000002 DrawIndexed", "000002 PSSetShaderResources(StartSlot:0, NumViews:1)\n"
+        "       0: resource=0x60 hash=66666666\n" + alias + "000002 DrawIndexed"))
+    analysis = analyze(dump)
+    texture = next(t for t in analysis.components[0].parts[0].textures if t["file"] == name)
+    assert texture["hash"] == "" and texture["resource"]["hash"] == "66666666"
+    assert "hash_source" not in texture
+    with pytest.raises(Unsupported, match="Invalid texture identity"):
+        export(extract(analysis, Selection("Sample")), tmp_path / "exports")
 
 
 @pytest.mark.parametrize("asset_type", ["ZZMI", "GIMI", "WWMI"])
@@ -696,29 +922,6 @@ def test_extraction_rejects_unauthorized_or_invalid_targets(library, tmp_path, c
     assert list(root.iterdir()) == []
 
 
-@pytest.mark.parametrize("morph, evidence, expected", [
-    ("reversed_recognized", [True, True], True),
-    ("reversed_recognized", [True, False], False),
-    ("captured_expression", [True], False),
-    ("not_detected", [True], True),
-    ("not_detected", [True, False], False),
-    ("reversed_recognized", [False], False),
-    ("reversed_recognized", [], False),
-])
-def test_facial_grouping_requires_complete_material_and_expression_evidence(
-        morph, evidence, expected):
-    candidate = SimpleNamespace(
-        component=SimpleNamespace(id="surface-01", provenance={}, parts=[
-            SimpleNamespace(textures=[
-                {"role": "Diffuse"},
-                {"role_confidence": "unsupported_face_normal_encoding" if proven else "unknown"},
-            ]) for proven in evidence]), morph_status=morph)
-    body = SimpleNamespace(component=SimpleNamespace(id="surface-02", provenance={}, parts=[]),
-                           morph_status="not_detected")
-    assert _component_folders([candidate, body]) == (
-        {"surface-01": "Face"} if expected else {})
-
-
 def _facial_package(dump, morph_status="reversed_recognized"):
     package = extract(analyze(dump), Selection("Asset_001"))
     template = package.meshes[0]
@@ -763,6 +966,55 @@ def _loaded_snapshot(result):
     ) for part in result.parts}
 
 
+@pytest.mark.parametrize("layout,debug", [("compact", False), ("compatible", True)])
+@pytest.mark.parametrize("asset_type", ["GIMI", "ZZMI"])
+def test_geometry_folders_are_self_contained_and_load_as_one_asset(library, tmp_path, monkeypatch, layout, debug, asset_type):
+    _root, dump = library
+    package = _facial_package(dump)
+    package.meshes[2].component.streams["position"]["hash"] = package.meshes[1].component.streams["position"]["hash"]
+    package.meshes[1].component.ib = package.meshes[0].component.ib
+    with monkeypatch.context() as baseline:
+        baseline.setattr("app.assets.extractor.export._component_folders", lambda _meshes: {})
+        flat = export(package, tmp_path / "legacy", options=ExportOptions(layout=layout, debug_assets=debug))
+    grouped = export(package, tmp_path / "objects", options=ExportOptions(
+        layout=layout, debug_assets=debug, asset_type=asset_type))
+    asset = Path(grouped.output)
+    assert not (asset / "hash.json").exists() and not list(asset.glob("*.png"))
+    assert {p.name for p in asset.iterdir() if p.is_dir()} == {"00000021", "00000022"}
+    assert grouped.components == flat.components == 3 and grouped.parts == flat.parts == 4
+    assert [len(json.loads((asset / identity / "hash.json").read_text())["components"])
+            for identity in ("00000021", "00000022")] == [1, 2]
+    for identity in ("00000021", "00000022"):
+        directory = asset / identity
+        document = json.loads((directory / "hash.json").read_text())
+        assert document["layout"] == "geometry-objects" and document["position_vb"] == identity
+        for component in document["components"]:
+            assert component["position_vb"] == identity
+            for filename in [component["vb_file"], *component["ib_files"],
+                             *(t[3] for group in component["texture_hashes"] for t in group)]:
+                assert ".." not in Path(filename).parts and (directory / filename).is_file()
+    files = [[p for p in (asset / identity).rglob("*") if p.is_file()]
+             for identity in ("00000021", "00000022")]
+    assert not {(p.stat().st_dev, p.stat().st_ino) for p in files[0]} & {
+        (p.stat().st_dev, p.stat().st_ino) for p in files[1]}
+    snapshots = []
+    for report in (flat, grouped):
+        root = str(Path(report.output).parent)
+        current = index.build_index(asset_type, root)
+        assert current["stats"]["assetCount"] == 1
+        loaded = loader.load_asset_parts(asset_type, root, current["assets"][0])
+        assert not loaded.warnings
+        snapshots.append(_loaded_snapshot(loaded))
+    assert snapshots[0] == snapshots[1]
+    with pytest.raises(index.IndividualAssetError):
+        index.build_index(asset_type, str(asset))
+    # One broken object must not discard valid sibling geometry.
+    (asset / "00000022" / "hash.json").write_text("{invalid")
+    recovered = index.build_index(asset_type, str(asset.parent))
+    assert recovered["stats"]["assetCount"] == 1
+    assert len(recovered["assets"][0]["geometry"]) == 1
+
+
 @pytest.mark.parametrize("layout, debug", [("compact", False), ("compatible", True)])
 @pytest.mark.parametrize("morph_status", ["reversed_recognized", "not_detected"])
 def test_face_export_preserves_geometry_bindings_and_metadata_provenance(
@@ -770,56 +1022,51 @@ def test_face_export_preserves_geometry_bindings_and_metadata_provenance(
     _root, dump = library
     package = _facial_package(dump, morph_status)
     options = ExportOptions(layout=layout, debug_assets=debug)
+    # Keep a legacy nested fixture to verify backward-compatible loading.
     with monkeypatch.context() as baseline:
-        baseline.setattr("app.assets.extractor.export._component_folders", lambda _meshes: {})
-        flat = export(package, tmp_path / "flat", options=options)
+        baseline.setattr("app.assets.extractor.export._component_folders", lambda meshes: {
+            m.component.id: "" if m.component.id == "surface-01" else "Face" for m in meshes})
+        legacy = export(package, tmp_path / "legacy", options=options)
     report = export(package, tmp_path / "grouped", options=options)
     asset = Path(report.output)
-    root_meta = json.loads((asset / "hash.json").read_text(encoding="utf-8"))
-    face_meta = json.loads((asset / "Face" / "hash.json").read_text(encoding="utf-8"))
-    assert root_meta["format"] == face_meta["format"] == "mod-viewer"
-    assert [item["component_name"] for item in root_meta["components"]] == ["Surface01"]
-    assert [item["component_name"] for item in face_meta["components"]] == ["Surface02", "Surface03"]
-    assert report.components == flat.components == 3
-    assert report.parts == flat.parts == 4
-    assert report.textures == flat.textures == (4 if debug else 3)
-    assert len(list(asset.glob("*-ib=*.txt"))) == 1
-    assert len(list((asset / "Face").glob("*-ib=*.txt"))) == 3
+    assert not (asset / "hash.json").exists() and not (asset / "Face").exists()
+    assert report.components == legacy.components == 3
+    assert report.parts == legacy.parts == 4
+    assert report.textures == legacy.textures == (4 if debug else 3)
+    for mesh in package.meshes:
+        folder = mesh.component.streams["position"]["hash"]
+        document = json.loads((asset / folder / "hash.json").read_text())
+        assert document["format"] == "mod-viewer" and document["layout"] == "geometry-objects"
+        assert [c["component_name"] for c in document["components"]] == [mesh.component.name]
+        assert len(list((asset / folder).glob("*-ib=*.txt"))) == len(mesh.component.parts)
     if layout == "compact":
-        assert (asset / "Asset_001-Surface01-NormalMap-00000001.png").exists()
-        assert report.texture_files == 3
+        assert report.texture_files == 6
         assert report.texture_associations > report.texture_files
     if debug:
-        assert len(list((asset / "Face" / "source_geometry").glob("*.buf"))) == (
+        assert len(list(asset.glob("*/source_geometry/*.buf"))) == (
             2 if morph_status == "reversed_recognized" else 0)
-    details = json.loads(Path(report.report_path).read_text(encoding="utf-8"))
+    details = json.loads(Path(report.report_path).read_text())
+    folders = _component_folders(package.meshes)
     for output in details["outputs"]:
-        is_face = output["component"] != "surface-01"
-        assert output["metadata"] == ("Face/hash.json" if is_face else "hash.json")
+        folder = folders[output["component"]]
+        assert output["metadata"] == folder + "/hash.json"
         for key in ("vb", "ib"):
-            assert output[key].startswith("Face/") == is_face
-            assert (asset / output[key]).is_file()
+            assert output[key].startswith(folder + "/") and (asset / output[key]).is_file()
         for texture in output["textures"]:
+            assert texture["output"].startswith(folder + "/")
             assert (asset / texture["output"]).is_file()
-            if texture["hash"] == "00000003":
-                assert texture["output"].startswith("Face/")
-            if texture["role"] == "NormalMap":
-                assert not texture["output"].startswith("Face/")
     for asset_type in ("ZZMI", "GIMI"):
-        before_index = index.build_index(asset_type, str(Path(flat.output).parent))
+        before_index = index.build_index(asset_type, str(Path(legacy.output).parent))
         after_index = index.build_index(asset_type, str(asset.parent))
-        before = loader.load_asset(asset_type, str(Path(flat.output).parent),
-                                   before_index["assets"][0], geometry=GeometryBlob())
-        after = loader.load_asset(asset_type, str(asset.parent),
-                                  after_index["assets"][0], geometry=GeometryBlob())
-        assert len(after.parts) == 4
-        assert _loaded_snapshot(before) == _loaded_snapshot(after)
+        before = loader.load_asset_parts(asset_type, str(Path(legacy.output).parent), before_index["assets"][0])
+        after = loader.load_asset_parts(asset_type, str(asset.parent), after_index["assets"][0])
+        assert len(after.parts) == 4 and _loaded_snapshot(before) == _loaded_snapshot(after)
         assert {part.key.split("::")[1] for part in after.parts} == {
-            "Asset_001/hash.json", "Asset_001/Face/hash.json"}
+            f"Asset_001/{folder}/hash.json" for folder in folders.values()}
     package.meshes = package.meshes[1:]
     standalone = export(package, tmp_path / "standalone", options=options)
     assert not (Path(standalone.output) / "Face").exists()
-    assert index.build_index("ZZMI", str(Path(standalone.output).parent))["stats"]["assetCount"] == 1
+    assert index.build_index("GIMI", str(Path(standalone.output).parent))["stats"]["assetCount"] == 1
 
 
 def test_compact_texture_sharing_preserves_role_and_native_hash_identity(library, tmp_path):
@@ -836,7 +1083,7 @@ def test_compact_texture_sharing_preserves_role_and_native_hash_identity(library
     report = export(package, tmp_path / "exports")
     asset = Path(report.output)
     assert report.textures == 2
-    assert report.texture_files == 3
+    assert report.texture_files == 5
     current = index.build_index("GIMI", str(asset.parent))
     loaded = loader.load_asset("GIMI", str(asset.parent), current["assets"][0], geometry=GeometryBlob())
     assert len(loaded.parts) == 4
@@ -852,6 +1099,23 @@ def test_compact_texture_sharing_preserves_role_and_native_hash_identity(library
                 for _role, _ext, geometry_hash, filename in group:
                     assert geometry_hash in filename
                     assert (file.parent / filename).is_file()
+
+
+def test_texture_collision_suffixes_are_local_to_geometry_objects(library, tmp_path):
+    _root, dump = library
+    package = _facial_package(dump)
+    first, sibling = package.meshes[:2]
+    source = first.component.parts[0].textures[1]
+    for part in sibling.component.parts:
+        part.textures[1]["hash"] = source["hash"]
+        assert part.textures[1]["sha256"] != source["sha256"]
+    package.meshes = [first]
+    alone = Path(export(package, tmp_path / "alone").output)
+    package.meshes.append(sibling)
+    together = Path(export(package, tmp_path / "together").output)
+    folder = _component_folders(package.meshes)[first.component.id]
+    assert {p.name: p.read_bytes() for p in (alone / folder).iterdir()} == {
+        p.name: p.read_bytes() for p in (together / folder).iterdir()}
 
 
 def test_cancelled_nested_face_export_preserves_existing_output(library, tmp_path):

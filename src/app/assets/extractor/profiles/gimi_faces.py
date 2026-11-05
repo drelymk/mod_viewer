@@ -6,7 +6,7 @@ import math
 import struct
 
 from app.assets.loader.gimi_face_alignment import (
-    AlignmentMesh, _boundary_components, find_two_eye_centers, solve,
+    AlignmentMesh, _area_weighted_normal, _boundary_components, find_two_eye_centers, solve,
 )
 
 
@@ -71,6 +71,85 @@ def _near_anchor(mesh, anchor, distance):
         second = [v[0][axis] for v in anchor.vertices]
         gap.append(max(0, min(first) - max(second), min(second) - max(first)))
     return sum(value * value for value in gap) <= distance * distance
+
+
+def _open_face(mesh):
+    """Prove paired open eye holes in one connected, enclosing face surface."""
+    geometry = _alignment_mesh(mesh)
+    positions = geometry.positions
+    parents = {}
+
+    def root(index):
+        parents.setdefault(index, index)
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    triangles = [geometry.indices[i:i + 3] for i in range(0, len(geometry.indices), 3)]
+    for a, b, c in triangles:
+        parents[root(b)] = parents[root(a)]
+        parents[root(c)] = parents[root(a)]
+    surfaces = {}
+    for triangle in triangles:
+        surfaces.setdefault(root(triangle[0]), []).extend(triangle)
+    matches = []
+    for indices in surfaces.values():
+        surface = AlignmentMesh(geometry.name, positions, tuple(indices))
+        loops = _boundary_components(surface)
+        if len(loops) != 3:
+            continue
+        # The enclosing contour is larger than either eye opening.
+        loops = sorted(loops, key=lambda loop: math.dist(
+            tuple(min(positions[i][a] for i in loop) for a in range(3)),
+            tuple(max(positions[i][a] for i in loop) for a in range(3))), reverse=True)
+        outer, left, right = loops
+        if min(len(left), len(right)) < 0.95 * max(len(left), len(right)):
+            continue
+        centers = [tuple(sum(positions[i][a] for i in loop) / len(loop) for a in range(3))
+                   for loop in (left, right)]
+        separation = math.dist(*centers)
+        normal = _area_weighted_normal(surface)
+        if not separation or normal is None:
+            continue
+        horizontal = tuple((centers[1][a] - centers[0][a]) / separation for a in range(3))
+        if abs(sum(a * b for a, b in zip(horizontal, normal))) > 0.15:
+            continue
+        vertical = (normal[1] * horizontal[2] - normal[2] * horizontal[1],
+                    normal[2] * horizontal[0] - normal[0] * horizontal[2],
+                    normal[0] * horizontal[1] - normal[1] * horizontal[0])
+        length = math.sqrt(sum(v * v for v in vertical))
+        vertical = tuple(v / length for v in vertical)
+        midpoint = tuple((a + b) / 2 for a, b in zip(*centers))
+
+        def bounds(loop):
+            projected = [tuple(sum((positions[i][a] - midpoint[a]) * axis[a] for a in range(3))
+                               / separation for axis in (horizontal, vertical)) for i in loop]
+            return tuple((min(p[a] for p in projected), max(p[a] for p in projected)) for a in range(2))
+
+        outline, *eyes = [bounds(loop) for loop in (outer, left, right)]
+        widths = [b[0][1] - b[0][0] for b in eyes]
+        heights = [b[1][1] - b[1][0] for b in eyes]
+        if (not all(0.2 <= width <= 0.85 for width in widths)
+                or not all(0.08 <= height <= 0.65 for height in heights)
+                or min(widths) < 0.8 * max(widths) or min(heights) < 0.8 * max(heights)
+                or not 1.5 <= outline[0][1] - outline[0][0] <= 3.5
+                or outline[1][1] - outline[1][0] < 1.0
+                or abs(outline[0][0] + outline[0][1]) > 0.2
+                or any(not outline[a][0] < eye[a][0] < eye[a][1] < outline[a][1]
+                       for eye in eyes for a in range(2))
+                or max(abs(value) for value in outline[1]) < 0.65):
+            continue
+        matches.append((midpoint, separation))
+    if not matches:
+        return None
+    midpoint, separation = matches[0]
+    # Multiple authored layers may cover the same face, but separate faces are ambiguous.
+    if any(math.dist(midpoint, point) > 0.15 * separation or abs(size / separation - 1) > 0.15
+           for point, size in matches[1:]):
+        return None
+    return dict(eye_separation=separation, eye_midpoint=midpoint,
+                evidence="Paired open eye boundaries inside one connected enclosing face surface")
 
 
 def _separate_overlay(mesh):
@@ -159,12 +238,9 @@ def _separate_overlay(mesh):
 
 
 def classify_faces(meshes, context):
-    """Classify only unique eye references and families with matching eye loops."""
+    """Recognize an open-eye face, retaining native-eye proof for legacy layouts."""
     references = [m for m in meshes.values() if m.component.status == "included"
                   and m.component.provenance.get("geometry_kind") != "direct" and _eye_reference(m)]
-    if len(references) != 1:
-        return []
-    reference = _alignment_mesh(references[0])
     families = {}
     for mesh in meshes.values():
         if mesh.component.status != "included" or mesh.component.provenance.get("geometry_kind") != "direct":
@@ -172,24 +248,36 @@ def classify_faces(meshes, context):
         material = _material(mesh)
         if material is not None:
             families.setdefault(material, {}).setdefault(_signature(mesh), []).append(mesh)
-    proven = []
+    proven, open_candidates = [], False
     for material, groups in families.items():
         context.tick("Recognizing GIMI facial geometry")
-        anchors = []
-        for equivalent in groups.values():
-            candidate = equivalent[0]
-            anchor = _alignment_mesh(candidate)
-            # Paired brow strips alone also fit two centers, but do not establish
-            # an eye-bearing face surface with additional closed boundaries.
-            if len(_boundary_components(anchor)) > 2 and solve(reference, anchor, refine=False) is not None:
-                anchors.append(candidate)
+        anchors = [(equivalent[0], proof) for equivalent in groups.values()
+                   if (proof := _open_face(equivalent[0])) is not None]
+        open_candidates |= bool(anchors)
         if len(anchors) == 1:
-            proven.append((material, groups, anchors[0]))
+            proven.append((material, groups, *anchors[0]))
+    if not open_candidates and len(references) == 1:
+        reference = _alignment_mesh(references[0])
+        for material, groups in families.items():
+            anchors = []
+            for equivalent in groups.values():
+                candidate = equivalent[0]
+                anchor = _alignment_mesh(candidate)
+                # Legacy split eye rings need an independently proven native reference.
+                if len(_boundary_components(anchor)) > 2 and solve(reference, anchor, refine=False) is not None:
+                    anchors.append(candidate)
+            if len(anchors) == 1:
+                proven.append((material, groups, anchors[0], dict(
+                    eye_separation=math.dist(*find_two_eye_centers(reference.positions)),
+                    evidence="A unique eye-loop fit to a bilateral native Eyes mesh")))
     if len(proven) != 1:
         return []
-    _material_key, groups, anchor = proven[0]
-    eye_separation = math.dist(*find_two_eye_centers(reference.positions))
-    references[0].component.provenance["suggested_name"] = "Eyes"
+    _material_key, groups, anchor, proof = proven[0]
+    eye_separation = proof["eye_separation"]
+    if len(references) == 1 and solve(
+        _alignment_mesh(references[0]), _alignment_mesh(anchor), refine=False
+    ) is not None:
+        references[0].component.provenance["suggested_name"] = "Eyes"
     names, overlays = {}, []
     for equivalent in groups.values():
         primary = equivalent[0]
@@ -203,7 +291,8 @@ def classify_faces(meshes, context):
             provenance = mesh.component.provenance
             provenance.update(gimi_face_family=anchor.component.id,
                               suggested_name=name if not ordinal else ("FacePart" if name == "Face" else name) + "Pass" + str(ordinal + 1),
-                              face_group_evidence="Matching diffuse/light payloads and a unique eye-loop fit to a bilateral native Eyes mesh")
+                              face_group_evidence="Matching diffuse/light payloads; " + proof["evidence"],
+                              face_anchor_proof=proof)
             if ordinal:
                 provenance["duplicate_capture_pass"] = primary.component.id
                 mesh.component.diagnostics.append("Equivalent captured facial geometry and material payloads; alternate pass excluded by default.")

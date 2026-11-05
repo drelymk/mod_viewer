@@ -455,6 +455,8 @@ def _is_native_eyes_record(record):
 
 
 def _is_face_local_record(record):
+    if "coordinate_space" in record.entry or "gimi_face_placement" in record.entry:
+        return False
     component = _compact_name(record.component_name)
     if component:
         return _component_face_kind(component) in {
@@ -464,6 +466,8 @@ def _is_face_local_record(record):
 
 
 def _is_face_anchor_record(record):
+    if "coordinate_space" in record.entry or "gimi_face_placement" in record.entry:
+        return False
     component = _compact_name(record.component_name)
     if component:
         return _component_face_kind(component) in {"face", "eye"}
@@ -528,7 +532,7 @@ def _alignment_mesh(record, vertex_cache, ib_cache, *, with_indices,
 
 
 def _solve_face_alignment(records, vertex_cache, ib_cache):
-    """Align GIMI face geometry using its Asset naming conventions."""
+    """Align legacy GIMI faces to a standalone native Eyes component."""
     references = sorted(
         (record for record in records if _is_native_eyes_record(record)),
         key=_reference_score)
@@ -545,27 +549,27 @@ def _solve_face_alignment(records, vertex_cache, ib_cache):
     for kind in landmarks:
         landmarks[kind].sort(key=_anchor_score)
 
+    landmark_mesh = None
+    landmark_kind = None
+    for kind in ("brow", "mouth"):
+        if not landmarks[kind]:
+            continue
+        landmark_mesh = _alignment_mesh(
+            landmarks[kind][0], vertex_cache, ib_cache,
+            with_indices=False, name_override=kind)
+        if landmark_mesh is not None:
+            landmark_kind = kind
+            break
+    face_meshes = [mesh for anchor in anchors
+                   if (mesh := _alignment_mesh(
+                       anchor, vertex_cache, ib_cache,
+                       with_indices=True)) is not None]
     for reference in references:
         body_mesh = _alignment_mesh(
             reference, vertex_cache, ib_cache, with_indices=False)
         if body_mesh is None:
             continue
-        for anchor in anchors:
-            face_mesh = _alignment_mesh(
-                anchor, vertex_cache, ib_cache, with_indices=True)
-            if face_mesh is None:
-                continue
-            landmark_mesh = None
-            landmark_kind = None
-            for kind in ("brow", "mouth"):
-                if not landmarks[kind]:
-                    continue
-                landmark_mesh = _alignment_mesh(
-                    landmarks[kind][0], vertex_cache, ib_cache,
-                    with_indices=False, name_override=kind)
-                if landmark_mesh is not None:
-                    landmark_kind = kind
-                    break
+        for face_mesh in face_meshes:
             alignment = gimi_face_alignment.solve(
                 body_mesh, face_mesh, landmark_mesh,
                 landmark_kind=landmark_kind)
@@ -664,6 +668,17 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
 
     face_alignment = None
     face_alignment_warning = False
+    if asset_type == "GIMI":
+        for item, _ranges_for_output in selected_records:
+            if "gimi_face_placement" not in item.entry:
+                continue
+            placement = item.entry["gimi_face_placement"]
+            if (not isinstance(placement, dict) or placement.get("version") != 1
+                    or placement.get("method") != "captured_matrices"
+                    or placement.get("status") != "baked"):
+                warnings.append(_warning(
+                    item.component_name, None, "captured_face_placement_unavailable",
+                    "Captured face placement was not proven during extraction; stored coordinates retained."))
     if (asset_type == "GIMI"
             and any(_is_face_local_record(item)
                     for item, _ranges_for_output in selected_records)):
@@ -677,7 +692,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
         if face_alignment is None:
             warnings.append(_warning(
                 "Face", None, "face_alignment_unavailable",
-                "GIMI face geometry could not be aligned to the native Eyes component."))
+                "GIMI face geometry could not be aligned to native eye geometry."))
             face_alignment_warning = True
 
     parts = []

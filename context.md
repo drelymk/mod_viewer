@@ -348,6 +348,14 @@ of documentation, comments and tests; use portable fixtures instead.
   the previous asset and index. Viewer exports use the `mod-viewer` format marker.
   ZZMI/GIMI retain `hash.json`; WWMI uses native `Metadata.json`, `TextureUsage.json`
   and `Component N.fmt/.vb/.ib`. A shared format marker never identifies a game.
+  All three games share position-buffer hash folder planning and object-local
+  texture/byte ownership. GIMI/ZZMI objects contain a self-contained `hash.json`,
+  geometry and textures, declaring the viewer `geometry-objects` layout and position hash;
+  index their parent as one Asset without a root hash manifest. Retain IB identity,
+  draw ranges and distinct source payloads within each object. Scope byte sharing
+  to one object, with no cross-object texture references or hardlinks. Legacy
+  flat/nested hash layouts remain readable. Buffer grouping does
+  not assign Body/Face/Weapon semantics or exclude any supported geometry.
   A partial capture is a committed success, never an extraction error or a
   completeness claim. Keep ordinary success silent, show a nonblocking warning
   for partial extraction/update, and keep failures inline in the open dialog.
@@ -401,19 +409,23 @@ of documentation, comments and tests; use portable fixtures instead.
   only unresolved or unsupported geometry contributes to partial/skipped counts.
   Explicit internal component selection can export supported direct candidates;
   the Add/Update dialog does not expose component or overlay selection.
-  Preserve captured coordinates and omit fabricated
-  blend data; do not fall back through an unsupported shader writer.
-  Automatic ZZMI `Face/` grouping requires recognized facial material evidence on
-  every component part and either no detected expression or successfully
-  reconstructed expression data. Unsupported expression captures stay at the root;
-  folder placement never fabricates a neutral expression or changes geometry. GIMI uses
-  a unique bilateral native Eyes mesh, a matching eye-loop anchor and shared
+  Preserve captured source geometry and omit fabricated blend data; do not fall
+  back through an unsupported shader writer. Proven GIMI facial placement may
+  convert exported coordinates through the captured matrix contract below.
+  Do not create special `Face/` output folders. GIMI face recognition is independent
+  of storage layout and never fabricates a neutral expression or changes topology.
+  GIMI uses
+  a unique open-eye face anchor: one connected surface with an enclosing contour
+  and two comparable, separated internal eye openings. Require bilateral contour
+  proportions and non-collapsed apertures independently of names, ordinals or a
+  native Eyes mesh. Legacy split eye-ring anchors may instead use a unique
+  bilateral native Eyes mesh and matching eye-loop fit. Both proofs require shared
   diffuse/light payloads on nearby direct geometry. Group that proven family
   using those two required identities; extra recognized maps and
   unclassified candidates do not disqualify the family. Duplicate-pass exclusion
   also requires matching additional recognized material identities.
-  Label the family for the existing viewer alignment; retain captured positions
-  and UVs. Equivalent facial passes require matching rendered attributes,
+  Label the family independently of placement; retain source positions and UVs
+  in analysis. Equivalent facial passes require matching rendered attributes,
   resource versions, ranges and materials before excluding a duplicate by default.
   GIMI face anchors may separate an auxiliary shell only when a contiguous
   triangle suffix has matching UV0/UV1/UV2, or matching UV0/UV1 with a separate
@@ -424,12 +436,18 @@ of documentation, comments and tests; use portable fixtures instead.
   one-to-one boundary vertex match and UV0/UV1 agreement within 0.0001; retain
   the measured errors in provenance without snapping vertices. Keep the shell as an opt-in component with its native
   index range and source streams; default extraction omits its opaque overlay.
-  Keep shared textures at the root, face-only files with their nested `hash.json`,
-  and standalone all-face selections at the root. Preserve geometry, bindings
+  Facial and standalone all-face selections use the same hash folders and local
+  texture ownership as other objects. Preserve geometry, bindings
   and source provenance; names, component ordinals and position are not evidence.
   GIMI diffuse recognition requires capture evidence, a color pass, bound texture
   identities and a supported neighboring format/size signature. Prefer recognized
   material passes over effects with more resources.
+  ZZMI primary material passes with their small sRGB constant and scaled BC1
+  mask outrank later screen-resource passes before comparing resource counts.
+  Face-outline signatures may use the same tiny R16 resource in both depth slots
+  with matching full-size BC6H inputs. Exclude such outlines only after exact
+  triangle-position subset proof against a supported color component; retain
+  their ranges and provenance for explicit internal selection.
   Pixel fallback runs only during extraction on unclassified, uncontaminated,
   non-auxiliary textures with supported color/data encodings; float, HDR and
   typeless captures cannot establish fallback roles. Confirmed roles retain priority. Cache sampled features
@@ -441,12 +459,21 @@ of documentation, comments and tests; use portable fixtures instead.
   from packed LightMap channels using active pixels and the bound primary
   material family; unused atlas padding and normal B detail are not normal Z.
   Prefer complete GIMI material triplets over larger inherited resource sets.
+  Layered GIMI eyes may identify the base iris from a complete bound family:
+  a double-size reflection input, matching effect atlases, a half-size layer,
+  and one tiny constant repeated with exact resource/version and payload identity.
+  Pass the full texture binding set to this classifier, while retaining the
+  first-three-slot scope of legacy triplet ranking. Replaced ramp snapshots
+  cannot establish that proof. Keep the reflection/effect inputs unclassified;
+  do not relabel sRGB eye layers as LightMap or MaterialMap.
   WWMI capture evidence, a color pass and bound shader/resource identities may
   establish diffuse atlases from validated neighboring format/size families.
   Prefer complete WWMI material families over simpler pairs from another pass,
   before comparing resource counts. The more specific late-vector hair family
   takes priority over a generic main family on the same range.
-  Hair vector atlases may match the color atlas or use half its resolution.
+  Hair vector atlases may match the color atlas or use half its resolution;
+  the complete late-vector family accepts BC1 or BC3 leading masks with its
+  smaller square data input and wide rectangular mask.
   BC1 and BC3 face masks need the same shared-data proof. Constant-led layered
   families require scaled mask/color atlases and an exact repeated packed mask;
   inherited bindings under a color-led pass cannot establish that family.
@@ -457,6 +484,10 @@ of documentation, comments and tests; use portable fixtures instead.
   Equal-size face mask/data maps additionally require a double-size color atlas
   and a trailing short, wide lookup. That complete face family outranks a
   competing color-led hair pass; equality alone is not sufficient evidence.
+  Equal-size mask/color/data atlases instead require two trailing short, wide
+  sRGB lookups with the exact same resource version and dimensions, alongside
+  the shared packed-data pair. This complete family also outranks inherited
+  simpler passes; a missing, distinct or contaminated lookup cannot prove it.
   Packed eye data may use an sRGB encoding;
   identify its separate iris atlas through the complete bound eye family.
   Color-led hair requires equal color/vector atlases and a wide, short lookup;
@@ -474,16 +505,23 @@ of documentation, comments and tests; use portable fixtures instead.
   hash/payload pairs use one file named for their first owning component; each
   consumer retains its own role and exact metadata reference. Distinct native
   hashes or differing payloads stay separate. Additional byte sharing may use
-  output-only hardlinks. Scope WWMI sharing to one object folder, including
+  output-only hardlinks. Scope all three games' sharing to one object folder, including
   physical hardlinks. WWMI textures use native `Components-0-1 t=hash.ext` names,
   listing exactly the referencing component ordinals. Share each native-hash/payload
   pair once per object; use a content suffix for same-hash payload collisions.
+  Collision suffixes depend only on payloads within that object.
   Preserve source encoding and metadata's exact filename and proven role.
+  Hashless texture snapshot names may recover their payload identity only from
+  that exact snapshot's logged capture-relative dedup alias. Explicit filename
+  hashes retain priority. Never inherit an earlier slot's hash or search sibling
+  captures for a missing identity; keep export identity validation strict.
   Keep unclassified GIMI textures as selectable candidates
   without automatically binding them. Only actual auxiliary/unusable evidence
   excludes resources from normal output; retain provenance and optional debug files.
 - Index Assets through metadata only. Heavy geometry/textures require explicit
   indexed-Asset loading or the explicit missing-original-parts action.
+  Read geometry-object metadata once per index build and reuse that document
+  through validation and record construction; each new build reads fresh data.
   Direct Assets never synthesize INIs/mods, modify sources or write
   `.mod_viewer.json`; source paths stay within registered roots and texture
   choices remain session-only. Ambiguity may yield candidates, never bindings.
@@ -500,8 +538,35 @@ of documentation, comments and tests; use portable fixtures instead.
   auxiliary VB bindings; those hashes still cannot select a different Asset.
   Automatic filling requires one unique Asset and retains component/range provenance;
   filled geometry is session-only and removed on reload/switch.
-- GIMI head-local faces may use one geometry-derived rigid alignment from native
-  full-body Eyes and a Face/FaceEye anchor. Transform positions and normals,
+- New GIMI extraction derives face placement only from captured object matrices
+  and a verified native skinning palette: inverse(head skinning) times
+  inverse(body world) times face world. Require the supported head-local axis
+  convention and one consistent complete transform across matching used bones,
+  related native objects and every facial draw; never hardcode a bone ID,
+  constant-buffer slot, character offset or infer placement from eye geometry.
+  Validate the object/inverse blocks and replay every written native SO vertex
+  from source positions, weights and the palette before using its matrices.
+  SO allocation tails are capacity, not additional written vertices. Capture
+  exact bound resource versions, snapshot hashes and replay evidence in the
+  report; preserve dedup dependencies and reject changed evidence on extraction.
+  Validate shared placement sources once per extraction, with no cross-request
+  validation cache. Missing optional output snapshots do not discard later
+  valid draws from the same native component.
+  Bake proven placement into exported direct facial positions/normals and
+  floating-point tangents once, retaining UVs and indices. Copy captured facial
+  position-buffer bytes under each converted object's `source_geometry` directory
+  and reference them in its placement metadata; raw captures remain intact.
+  Native skinned facial geometry already uses body rest coordinates and must
+  remain unchanged.
+  Hash metadata records coordinate space and placement status. New exports
+  never use loader geometry fitting, including face-only or renamed selections;
+  missing/conflicting placement retains captured coordinates, marks partial
+  extraction and warns on load instead of guessing.
+- Legacy GIMI head-local faces without coordinate-space metadata may use one
+  geometry-derived rigid alignment from native
+  full-body Eyes and a Face/FaceEye anchor. Missing standalone Eyes leaves
+  legacy geometry unaligned with a warning; re-extract experimental embedded-eye
+  exports to obtain captured-matrix placement. Transform positions and normals,
   preserve UVs/winding, leave native Eyes untouched and use no character offsets.
   Selective loads may read alignment dependencies without emitting them.
   Eye-surface refinement reuses a bounded spatial index across candidate offsets;
