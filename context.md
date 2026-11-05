@@ -542,8 +542,11 @@ of documentation, comments and tests; use portable fixtures instead.
   filled geometry is session-only and removed on reload/switch. The global
   `autoRestoreMissingAssetParts` preference defaults to off; when enabled, each
   successful mod load/reload uses the same fill transaction after displaying the
-  mod. Automatic restoration never shows error dialogs or status messages,
-  including on failed loads; failures retain the same rollback and cleanup.
+  mod without keeping the mod transition open. Guard delayed preference reads
+  by the originating path and Asset-fill epoch; stale fill responses use the
+  existing rollback without changing the new scene. Automatic restoration never
+  shows error dialogs or status messages, including on failed loads; failures
+  retain the same rollback and cleanup.
   Manual restoration still explains errors. Direct Asset previews never trigger filling.
 - New GIMI extraction derives face placement only from captured object matrices
   and a verified native skinning palette: inverse(head skinning) times

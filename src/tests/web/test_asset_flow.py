@@ -249,6 +249,45 @@ def test_settings_auto_restore_lifecycle_is_persistent_and_preview_only(viewer):
     assert bridge_calls(page, 'preferencesSave') == []
 
 
+def test_slow_auto_restore_allows_mod_switch_and_rolls_back_stale_result(viewer):
+    base = model_payload()
+    base['asset_resolution'] = {'configured_roots': 1}
+    fill = model_payload()
+    fill['meshes']['mesh-00']['asset_fill'] = True
+    page = viewer({'fixture-01': base, 'fixture-02': model_payload(2), 'fixture-fill': fill},
+                  preferences={'autoRestoreMissingAssetParts': True})
+    page.evaluate('window.__bridge.blocked.fill = true')
+    open_model(page, 'fixture-01')
+    page.wait_for_function('window.__bridge.waiters.fill?.length === 1')
+    page.wait_for_function('!document.querySelector("#open-btn").disabled', timeout=3000)
+    assert page.locator('#asset-fill-btn').is_disabled()
+
+    open_model(page, 'fixture-02')
+    wait_loaded(page, 2)
+    snapshot = """async () => {
+      const {viewerState} = await import('./js/app/state.js');
+      return {source: viewerState.currentSource, fill: {
+        epoch: viewerState.assetFill.epoch, loading: viewerState.assetFill.loading,
+        loaded: viewerState.assetFill.loaded, fillId: viewerState.assetFill.fillId,
+      }, meshes: window.modViewer.activeMeshes.map(mesh => ({
+        id: mesh.uuid, visible: mesh.visible,
+        positions: [...mesh.geometry.attributes.position.array],
+      }))};
+    }"""
+    new_scene = page.evaluate(snapshot)
+    assert new_scene['source']['path'] == 'fixture-02'
+    assert bridge_calls(page, 'fill') == [['fixture-01']]
+    assert page.evaluate('window.__bridge.waiters.fill.length') == 1
+
+    page.evaluate('window.__bridge.release("fill")')
+    page.wait_for_function('window.__bridge.calls.some(call => call.name === "fillRemove")')
+    assert bridge_calls(page, 'fillRemove') == [['fixture-01', 'fill-01']]
+    assert page.evaluate(snapshot) == new_scene
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => !mesh.userData.assetFill)')
+    assert not page.locator('#dialog-backdrop').is_visible()
+    assert bridge_calls(page, 'export') == []
+
+
 @pytest.mark.parametrize('response', [
     {'status': 'nothing_missing'}, {'status': 'asset_ambiguous'},
     {'status': 'asset_not_found'}, {'status': 'error', 'error': 'fixture failure'},
@@ -290,6 +329,7 @@ def test_failed_asset_fill_rolls_back_frontend_and_backend_transaction(viewer, a
         page.locator('#asset-fill-btn').click()
     if automatic:
         wait_loaded(page)
+        page.wait_for_function('!document.querySelector("#asset-fill-btn").disabled')
         assert not page.locator('#dialog-backdrop').is_visible()
     else:
         page.locator('#dialog-backdrop.show').wait_for()

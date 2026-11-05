@@ -382,9 +382,19 @@ async function loadModAt(path, disabledIni, handlers = {}) {
     active_meshes: activeMeshes.length,
     payload_meshes: Object.keys(data?.meshes || {}).length,
   });
-  if ((await shouldAutoRestoreMissingAssetParts()) && viewerState.assetFill.available) {
-    await loadMissingAssetParts({ automatic: true });
-  }
+  // Optional restoration must not hold the mod transition open. A delayed
+  // preference read still belongs to this load, including same-path reloads.
+  const assetFillEpoch = viewerState.assetFill.epoch;
+  void shouldAutoRestoreMissingAssetParts().then((enabled) => {
+    if (
+      enabled &&
+      viewerState.assetFill.epoch === assetFillEpoch &&
+      samePath(viewerState.currentModPath, path) &&
+      viewerState.assetFill.available
+    ) {
+      return loadMissingAssetParts({ automatic: true });
+    }
+  });
   return true;
 }
 
