@@ -245,12 +245,12 @@ def record_placements(inv, calls, components, context):
             candidates = []
             if face:
                 for native in natives:
-                    sources.update(native["sources"])
                     for body in native["objects"]:
                         relative = _multiply(_inverse(body[0]), face[0])
                         for bone, inverse in native["inverses"]:
                             matrix = _multiply(inverse, relative)
                             if _basis_error(matrix) <= _PLACEMENT_TOLERANCE:
+                                sources.update(native["sources"])
                                 context.budget.allocate(2048)
                                 candidates.append(dict(matrix=matrix, bone=bone, component=native["component"],
                                                        face=face[1], body=body[1], palette=native["palette"],

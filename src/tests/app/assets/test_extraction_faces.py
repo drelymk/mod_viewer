@@ -194,25 +194,35 @@ def test_face_placement_uses_later_available_native_output(tmp_path, monkeypatch
     assert not extract(analysis, Selection("AvailableOutput")).partial
 
 
-def test_face_dependencies_validate_once_per_extraction_and_detect_later_changes(tmp_path, monkeypatch):
-    dump, _originals = _capture(tmp_path, monkeypatch)
+@pytest.mark.parametrize("case", ["valid", "unrelated_native"])
+def test_face_dependencies_validate_once_per_extraction_and_detect_later_changes(tmp_path, monkeypatch, case):
+    dump, _originals = _capture(tmp_path, monkeypatch, native_reference=False, case=case)
     analysis = discovery.analyze(dump)
-    source = "000003-vs-cb3=55555555.buf"
+    family = [c for c in analysis.components if c.provenance.get("gimi_face_family")]
+    assert len(family) == 3
+    assert {c.provenance["gimi_face_placement"]["status"] for c in family} == {"proven"}
+    if case == "unrelated_native":
+        assert len([c for c in analysis.components if c.provenance.get("producer")]) == 2
+        dependencies = {s["file"] for c in family for s in c.provenance["gimi_face_placement"]["sources"]}
+        assert not any(name.startswith(("000006-", "000007-")) for name in dependencies)
+        (dump / "000006-vs-t0=99999999.buf").write_bytes(b"changed unrelated palette")
+    source = "000001-vs-t0=44444444.buf" if case == "unrelated_native" else "000003-vs-cb3=55555555.buf"
     reads = []
     original_read = Inventory.read_bytes
 
     def counted(inv, name, **kwargs):
+        assert not name.startswith(("000006-", "000007-"))
         if name == source:
             reads.append(name)
         return original_read(inv, name, **kwargs)
 
     monkeypatch.setattr(Inventory, "read_bytes", counted)
     for ordinal in range(2):
-        assert not extract(analysis, Selection("Asset_001")).partial
+        assert not extract(analysis, Selection("Asset_001", ids=[c.id for c in family])).partial
         assert len(reads) == ordinal + 1
     (dump / source).write_bytes(bytes(160))
     with pytest.raises(Unsupported, match="capture changed since analysis"):
-        extract(analysis, Selection("Asset_001"))
+        extract(analysis, Selection("Asset_001", ids=[c.id for c in family]))
     assert len(reads) == 3
 
 

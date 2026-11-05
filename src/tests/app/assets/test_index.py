@@ -63,15 +63,28 @@ def test_hash_object_folders_require_explicit_consistent_metadata(tmp_path, chan
 
 
 @pytest.mark.parametrize("asset_type", ["GIMI", "ZZMI"])
-def test_geometry_object_metadata_reads_once_per_build_and_recovers_siblings(tmp_path, monkeypatch, asset_type):
+@pytest.mark.parametrize("invalid", ["json", "layout", "geometry"])
+@pytest.mark.parametrize("group", ["", "PlayerCharacterData"])
+def test_geometry_object_metadata_reads_once_per_build_and_recovers_siblings(tmp_path, monkeypatch, asset_type, invalid, group):
     root = tmp_path / "library"
-    markers = [root / "Sample" / identity / "hash.json" for identity in ("11111111", "22222222")]
+    asset = root / group / "Sample"
+    markers = [asset / identity / "hash.json" for identity in ("11111111", "22222222")]
     document = {"format": "mod-viewer", "layout": "geometry-objects", "position_vb": "11111111",
                 "components": [{"component_name": "Surface", "position_vb": "11111111", "ib": "33333333",
                                 "object_indexes": [0], "object_index_counts": [3]}]}
     write_json(markers[0], document)
     markers[1].parent.mkdir(parents=True)
-    markers[1].write_text("{", encoding="utf-8")
+    sibling = json.loads(json.dumps(document))
+    sibling["position_vb"] = sibling["components"][0]["position_vb"] = "22222222"
+    sibling["components"][0]["ib"] = "44444444"
+    if invalid == "json":
+        markers[1].write_text("{", encoding="utf-8")
+    elif invalid == "layout":
+        write_json(markers[1], dict(sibling, position_vb="55555555"))
+    else:
+        broken = json.loads(json.dumps(sibling))
+        broken["components"][0]["ib"] = "invalid"
+        write_json(markers[1], broken)
     reads = []
     original_open = builtins.open
 
@@ -83,12 +96,26 @@ def test_geometry_object_metadata_reads_once_per_build_and_recovers_siblings(tmp
     monkeypatch.setattr(builtins, "open", counted)
     first = build_index(asset_type, str(root))
     assert first["stats"]["assetCount"] == first["stats"]["geometryHashCount"] == 1
+    assert first["stats"]["skippedCount"] == 1
+    warning, = first["warnings"]
+    assert warning["path"] == markers[1].relative_to(root).as_posix() and warning["reason"]
     assert reads == markers
     document["components"][0]["object_index_counts"] = [6]
     write_json(markers[0], document)
     second = build_index(asset_type, str(root))
     assert second["assets"][0]["geometry"][0]["ranges"] == [{"firstIndex": 0, "indexCount": 6}]
     assert reads == markers * 2
+    write_json(markers[1], sibling)
+    repaired = build_index(asset_type, str(root))
+    assert repaired["stats"]["geometryHashCount"] == 2
+    assert repaired["stats"]["skippedCount"] == 0 and not repaired.get("warnings")
+    assert reads == markers * 3
+    markers[1].write_text("{", encoding="utf-8")
+    write_json(root / "Other" / "11111111" / "hash.json", document)
+    excluded = build_index(asset_type, str(root), exclude_paths=(str(asset),))
+    assert excluded["stats"]["assetCount"] == 1
+    assert excluded["assets"][0]["path"] == "Other"
+    assert excluded["stats"]["skippedCount"] == 0 and not excluded.get("warnings")
 
 
 def test_invalid_cache_is_reported_without_rebuilding(tmp_path, monkeypatch):

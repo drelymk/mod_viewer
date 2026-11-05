@@ -119,12 +119,12 @@ def _name(path):
     return os.path.basename(path).casefold()
 
 
-def _hash_group_candidates(group, root):
+def _hash_group_candidates(group, root, warnings):
     candidates = []
     weapon_group = _name(group) == "weapondata"
     for child in _safe_child_dirs(group, root):
         marker = _safe_file(child, root, "hash.json")
-        objects = {} if marker else _hash_object_markers(child, root)
+        objects = {} if marker else _hash_object_markers(child, root, warnings=warnings)
         if (marker or objects) and (not weapon_group or _name(child) in _WEAPON_GROUPS):
             candidates.append((child, marker, objects))
             continue
@@ -134,7 +134,7 @@ def _hash_group_candidates(group, root):
             continue
         for asset in _safe_child_dirs(child, root):
             asset_marker = _safe_file(asset, root, "hash.json")
-            objects = {} if asset_marker else _hash_object_markers(asset, root)
+            objects = {} if asset_marker else _hash_object_markers(asset, root, warnings=warnings)
             if asset_marker or objects:
                 candidates.append((asset, asset_marker, objects))
     return candidates
@@ -151,7 +151,7 @@ def _geometry_object_markers(path, root, filename):
             yield identity, marker
 
 
-def _hash_object_markers(path, root):
+def _hash_object_markers(path, root, *, warnings=None):
     """Recognize only explicitly marked viewer geometry objects, one level deep."""
     markers = {}
     for identity, marker in _geometry_object_markers(path, root, "hash.json"):
@@ -164,12 +164,15 @@ def _hash_object_markers(path, root):
                     and all(isinstance(component, dict) and component.get("position_vb") == identity
                             for component in document["components"])):
                 markers[marker] = document
-        except (OSError, ValueError, UnicodeError):
-            continue
+            else:
+                raise ValueError("Invalid geometry-object layout or position-buffer identity.")
+        except (OSError, ValueError, UnicodeError) as error:
+            if warnings is not None:
+                warnings.append(_warning(root, marker, error))
     return markers
 
 
-def _hash_candidates(root):
+def _hash_candidates(root, warnings):
     candidates = []
     skipped = []
     for child in _safe_child_dirs(root, root):
@@ -177,11 +180,11 @@ def _hash_candidates(root):
         if marker:
             candidates.append((child, marker, {}))
             continue
-        objects = _hash_object_markers(child, root)
+        objects = _hash_object_markers(child, root, warnings=warnings)
         if objects:
             candidates.append((child, None, objects))
             continue
-        nested = (_hash_group_candidates(child, root)
+        nested = (_hash_group_candidates(child, root, warnings)
                   if _name(child) in _HASH_GROUPS else [])
         if nested:
             candidates.extend(nested)
@@ -218,15 +221,16 @@ def _wwmi_candidates(root):
     return candidates, skipped
 
 
-def _parse_hash_asset(asset_path, root, metadata_path, parser, *, objects=None):
+def _parse_hash_asset(asset_path, root, metadata_path, parser, *, objects=None, warnings=None):
     if metadata_path is None:
         records = []
-        objects = _hash_object_markers(asset_path, root) if objects is None else objects
+        objects = _hash_object_markers(asset_path, root, warnings=warnings) if objects is None else objects
         for marker, document in objects.items():
             try:
                 records.append(parser.parse_hash_document(asset_path, root, marker, normalize_geometry_hash, document))
-            except (OSError, ValueError, UnicodeError):
-                continue
+            except (OSError, ValueError, UnicodeError) as error:
+                if warnings is not None:
+                    warnings.append(_warning(root, marker, error))
         if not records:
             raise ValueError("No valid geometry object metadata")
         return _merge_asset_records(records)[0]
@@ -344,6 +348,7 @@ def build_index(asset_type, root, *, exclude_paths=()):
     if not os.path.isdir(root):
         raise AssetIndexError("Asset Folder path must be a directory.")
 
+    warnings = []
     if asset_type in ("GIMI", "ZZMI"):
         parser = gimi if asset_type == "GIMI" else zzmi
         if _individual_hash_asset(root, parser):
@@ -351,7 +356,7 @@ def build_index(asset_type, root, *, exclude_paths=()):
                 "This appears to be an individual character asset. "
                 "Select its parent folder containing the character asset folders.")
         children = _safe_child_dirs(root, root)
-        candidates, skipped_paths = _hash_candidates(root)
+        candidates, skipped_paths = _hash_candidates(root, warnings)
     else:
         if _individual_wwmi_asset(root):
             raise IndividualAssetError(
@@ -367,12 +372,14 @@ def build_index(asset_type, root, *, exclude_paths=()):
                              for path in excluded)]
     skipped_paths = [path for path in skipped_paths
                      if asset_folders.normalize_path(path) not in excluded]
+    warnings = [item for item in warnings
+                if not any(asset_folders.is_within(os.path.join(root, item["path"]), path)
+                           for path in excluded)]
     if not children:
         raise NoValidAssetsError(
             "Asset Folder must contain immediate child directories.")
 
     records = []
-    warnings = []
     seen = set()
     for candidate in candidates:
         asset_path = candidate[0]
@@ -383,7 +390,7 @@ def build_index(asset_type, root, *, exclude_paths=()):
         try:
             if asset_type in ("GIMI", "ZZMI"):
                 record = _parse_hash_asset(
-                    asset_path, root, candidate[1], parser, objects=candidate[2])
+                    asset_path, root, candidate[1], parser, objects=candidate[2], warnings=warnings)
             else:
                 record = _parse_wwmi_asset(
                     asset_path, root, candidate[1], candidate[2])

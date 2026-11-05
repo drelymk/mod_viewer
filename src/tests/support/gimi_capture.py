@@ -115,6 +115,24 @@ def make_face_capture(parent, meshes, placement_case="valid"):
                    f"{call} IASetIndexBuffer(pIndexBuffer:0x{identity * 16 + 2:x}, Format:42, Offset:0) hash={mesh.component.ib}\n"
                    f"{call} DrawIndexed(IndexCount:{len(indices)}, StartIndexLocation:0, BaseVertexLocation:0)\n")
     _write_matrices(dump, log, stream, positions, eyes, placement_case)
+    if placement_case == "unrelated_native":
+        replacements = dict(zip(
+            ("11111111", "22222222", "33333333", "44444444", "55555555", "00000021", "00000001",
+             "0x1000", "0x2000", "0x9000", "0xa000", "0xb000", "0x21", "0x22"),
+            ("66666666", "77777777", "88888888", "99999999", "aaaaaaaa", "bbbbbbbb", "cccccccc",
+             "0xc000", "0xd000", "0xe000", "0xf000", "0x10000", "0x11000", "0x12000")))
+
+        def renamed(text):
+            for before, after in replacements.items():
+                text = text.replace(before, after)
+            return text.replace("000001-", "000006-").replace("000002-", "000007-").replace(
+                "000001 ", "000006 ").replace("000002 ", "000007 ")
+
+        for path in list(dump.glob("000001-*")) + list(dump.glob("000002-*")):
+            shutil.copyfile(path, dump / renamed(path.name))
+        identity = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+        (dump / "000007-vs-cb2=aaaaaaaa.buf").write_bytes(struct.pack("<40f", *(identity * 2 + (0,) * 8)))
+        log.append(renamed("".join(log[1:3])))
     if placement_case == "dedup":
         source = dump / "000003-vs-cb3=55555555.buf"
         (dump / "deduped").mkdir()

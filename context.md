@@ -522,6 +522,7 @@ of documentation, comments and tests; use portable fixtures instead.
   indexed-Asset loading or the explicit missing-original-parts action.
   Read geometry-object metadata once per index build and reuse that document
   through validation and record construction; each new build reads fresh data.
+  Warn about discarded object metadata while retaining valid sibling objects.
   Direct Assets never synthesize INIs/mods, modify sources or write
   `.mod_viewer.json`; source paths stay within registered roots and texture
   choices remain session-only. Ambiguity may yield candidates, never bindings.
@@ -549,6 +550,8 @@ of documentation, comments and tests; use portable fixtures instead.
   SO allocation tails are capacity, not additional written vertices. Capture
   exact bound resource versions, snapshot hashes and replay evidence in the
   report; preserve dedup dependencies and reject changed evidence on extraction.
+  Only native candidates contributing placement matches supply native evidence
+  dependencies; unrelated captures must not invalidate proven face placement.
   Validate shared placement sources once per extraction, with no cross-request
   validation cache. Missing optional output snapshots do not discard later
   valid draws from the same native component.

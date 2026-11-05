@@ -86,6 +86,8 @@ payloads are not hardlinked across objects. The index recognizes the child
 metadata and loads the parent as one asset. A copied object folder also works
 as a standalone asset. Descriptive object names supplied through the internal
 rename API label its components without changing the native folder identity.
+If an object's metadata is invalid, indexing retains usable sibling objects and
+reports the discarded metadata through index warnings.
 WWMI texture names follow `Components-0-1 t=12345678.dds`: the ordinals list
 exactly the components that reference that payload. Each native hash/payload
 pair is exported once per object, and distinct contents with the same native
@@ -166,6 +168,8 @@ vary. Missing or conflicting evidence retains captured coordinates and reports a
 partial extraction; it never falls back to fitting the new face to eye geometry.
 Proven placement is baked into exported facial positions and directions, with
 matrix, resource versions, source hashes and replay evidence retained in the report.
+Placement dependencies include native candidates that contribute a matching
+transform; unrelated native candidates do not invalidate extraction.
 Original position-buffer bytes are retained under the object's `source_geometry`
 directory and referenced by the placement metadata. UVs, indices and capture files
 remain unchanged. Native skinned facial
