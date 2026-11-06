@@ -92,16 +92,20 @@ function render() {
     empty.textContent = t('texture.noTextures');
     list.appendChild(empty);
   }
-  for (const opt of currentPool || []) {
+  const rows = currentAssignments ? [null, ...currentPool] : currentPool || [];
+  for (const opt of rows) {
     const row = document.createElement('div');
     row.className = 'texm-row texm-grid';
-    row.classList.toggle('texm-asset-grid', !!currentAssignments);
+    row.classList.toggle('texm-asset-grid', !!currentAssignments && !opt);
+    row.classList.toggle('texm-candidate-row', !!currentAssignments && !!opt);
     const label = document.createElement('span');
     label.className = 'texm-diffuse';
-    label.textContent = textureDisplayLabel(opt.tex_key, opt.label);
-    label.title = opt.file || opt.tex_key;
+    label.textContent = opt
+      ? textureDisplayLabel(opt.tex_key, opt.label)
+      : textureDisplayLabel(currentAssignments.diffuse) || t('texture.diffuse');
+    label.title = opt ? opt.file || opt.tex_key : currentAssignments.diffuse || t('texture.diffuse');
     row.appendChild(label);
-    for (const [field, titleKey] of columns) {
+    for (const [field, titleKey] of currentAssignments && opt ? [] : columns) {
       const title = t(titleKey);
       const cell = document.createElement('button');
       cell.type = 'button';
@@ -146,6 +150,10 @@ function render() {
         cell.appendChild(clear);
       }
       row.appendChild(cell);
+    }
+    if (!opt) {
+      list.appendChild(row);
+      continue;
     }
     const del = document.createElement('button');
     del.className = 'toggle-icon-btn';

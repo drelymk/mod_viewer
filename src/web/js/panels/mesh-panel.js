@@ -196,12 +196,13 @@ function createComponentDescriptor(groupName, names, meshes, src, modPath, optio
     saveTextureState(modPath);
   };
   const setTextureAssignment = (role, value) => {
+    const previousValue = assetTextures[role];
     assetTextures[role] = value;
     if (role === 'diffuse')
       itemObjs.forEach((mesh) => {
         mesh.userData.manualTexOverride = value;
       });
-    options.onAssetTextureAssignment(assetComponent, role, value);
+    options.onAssetTextureAssignment(assetComponent, role, value, previousValue);
     updateTextures('assignment');
     return true;
   };

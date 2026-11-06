@@ -6,6 +6,7 @@ enables when an assignment changes; the Edited indicator clears after a successf
 save. Each Asset component has one active texture per role. Assigning another
 texture replaces that role for every mesh in the component; clearing it sets
 only that role to None. Automatic uses the latest assignment too.
+Map controls are available even before any diffuse candidates are added.
 Export saves only changed component roles, preserving unrelated roles and
 components, including unavailable textures. Model switching waits until saving
 finishes. Export permanently updates the texture records

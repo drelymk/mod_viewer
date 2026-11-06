@@ -1,6 +1,6 @@
 """Asset texture Export is explicit, source-scoped and safe across async saves."""
 
-from .payloads import textured_payload
+from .payloads import model_payload, solid_texture, textured_payload
 from .support import bridge_calls, wait_loaded
 
 
@@ -21,7 +21,11 @@ def test_asset_texture_export_failure_retry_pending_edits_and_stale_completion(m
       viewerState.currentSource = {kind:'asset',path:'asset-01'};
       initialize('session-01');
       const initial = state();
+      assign('component-01','diffuse','diffuse::asset/root/a.png','diffuse::asset/root/a.png');
+      const reselected = state();
+      assign('component-01','diffuse','diffuse::asset/root/b.png','diffuse::asset/root/a.png');
       assign('component-01','diffuse','diffuse::asset/root/a.png');
+      const reverted = state();
       assign('component-01','diffuse','diffuse::asset/root/b.png');
       await save();
       const failed = state();
@@ -30,9 +34,10 @@ def test_asset_texture_export_failure_retry_pending_edits_and_stale_completion(m
       await Promise.resolve();
       const busy = state();
       await save();
-      assign('component-01','diffuse','diffuse::asset/root/c.png');
+      assign('component-01','diffuse','diffuse::asset/root/a.png');
       release({saved:2}); await pending;
       const newer = state();
+      assign('component-01','diffuse','diffuse::asset/root/c.png');
       assign('component-01','normal_map',null);
       response = {saved:2}; await save();
       const saved = state();
@@ -48,10 +53,11 @@ def test_asset_texture_export_failure_retry_pending_edits_and_stale_completion(m
       for (const source of [{kind:'mod',readOnly:false},{kind:'mod',readOnly:true}]) {
         viewerState.currentSource=source; initialize(); assign('component-01','diffuse',null); await save();
       }
-      return {initial,failed,busy,newer,saved,switched,writes,alerts:window.__alerts,
+      return {initial,reselected,reverted,failed,busy,newer,saved,switched,writes,alerts:window.__alerts,
         modBlocked:count===writes.length,final:state()};
     }""")
     assert result['initial'] == {'pending': False, 'saving': False, 'available': False}
+    assert result['reselected'] == result['reverted'] == result['initial']
     assert result['failed'] == {'pending': True, 'saving': False, 'available': True}
     assert result['busy'] == {'pending': True, 'saving': True, 'available': False}
     assert result['newer'] == result['switched'] == result['failed']
@@ -188,6 +194,9 @@ def test_asset_component_assignments_replace_preview_save_and_clear(viewer):
     assert page.evaluate("""() => {
       const [owner,follower,other]=window.modViewer.activeMeshes;
       owner.userData.componentDescriptor.setTextureOverride(owner,undefined);
+      owner.userData.componentDescriptor.setTextureOverride(owner,'diffuse::texture-02.png');
+      owner.userData.componentDescriptor.setTextureOverride(owner,'diffuse::texture-01.png');
+      owner.userData.componentDescriptor.setTextureOverride(owner,'diffuse::texture-02.png');
       return owner.userData.texKey === 'diffuse::texture-02.png' &&
         follower.userData.texKey === owner.userData.texKey &&
         follower.userData.lightMapKey === 'light_map::texture-02.png' && !other.userData.lightMapKey;
@@ -201,3 +210,43 @@ def test_asset_component_assignments_replace_preview_save_and_clear(viewer):
     page.locator('#export-btn').click()
     page.wait_for_function('!document.querySelector("#pending-indicator").classList.contains("show")')
     assert bridge_calls(page, 'assetTextures')[1][2] == {'component-01': {'diffuse': None}}
+
+
+def test_asset_without_diffuse_candidates_can_edit_maps_and_select_a_picked_image(viewer):
+    payload = model_payload(2)
+    normal = 'normal_map::normal-01.png'
+    payload['textures'][normal] = solid_texture((128, 128, 255))
+    payload['texture_pools'] = {'pool-empty': []}
+    for mesh in payload['meshes'].values():
+        mesh.update(component='component-01', asset_component_key='component-01',
+                    texture_pool_id='pool-empty', normal_map_key=normal)
+        mesh['identity']['component'] = 'component-01'
+    payload['metadata'].update(source_kind='asset', asset={'texture_session':'session-01'})
+    page = viewer({'asset-01': payload})
+    assert page.evaluate("window.modViewer.switchAsset('asset-01',{asset:true})")
+    wait_loaded(page, 2)
+    page.evaluate("""uri => {
+      window.pywebview.api.pick_asset_texture_file=async (_path,role) => ({
+        role:role || 'diffuse',tex_key:(role || 'diffuse')+'::picked-01.png',uri,file:'picked-01.png'});
+      window.modViewer.activeMeshes[0].userData.componentDescriptor.openTextureManager();
+    }""", solid_texture((128, 140, 150)))
+    assert page.locator('.texm-map-cell').count() == 4
+    page.locator('.texm-map-cell').first.click()
+    page.wait_for_function("window.modViewer.activeMeshes.every(mesh=>mesh.userData.lightMapKey==='light_map::picked-01.png')")
+    page.locator('#texm-add').click()
+    page.locator('.texm-candidate-row').wait_for()
+    assert page.locator('.texm-map-cell').count() == 4
+    assert page.evaluate("""() => {
+      const meshes=window.modViewer.activeMeshes, pool=meshes[0].userData.componentDescriptor.texturePool;
+      return pool.length===1 && meshes.every(mesh=>mesh.userData.texturePool===pool);
+    }""")
+    page.locator('#texm-close').click()
+    page.locator('#inspector-tab').click()
+    page.locator('.draw-item').first.click()
+    page.locator('.inspector-texture-option[data-texture-value="diffuse::picked-01.png"]').click()
+    assert page.evaluate("window.modViewer.activeMeshes.every(mesh=>mesh.userData.texKey==='diffuse::picked-01.png')")
+    page.locator('#export-btn').click()
+    page.wait_for_function('!document.querySelector("#pending-indicator").classList.contains("show")')
+    assert bridge_calls(page, 'assetTextures')[0][2] == {'component-01': {
+        'diffuse': 'diffuse::picked-01.png', 'light_map': 'light_map::picked-01.png'}}
+    assert page.evaluate("window.modViewer.activeMeshes.every(mesh=>mesh.userData.normalMapKey==='normal_map::normal-01.png')")

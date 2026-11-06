@@ -42,6 +42,7 @@ class AssetMeshPart:
     uvs: bytes | None = None
     normals: bytes | None = None
     textures: dict[str, AssetTexture] = field(default_factory=dict)
+    texture_clears: tuple[str, ...] = ()
     texture_candidates: tuple[AssetTexture, ...] = ()
     metadata_path: str | None = None
     metadata_entry: int | None = None
@@ -108,6 +109,7 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
         component_hashes.setdefault(base, set()).add(part.geometry_hash)
     component_labels = {}
     component_keys = {}
+    component_defaults = {}
     for base, hashes in component_hashes.items():
         if len(hashes) <= 1:
             continue
@@ -178,13 +180,19 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
             }.get(role)
             if field:
                 entry[field] = texture.key
+        if not asset_fill:
+            defaults = component_defaults.setdefault(entry["asset_component_key"], {})
+            for role in TEXTURE_ROLES:
+                if role in part.textures or role in part.texture_clears:
+                    field = "tex_key" if role == "diffuse" else role + "_key"
+                    defaults[field] = None if role in part.texture_clears else entry[field]
         pool = []
         if part.texture_candidates:
             pool = [candidate.as_candidate()
                     for candidate in part.texture_candidates]
         pool.extend(texture.as_candidate() for texture in part.textures.values()
                     if texture.role == "diffuse")
-        if pool:
+        if pool or not asset_fill:
             component = entry.get("asset_component_key", entry["component"])
             pool_id = pool_ids.get(component)
             if pool_id is None:
@@ -202,13 +210,10 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
         meshes[mesh_key] = entry
 
     if not asset_fill:
-        # Metadata ranges are ordered; the last range supplies the component's
-        # initial roles. Export only writes roles explicitly changed by the user.
-        fields = ["tex_key" if role == "diffuse" else role + "_key" for role in TEXTURE_ROLES]
-        defaults = {entry["asset_component_key"]: {field: entry[field] for field in fields}
-                    for entry in meshes.values()}
+        # Merge ordered, defined roles independently; only authored clears erase
+        # an earlier value. Missing or unavailable maps supply no replacement.
         for entry in meshes.values():
-            entry.update(defaults[entry["asset_component_key"]])
+            entry.update(component_defaults[entry["asset_component_key"]])
 
     asset_metadata = {
         "source_kind": "asset-fill" if asset_fill else "asset",

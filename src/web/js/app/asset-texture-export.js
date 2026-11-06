@@ -9,12 +9,27 @@ let saving = false;
 
 export function initializeAssetTextureExport(token) {
   context =
-    viewerState.currentSource?.kind === 'asset' ? { source: viewerState.currentSource, token, pending: {} } : null;
+    viewerState.currentSource?.kind === 'asset'
+      ? { source: viewerState.currentSource, token, pending: {}, saved: {} }
+      : null;
 }
 
-export function recordAssetTextureAssignment(component, role, value) {
+function pruneSavedAssignments(job) {
+  for (const [component, roles] of Object.entries(job.pending)) {
+    for (const [role, key] of Object.entries(roles)) {
+      if (key === job.saved[component]?.[role]) delete roles[role];
+    }
+    if (!Object.keys(roles).length) delete job.pending[component];
+  }
+}
+
+export function recordAssetTextureAssignment(component, role, value, previousValue) {
   if (!context || context.source !== viewerState.currentSource) return;
+  const saved = (context.saved[component] ||= {});
+  // An initially unavailable map is not proof of a previously authored clear.
+  if (!Object.hasOwn(saved, role)) saved[role] = previousValue ?? undefined;
   (context.pending[component] ||= {})[role] = value;
+  if (!saving) pruneSavedAssignments(context);
   notify();
 }
 
@@ -41,10 +56,7 @@ export async function exportAssetTextures() {
     if (context !== job || viewerState.currentSource !== job.source) return;
     if (!result || result.error) throw new Error(result?.error || 'Asset texture assignments were not saved.');
     for (const [component, roles] of Object.entries(textures)) {
-      for (const [role, key] of Object.entries(roles)) {
-        if (job.pending[component]?.[role] === key) delete job.pending[component][role];
-      }
-      if (!Object.keys(job.pending[component] || {}).length) delete job.pending[component];
+      Object.assign(job.saved[component], roles);
     }
   } catch (error) {
     if (context === job && viewerState.currentSource === job.source) {
@@ -52,6 +64,7 @@ export async function exportAssetTextures() {
     }
   } finally {
     saving = false;
+    if (context === job) pruneSavedAssignments(job);
     notify();
   }
 }

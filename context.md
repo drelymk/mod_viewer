@@ -546,6 +546,10 @@ of documentation, comments and tests; use portable fixtures instead.
   the previous value, and null clears only that role. Identify components by
   loader-proven metadata document/entry, never by a display name. Every mesh in
   the component uses those same assignments, including Automatic mode.
+  Merge initial range defaults separately per role: later missing roles retain
+  the earlier defined value, while authored null records explicitly clear it.
+  Every direct component owns a shared candidate pool, even when empty; its
+  role controls remain available independently of candidate rows.
   Store metadata-relative image references and explicit role clears;
   retain captured native hashes for the same source file and never copy a role's
   previous hash to a newly selected file. Preserve unedited parts and roles,
@@ -554,6 +558,8 @@ of documentation, comments and tests; use portable fixtures instead.
   never infer edits from rendered mesh state or texture-run propagation. Export
   submits only changed component roles. Mod bindings, conditional variants and
   normal texture-run behavior retain their separate existing semantics.
+  Reselecting or returning to a known saved texture leaves no pending write;
+  a save already in flight must still preserve a newer return to that value.
   Never fabricate hashes for new files. Preserve unassigned images as unclassified
   candidates, geometry, image bytes and unrelated metadata. There is no separate
   assignment JSON.

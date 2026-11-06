@@ -16,7 +16,7 @@ from app.runtime import server as server
 from app.assets.index import build_index
 from app.assets.loader import (AssetLoadResult, AssetMeshPart, hash_asset,
                                load_asset)
-from app.assets.loader.models import build_asset_fill_payload
+from app.assets.loader.models import AssetTexture, build_asset_fill_payload
 from app.bridge.api import ModViewerAPI
 from core.geometry.component_coverage import ComponentCoverageKey
 from core.geometry.transport import GeometryBlob
@@ -193,8 +193,9 @@ def _wwmi_triangle(folder, *, component_name="Body", vb_hash="11111111",
     ("GIMI", "genshin", "genshin:gimi", "normal_map"),
     ("WWMI", "wuwa", "wuwa:wwmi", "normal_data"),
 ])
+@pytest.mark.parametrize("with_normal", [False, True])
 def test_asset_preview_and_fill_use_authoritative_material_profile(
-        tmp_path, asset_type, game, profile_id, normal_source):
+        tmp_path, asset_type, game, profile_id, normal_source, with_normal):
     part = AssetMeshPart(
         key="part-01", label="Component01", asset_type=asset_type,
         asset_path="Asset01", geometry_hash="12345678",
@@ -202,12 +203,18 @@ def test_asset_preview_and_fill_use_authoritative_material_profile(
         component_ordinal=0, first_index=0, index_count=3,
         positions=struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0),
         indices=struct.pack("<3I", 0, 1, 2))
+    if with_normal:
+        part.textures[normal_source] = AssetTexture(normal_source, str(tmp_path / "normal.png"),
+                                                   normal_source + "::normal.png", "normal")
     record = {"path": "Asset01"}
     preview = AssetLoadResult.from_parts(
         asset_type, str(tmp_path), record, [part],
         geometry=GeometryBlob()).payload
     fill = build_asset_fill_payload(
         asset_type, str(tmp_path), record, [part], geometry=GeometryBlob())
+    entry = next(iter(preview["meshes"].values()))
+    assert preview["texture_pools"][entry["texture_pool_id"]] == []
+    assert not fill["texture_pools"]
     for payload in (preview, fill):
         metadata = payload["metadata"]
         assert metadata["game"]["id"] == game
