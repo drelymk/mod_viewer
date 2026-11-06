@@ -213,29 +213,26 @@ class _Capture:
                     replay=verified)
 
 
-def record_placements(inv, calls, components, context):
-    """Require one placement across every captured draw of a proven face family."""
-    families = {}
-    for component in components:
-        family = component.provenance.get("gimi_face_family")
-        if family and component.provenance.get("geometry_kind") == "direct":
-            families.setdefault(family, []).append(component)
-    if not families:
-        return
+def placement_resolver(inv, calls, components, context):
+    """Share native replay validation across candidate selection and final families."""
     capture = _Capture(inv, calls, context)
-    natives = []
-    for component in components:
-        if component.status != "included" or not component.provenance.get("producer"):
-            continue
-        try:
-            native = capture.native(component)
-            if native:
-                natives.append(native)
-        except ResourceLimit:
-            raise
-        except (ValueError, OSError, KeyError, struct.error):
-            continue
-    for members in families.values():
+    natives = None
+
+    def resolve(members):
+        nonlocal natives
+        if natives is None:
+            natives = []
+            for component in components:
+                if component.status != "included" or not component.provenance.get("producer"):
+                    continue
+                try:
+                    native = capture.native(component)
+                    if native:
+                        natives.append(native)
+                except ResourceLimit:
+                    raise
+                except (ValueError, OSError, KeyError, struct.error):
+                    continue
         matches, sources, failure = [], {}, "Missing or ambiguous captured face placement"
         draws = sorted({d for c in members for p in c.parts for d in p.draws})
         for draw_id in draws:
@@ -270,6 +267,23 @@ def record_placements(inv, calls, components, context):
             placement.update(status="proven", matrix=best["matrix"], matches=matches,
                              sources=list(sources.values()))
             placement.pop("reason")
+        return placement
+
+    return resolve
+
+
+def record_placements(inv, calls, components, context, *, resolve=None):
+    """Require one placement across every captured draw of a proven face family."""
+    families = {}
+    for component in components:
+        family = component.provenance.get("gimi_face_family")
+        if family and component.provenance.get("geometry_kind") == "direct":
+            families.setdefault(family, []).append(component)
+    if not families:
+        return
+    resolve = resolve or placement_resolver(inv, calls, components, context)
+    for members in families.values():
+        placement = resolve(members)
         for component in members:
             component.provenance["gimi_face_placement"] = placement
 

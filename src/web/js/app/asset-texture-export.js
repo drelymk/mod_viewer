@@ -15,17 +15,17 @@ function snapshot() {
       .map((mesh) => {
         const data = mesh.userData;
         const option = (data.texturePool || []).find((item) => item.tex_key === data.texKey);
+        const ownsRun =
+          data.manualTexOverride !== undefined || (data.automaticTextureBoundary && !data.textureHighlightDisabled);
         const values = Object.fromEntries(
           TEXTURE_ROLE_FIELDS.map(({ role, current }) => [role, data[current] || null]),
         );
-        const clears = Object.fromEntries(
-          TEXTURE_ROLE_FIELDS.filter(
-            ({ role }) =>
-              values[role] === null &&
-              (role === 'diffuse' ? data.manualTexOverride === null : option?.[`${role}_manual`] === true),
+        const edited = Object.fromEntries(
+          TEXTURE_ROLE_FIELDS.filter(({ role }) =>
+            role === 'diffuse' ? data.manualTexOverride !== undefined : ownsRun && option?.[`${role}_manual`] === true,
           ).map(({ role }) => [role, true]),
         );
-        return [data.semanticKey, { values, clears }];
+        return [data.semanticKey, { values, edited }];
       }),
   );
 }
@@ -34,7 +34,7 @@ function changesSince(current, saved) {
   const changes = {};
   for (const [part, state] of Object.entries(current)) {
     for (const [role, key] of Object.entries(state.values)) {
-      if (key !== saved[part]?.values[role] || (state.clears[role] && !saved[part]?.clears[role])) {
+      if (state.edited[role] && (key !== saved[part]?.values[role] || !saved[part]?.edited[role])) {
         (changes[part] ||= {})[role] = key;
       }
     }
@@ -75,7 +75,7 @@ export async function exportAssetTextures() {
     for (const [part, roles] of Object.entries(textures)) {
       for (const [role, key] of Object.entries(roles)) {
         job.saved[part].values[role] = key;
-        job.saved[part].clears[role] = sent[part].clears[role];
+        job.saved[part].edited[role] = sent[part].edited[role];
       }
     }
     updateAssetTextureDefaults(textures);

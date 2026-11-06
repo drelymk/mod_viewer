@@ -35,6 +35,7 @@ def test_asset_texture_export_failure_retry_pending_edits_and_stale_completion(m
       initialize('session-01');
       const initial = state();
       mesh.userData.texKey = 'diffuse::asset/root/b.png';
+      mesh.userData.manualTexOverride = mesh.userData.texKey;
       await save();
       const failed = state();
       response = null;
@@ -43,6 +44,7 @@ def test_asset_texture_export_failure_retry_pending_edits_and_stale_completion(m
       const busy = state();
       await save();
       mesh.userData.texKey = 'diffuse::asset/root/c.png';
+      mesh.userData.manualTexOverride = mesh.userData.texKey;
       release({saved:2}); await pending;
       const newer = state();
       // Explicitly clearing an unavailable role still counts as an edit.
@@ -50,11 +52,13 @@ def test_asset_texture_export_failure_retry_pending_edits_and_stale_completion(m
       response = {saved:2}; await save();
       const saved = state();
       mesh.userData.lightMapKey = null;
+      mesh.userData.texturePool[0].light_map_manual = true;
       response = null;
       const oldSave = save(); await Promise.resolve();
       viewerState.currentSource = {kind:'asset',path:'asset-02'};
       initialize('session-02');
       mesh.userData.texKey = 'diffuse::asset/root/d.png';
+      mesh.userData.manualTexOverride = mesh.userData.texKey;
       release({saved:2}); await oldSave;
       const switched = state();
       const count = writes.length;
@@ -103,8 +107,19 @@ def test_open_asset_export_button_dropdown_overflow_and_switch_guard(viewer):
     }""")
     assert page.locator('#export-btn').is_enabled()
     assert page.locator('#pending-indicator').is_visible()
+    page.evaluate('window.__bridge.blocked.assetTextures = true')
     page.locator('#export-btn').click()
-    page.wait_for_function('document.querySelector("#export-btn").disabled')
+    page.wait_for_function('window.__bridge.waiters.assetTextures?.length === 1')
+    assert page.evaluate("""async () => {
+      const viewer=window.modViewer;
+      return [await viewer.switchAsset('asset-02',{asset:true}),
+        await viewer.switchMod('mod-01'), await viewer.openMod()];
+    }""") == [False, False, False]
+    assert bridge_calls(page, 'asset') == [['asset-01']]
+    assert bridge_calls(page, 'load') == bridge_calls(page, 'pick') == []
+    assert page.locator('#dialog-backdrop.show').count() == 0
+    page.evaluate('window.__bridge.release("assetTextures")')
+    page.wait_for_function('!document.querySelector("#pending-indicator").classList.contains("show")')
     assert bridge_calls(page,'assetTextures')[0][0:2] == ['asset-01','session-01']
     assert bridge_calls(page,'assetTextures')[0][2]['mesh-00']['diffuse'] is None
     assert page.locator('#pending-indicator').is_hidden()
@@ -156,3 +171,36 @@ def test_open_asset_export_button_dropdown_overflow_and_switch_guard(viewer):
     page.locator('#toolbar-overflow [data-toolbar-target="export-btn"]').click()
     page.wait_for_function('window.__bridge.calls.filter(call=>call.name==="assetTextures").length===3')
     assert bridge_calls(page,'export') == [] and bridge_calls(page,'textures') == []
+
+
+def test_asset_export_saves_run_owner_without_pinning_inherited_roles(viewer):
+    payload = textured_payload(2)
+    first, follower = payload['meshes'].values()
+    follower['component'] = follower['identity']['component'] = first['component']
+    follower['tex_key'] = None
+    payload['textures']['light_map::texture-02.png'] = payload['textures']['diffuse::texture-02.png']
+    payload['metadata'].update(source_kind='asset', asset={'texture_session':'session-01'})
+    page = viewer({'asset-01': payload})
+    assert page.evaluate("window.modViewer.switchAsset('asset-01',{asset:true})")
+    wait_loaded(page, 2)
+    assert page.evaluate("""() => {
+      const [owner,follower]=window.modViewer.activeMeshes;
+      const option=owner.userData.texturePool.find(item=>item.tex_key==='diffuse::texture-02.png');
+      option.light_map='light_map::texture-02.png';
+      option.light_map_manual=true;
+      owner.userData.componentDescriptor.setTextureOverride(owner,option.tex_key);
+      return follower.userData.texKey === option.tex_key &&
+        follower.userData.lightMapKey === option.light_map && !follower.userData.automaticTextureBoundary;
+    }""")
+    page.locator('#export-btn').click()
+    page.wait_for_function('!document.querySelector("#pending-indicator").classList.contains("show")')
+    assert bridge_calls(page, 'assetTextures')[0][2] == {'mesh-00': {
+        'diffuse': 'diffuse::texture-02.png', 'light_map': 'light_map::texture-02.png'}}
+    assert page.evaluate("""() => {
+      const [owner,follower]=window.modViewer.activeMeshes;
+      owner.userData.componentDescriptor.setTextureOverride(owner,undefined);
+      return owner.userData.texKey === 'diffuse::texture-02.png' &&
+        follower.userData.texKey === owner.userData.texKey && follower.userData.defaultTexKey === null &&
+        follower.userData.defaultLightMapKey === null && !follower.userData.assetTextureDefaultExplicit;
+    }""")
+    assert page.locator('#export-btn').is_disabled()

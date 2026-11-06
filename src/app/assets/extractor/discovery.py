@@ -263,9 +263,10 @@ def analyze(dump, context=None):
         classify_surface_overlaps(outlines, colors, surface_signatures)
     if inv.gimi_evidence and not inv.zzz_evidence:
         from .profiles.gimi_faces import classify_faces
-        components.extend(classify_faces(decoded_meshes, ctx))
-        from .profiles.gimi_placement import record_placements
-        record_placements(inv, calls, components, ctx)
+        from .profiles.gimi_placement import placement_resolver, record_placements
+        resolve = placement_resolver(inv, calls, components, ctx)
+        components.extend(classify_faces(decoded_meshes, ctx, resolve_placement=resolve))
+        record_placements(inv, calls, components, ctx, resolve=resolve)
     for component in components:
         if component.status == "included" and component.requires_review:
             component.reason = "Decodable direct geometry; target-asset membership is unproven"

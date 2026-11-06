@@ -490,7 +490,7 @@ export async function switchAsset(path, entry = {}, handlers = {}) {
 }
 
 export async function runModTransition(operation) {
-  if (viewerState.modTransitionInFlight || !isRendererAvailable()) return false;
+  if (viewerState.modTransitionInFlight || assetTextureExportState().saving || !isRendererAvailable()) return false;
   viewerState.modTransitionInFlight = true;
   syncModelExportAvailability();
   const button = $('open-btn');

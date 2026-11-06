@@ -247,7 +247,7 @@ def _separate_overlay(mesh):
     return overlay
 
 
-def classify_faces(meshes, context):
+def classify_faces(meshes, context, *, resolve_placement=None):
     """Recognize an open-eye face, retaining native-eye proof for legacy layouts."""
     references = [m for m in meshes.values() if m.component.status == "included"
                   and m.component.provenance.get("geometry_kind") != "direct" and _eye_reference(m)]
@@ -288,9 +288,14 @@ def classify_faces(meshes, context):
     if not proven:
         return []
     fallback = len(proven) > 1
+    eligible = proven
+    if fallback and resolve_placement is not None:
+        placed = [candidate for candidate in proven if resolve_placement(
+            [mesh.component for mesh in candidate[1][candidate[4]]])["status"] == "proven"]
+        eligible = placed or proven
     # Prefer complete surfaces with fewer auxiliary openings, then compare content
     # before captured resource identity to keep equivalent quality choices stable.
-    selected = min(proven, key=lambda candidate: (
+    selected = min(eligible, key=lambda candidate: (
         -candidate[3].get("surface_triangle_fraction", 0),
         candidate[3].get("extra_boundary_count", 0),
         candidate[4])) if fallback else proven[0]

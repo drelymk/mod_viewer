@@ -431,8 +431,11 @@ of documentation, comments and tests; use portable fixtures instead.
   also requires matching additional recognized material identities.
   A unique anchor includes its nearby material family. If multiple supported
   anchors compete, retain one best-effort anchor and its exact equivalent passes,
-  preferring connected-surface coverage, fewer small openings and stable content/
-  resource identity. Leave competing anchors and unproven attachments excluded;
+  preferring candidates with proven captured-matrix placement, then connected-surface
+  coverage, fewer small openings and stable content/resource identity. Share native
+  replay validation between candidate ranking and final family placement. If none
+  can be placed, retain the topology-based fallback with unresolved placement.
+  Leave competing anchors and unproven attachments excluded;
   record the ambiguity in provenance/diagnostics and mark extraction partial.
   This fallback never relaxes material/topology or captured-matrix placement checks.
   Label the family independently of placement; retain source positions and UVs
@@ -542,6 +545,8 @@ of documentation, comments and tests; use portable fixtures instead.
   retain captured native hashes for the same source file and never copy a role's
   previous hash to a newly selected file. Preserve unedited parts and roles,
   including unavailable textures, rather than saving a rendered null as a clear.
+  Only manual diffuse overrides and manually edited map roles on independent
+  texture-run owners are edits; inherited rendered changes never author metadata.
   Never fabricate hashes for new files. Preserve unassigned images as unclassified
   candidates, geometry, image bytes and unrelated metadata. There is no separate
   assignment JSON.
@@ -557,7 +562,8 @@ of documentation, comments and tests; use portable fixtures instead.
   cannot invoke this save path. Exact owned image references may be deeper than
   the bounded discovery inventory. A successful save updates live Automatic
   defaults while preserving newer pending choices. Ambiguity may yield
-  candidates, never bindings.
+  candidates, never bindings. Block model transitions while an Asset save runs,
+  so a switch cannot offer to discard a write already in progress.
 - Asset Fill treats an authored component/range as handled when its component
   identity is present in the mod, including staged documents. Geometry overrides
   and component-level `handling = skip` prevent restoration. Proven texture-only

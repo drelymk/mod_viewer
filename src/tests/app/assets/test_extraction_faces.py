@@ -338,7 +338,8 @@ def test_open_face_proves_family_without_native_eyes(case):
     assert not duplicate.component.default_included
 
 
-def test_ambiguous_face_fallback_survives_analysis_export_and_reload(tmp_path, monkeypatch):
+@pytest.mark.parametrize("placement_case", ["valid", "preferred_unplaced", "all_unplaced"])
+def test_ambiguous_face_fallback_survives_analysis_export_and_reload(tmp_path, monkeypatch, placement_case):
     meshes = list(_family().values())[:-1]
     meshes[1] = _open_face_mesh()
     competitor = _open_face_mesh(extra_opening=2)
@@ -346,11 +347,29 @@ def test_ambiguous_face_fallback_survives_analysis_export_and_reload(tmp_path, m
     competitor.component.parts[0].count = len(competitor.indices[0])
     meshes[2] = competitor
     dump, material = make_face_capture(tmp_path, meshes)
+    if placement_case != "valid":
+        # A valid object/inverse pair with an unsupported face basis cannot place
+        # the topologically preferred anchor; the other candidate remains proven.
+        (dump / "000003-vs-cb3=55555555.buf").write_bytes(
+            (dump / "000002-vs-cb2=55555555.buf").read_bytes())
+    if placement_case == "all_unplaced":
+        (dump / "000004-vs-cb5=55555555.buf").write_bytes(
+            (dump / "000002-vs-cb2=55555555.buf").read_bytes())
     monkeypatch.setattr(discovery, "collect", lambda *_: copy.deepcopy(material))
+    from app.assets.extractor.profiles import gimi_placement
+    replayed = []
+    native = gimi_placement._Capture.native
+    def replay(capture, component):
+        replayed.append(component.id)
+        return native(capture, component)
+    monkeypatch.setattr(gimi_placement._Capture, "native", replay)
     analysis = discovery.analyze(dump)
+    assert len(replayed) == 1
     selected = [c for c in analysis.components if c.provenance.get("gimi_face_selection")]
-    assert len(selected) == 1 and selected[0].ib == meshes[1].component.ib
-    assert selected[0].provenance["gimi_face_placement"]["status"] == "proven"
+    expected_mesh = meshes[2 if placement_case == "preferred_unplaced" else 1]
+    assert len(selected) == 1 and selected[0].ib == expected_mesh.component.ib
+    placed = placement_case != "all_unplaced"
+    assert selected[0].provenance["gimi_face_placement"]["status"] == ("proven" if placed else "unresolved")
     assert all(not c.default_included for c in analysis.components
                if c.provenance.get("geometry_kind") == "direct" and c is not selected[0])
     analysis.save(tmp_path / "analysis.json")
@@ -359,10 +378,12 @@ def test_ambiguous_face_fallback_survives_analysis_export_and_reload(tmp_path, m
     assert package.partial and package.skipped == 0 and package.unproven_candidates == 2
     assert len(package.meshes) == 2
     report, loaded = _export_and_load(package, tmp_path / "exports")
-    assert report.partial and not loaded.warnings
+    assert report.partial
+    assert {w["reason"] for w in loaded.warnings} == (set() if placed else {"captured_face_placement_unavailable"})
     face = next(p for p in loaded.parts if p.component_name == "FaceEye")
-    expected = _points((-meshes[1].vertices[i][0][2], 2 - meshes[1].vertices[i][0][0],
-                        3 + meshes[1].vertices[i][0][1]) for i in meshes[1].indices[0])
+    expected = _points((-expected_mesh.vertices[i][0][2], 2 - expected_mesh.vertices[i][0][0],
+                        3 + expected_mesh.vertices[i][0][1]) if placed else expected_mesh.vertices[i][0]
+                       for i in expected_mesh.indices[0])
     assert _points(struct.iter_unpack("<3f", face.positions)) == expected
     assert any("best-effort face" in note for note in report.diagnostics)
 
