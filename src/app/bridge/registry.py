@@ -46,19 +46,6 @@ class ModFolderRegistry:
     def open_folder(self, folder_path):
         return _open_folder(folder_path, self._access.mod_folder)
 
-    def get_panel_opacity(self):
-        try:
-            return {"value": mod_folders.load_panel_opacity()}
-        except mod_folders.ModFolderError as error:
-            return {"error": str(error),
-                    "value": mod_folders.DEFAULT_PANEL_OPACITY}
-
-    def set_panel_opacity(self, value):
-        try:
-            return {"value": mod_folders.save_panel_opacity(value)}
-        except mod_folders.ModFolderError as error:
-            return {"error": str(error)}
-
     def get_viewer_preferences(self):
         try:
             return {"value": viewer_preferences.load_preferences()}
@@ -69,19 +56,6 @@ class ModFolderRegistry:
         try:
             return {"value": viewer_preferences.save_preferences(changes)}
         except ValueError as error:
-            return {"error": str(error)}
-
-    def get_language(self):
-        try:
-            return {"value": mod_folders.load_language()}
-        except mod_folders.ModFolderError as error:
-            return {"error": str(error),
-                    "value": mod_folders.DEFAULT_LANGUAGE}
-
-    def set_language(self, value):
-        try:
-            return {"value": mod_folders.save_language(value)}
-        except mod_folders.ModFolderError as error:
             return {"error": str(error)}
 
     def add_mod_folder(self, name, folder_path):

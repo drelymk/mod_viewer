@@ -65,7 +65,6 @@ SETUP = """async () => {
 
 BRIDGE = """window.pywebview = {api: {
   get_viewer_preferences: async () => ({value:{}}),
-  get_panel_opacity: async () => ({value:58}), get_language: async () => ({value:'en'}),
   get_mod_folders: async () => ({folders:[]}), get_asset_folders: async () => ({folders:[]}),
   consume_startup_request: async () => null,
 }};"""

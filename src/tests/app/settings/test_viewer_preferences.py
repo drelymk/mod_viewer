@@ -13,17 +13,19 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
     assert viewer_preferences.save_preferences({}, filename) == {}
     assert not filename.exists()
 
-    mod_folders.save_panel_opacity(35, filename)
-    mod_folders.save_language("ja", filename)
-    original = json.loads(filename.read_text(encoding="utf-8"))
-    original["assetFolders"] = [{"name": "Library", "enabled": True}]
+    original = {
+        "version": 1, "modFolders": [], "panelOpacity": 35, "language": "ja",
+        "assetFolders": [{"name": "Library", "enabled": True}],
+    }
     filename.write_text(json.dumps(original), encoding="utf-8")
+    assert viewer_preferences.load_preferences(filename) == {}
     settings = {
         "environment": "sunset", "wireframe": True, "outlines": True,
         "ambientOcclusion": 0.4, "bloom": True, "glossy": 73,
         "toonShading": True, "grid": False, "smoothShading": False,
         "textureMode": "diffuse", "keyLightIntensity": 0.75,
         "navigationGizmo": False, "autoRestoreMissingAssetParts": True,
+        "panelOpacity": 0, "language": "es",
     }
     for name, value in settings.items():
         viewer_preferences.save_preferences({name: value}, filename)
@@ -38,15 +40,15 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
         "toonShading": False, "grid": True, "smoothShading": True,
         "textureMode": "all", "keyLightIntensity": 1,
         "navigationGizmo": True, "autoRestoreMissingAssetParts": False,
+        "panelOpacity": 58, "language": "en",
     }
     assert viewer_preferences.save_preferences(defaults, filename) == defaults
     root = tmp_path / "root"
     root.mkdir()
     mod_folders.add_folder("Library", str(root), filename)
-    mod_folders.save_panel_opacity(58, filename)
     saved = json.loads(filename.read_text(encoding="utf-8"))
     assert saved["viewerPreferences"] == defaults
-    assert saved["panelOpacity"] == 58
+    assert saved["panelOpacity"] == 35
     assert saved["language"] == "ja"
     assert saved["assetFolders"] == original["assetFolders"]
     assert not filename.with_suffix(".json.tmp").exists()
@@ -69,6 +71,10 @@ def test_legacy_glossy_preferences_load_and_save_as_numeric_levels(tmp_path, leg
 
 
 @pytest.mark.parametrize("changes", [
+    {"panelOpacity": -1}, {"panelOpacity": 101}, {"panelOpacity": 2.5},
+    {"panelOpacity": True}, {"panelOpacity": "58"}, {"panelOpacity": float("nan")},
+    {"panelOpacity": float("inf")}, {"panelOpacity": 10 ** 1000},
+    {"language": "unknown"}, {"language": None}, {"language": []},
     None, [], {"orientation": 90}, {"wireframe": 1}, {"grid": "false"},
     {"autoRestoreMissingAssetParts": "true"}, {"autoRestoreMissingAssetParts": 1},
     {"environment": "unknown"}, {"textureMode": "unknown"},

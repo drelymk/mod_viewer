@@ -76,7 +76,7 @@ def _overlap_at_first_read(monkeypatch, first, second):
 
 
 @pytest.mark.parametrize("mutation", [
-    "viewer", "opacity", "language", "mod-add", "mod-edit", "mod-delete",
+    "viewer", "mod-add", "mod-edit", "mod-delete",
     "asset-add", "asset-edit", "asset-delete", "asset-enabled", "asset-entries",
     "catalog-add", "catalog-edit", "catalog-delete", "mod-add-pair", "asset-add-pair",
     "viewer-mod-add", "viewer-asset-add", "viewer-catalog-add",
@@ -95,9 +95,8 @@ def test_concurrent_config_mutations_preserve_both_changes(
     asset_folders.add_folder("GIMI", str(asset_root))
     initial = filename.read_bytes()
     operations = {
-        "viewer": lambda: viewer_preferences.save_preferences({"bloom": True}),
-        "opacity": lambda: mod_folders.save_panel_opacity(35),
-        "language": lambda: mod_folders.save_language("ja"),
+        "viewer": lambda: viewer_preferences.save_preferences({
+            "bloom": True, "panelOpacity": 35, "language": "ja"}),
         "mod-add": lambda: mod_folders.add_folder("New", str(new_mod_root)),
         "mod-edit": lambda: mod_folders.edit_folder(
             str(mod_root), "Renamed", str(mod_root)),

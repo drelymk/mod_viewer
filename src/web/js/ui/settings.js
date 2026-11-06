@@ -1,7 +1,8 @@
-// Global loading preferences and their accessible Settings dialog.
+// Global viewer preferences and their accessible Settings dialog.
 
 import { createPreferencePersistence } from './preference-persistence.js';
 import { closeHeaderPopovers } from './header-popovers.js';
+import { initAppearanceControls } from './appearance.js';
 
 const $ = (id) => document.getElementById(id);
 let autoRestoreMissingAssetParts = false;
@@ -16,10 +17,12 @@ export function initSettingsDialog() {
   const button = $('settings-btn');
   const backdrop = $('settings-backdrop');
   const checkbox = $('settings-auto-restore');
+  const applyAppearance = initAppearanceControls((...args) => persistence.change(...args));
   persistence = createPreferencePersistence({
     getMethod: 'get_viewer_preferences',
     setMethod: 'set_viewer_preferences',
     apply(name, value) {
+      applyAppearance(name, value);
       if (name !== 'autoRestoreMissingAssetParts' || typeof value !== 'boolean') return;
       autoRestoreMissingAssetParts = value;
       checkbox.checked = value;
@@ -55,7 +58,9 @@ export function initSettingsDialog() {
         event.stopPropagation();
         close();
       } else if (event.key === 'Tab') {
-        const controls = [...backdrop.querySelectorAll('button, input')];
+        const controls = [
+          ...backdrop.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled)'),
+        ];
         const index = controls.indexOf(document.activeElement);
         const next = (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
         event.preventDefault();

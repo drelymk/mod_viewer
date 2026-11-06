@@ -1,10 +1,9 @@
 """Persistent app configuration and safe Mod Folder enumeration.
 
-The registry stores only user-approved roots, alongside small global viewer
-preferences.  This module deliberately does not decide whether a directory is
-a loadable mod; that remains the loader's responsibility.  The API layer
-supplies the native-picker authorization needed before a root can be added or
-changed.
+The registry stores only user-approved roots. This module deliberately does not
+decide whether a directory is a loadable mod; that remains the loader's
+responsibility. The API layer supplies the native-picker authorization needed
+before a root can be added or changed.
 """
 
 import os
@@ -14,11 +13,6 @@ from core.mod_source import is_archive_path
 
 
 CONFIG_VERSION = config.CONFIG_VERSION
-DEFAULT_PANEL_OPACITY = 58
-PANEL_OPACITY_KEY = "panelOpacity"
-DEFAULT_LANGUAGE = "en"
-LANGUAGE_KEY = "language"
-SUPPORTED_LANGUAGES = ("en", "zh-CN", "ja", "ko", "es", "ru")
 
 
 class ModFolderError(ValueError):
@@ -86,55 +80,6 @@ def _write_entries(entries, config_file=None):
     config = _read_config(config_file)
     config["modFolders"] = entries
     _write_config(config, config_file)
-
-
-def _validated_panel_opacity(value):
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ModFolderError("Panel opacity must be a whole number from 0 to 100.")
-    if not float(value).is_integer() or not 0 <= value <= 100:
-        raise ModFolderError("Panel opacity must be a whole number from 0 to 100.")
-    return int(value)
-
-
-def load_panel_opacity(config_file=None):
-    """Return the global panel opacity, using the implicit default when absent."""
-    config = _read_config(config_file)
-    if PANEL_OPACITY_KEY not in config:
-        return DEFAULT_PANEL_OPACITY
-    return _validated_panel_opacity(config[PANEL_OPACITY_KEY])
-
-
-@config.transaction()
-def save_panel_opacity(value, config_file=None):
-    """Persist an explicitly changed global panel opacity."""
-    opacity = _validated_panel_opacity(value)
-    config = _read_config(config_file)
-    config[PANEL_OPACITY_KEY] = opacity
-    _write_config(config, config_file)
-    return opacity
-
-
-def _validated_language(value):
-    if value not in SUPPORTED_LANGUAGES:
-        allowed = ", ".join(SUPPORTED_LANGUAGES)
-        raise ModFolderError(f"Language must be one of: {allowed}.")
-    return value
-
-
-def load_language(config_file=None):
-    """Return the configured UI language, using English when it is absent."""
-    value = _read_config(config_file).get(LANGUAGE_KEY, DEFAULT_LANGUAGE)
-    return _validated_language(value)
-
-
-@config.transaction()
-def save_language(value, config_file=None):
-    """Persist a supported UI language without changing other preferences."""
-    language = _validated_language(value)
-    config = _read_config(config_file)
-    config[LANGUAGE_KEY] = language
-    _write_config(config, config_file)
-    return language
 
 
 @config.transaction()

@@ -1,10 +1,6 @@
-// The three header settings share one exclusive popover group.
+// Close header popovers before opening another viewer control.
 
-const CONTROLS = [
-  ['environment-btn', 'environment-popover'],
-  ['appearance-btn', 'appearance-popover'],
-  ['language-btn', 'language-popover'],
-];
+const CONTROLS = [['environment-btn', 'environment-popover']];
 
 export function closeHeaderPopovers(exceptPopoverId = null) {
   for (const [buttonId, popoverId] of CONTROLS) {

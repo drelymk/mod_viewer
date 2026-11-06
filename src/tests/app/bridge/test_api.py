@@ -45,8 +45,6 @@ EXPECTED_API_METHODS = {
     "get_mesh_semantics",
     "save_texture_color",
     "get_mod_folders",
-    "get_language",
-    "get_panel_opacity",
     "get_viewer_preferences",
     "get_present_state",
     "get_semantic_state",
@@ -81,8 +79,6 @@ EXPECTED_API_METHODS = {
     "select_folder",
     "select_archive_mod",
     "set_asset_folder_enabled",
-    "set_language",
-    "set_panel_opacity",
     "set_viewer_preferences",
     "update_ini_text",
 }
@@ -171,30 +167,21 @@ def test_startup_request_preserves_disabled_ini_flag(tmp_path, monkeypatch):
     assert api.consume_startup_request()["disabled_ini"] is True
 
 
-def test_language_bridge_round_trip(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
-    api = ModViewerAPI()
-
-    assert api.get_language() == {"value": "en"}
-    assert api.set_language("zh-CN") == {"value": "zh-CN"}
-    assert api.get_language() == {"value": "zh-CN"}
-    assert api.set_language("fr")["error"]
-
-
 def test_viewer_preferences_bridge_round_trip_and_invalid_config(tmp_path, monkeypatch):
     filename = tmp_path / "config.json"
     monkeypatch.setattr(paths, "config_path", lambda: str(filename))
     api = ModViewerAPI()
     assert api.get_viewer_preferences() == {"value": {}}
     assert not filename.exists()
-    assert api.set_viewer_preferences({"environment": "studio"}) == {
-        "value": {"environment": "studio"},
+    assert api.set_viewer_preferences({"environment": "studio", "language": "zh-CN", "panelOpacity": 35}) == {
+        "value": {"environment": "studio", "language": "zh-CN", "panelOpacity": 35},
     }
     assert api.set_viewer_preferences({"grid": False}) == {
-        "value": {"environment": "studio", "grid": False},
+        "value": {"environment": "studio", "language": "zh-CN", "panelOpacity": 35, "grid": False},
     }
     assert api.get_viewer_preferences()["value"]["grid"] is False
     assert api.set_viewer_preferences({"orientation": 90})["error"]
+    assert api.set_viewer_preferences({"language": "fr"})["error"]
     original = "{"
     filename.write_text(original, encoding="utf-8")
     assert api.get_viewer_preferences()["error"]
