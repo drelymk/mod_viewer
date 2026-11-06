@@ -1072,23 +1072,17 @@ def test_refresh_meshes_requires_options_and_accepts_explicit_intent(module_page
 
 def test_appearance_controls_share_persistence_and_save_explicit_defaults(module_page):
     module_page.evaluate("""async () => {
-      document.body.innerHTML = `<div class="appearance-wrap">
-        <button id="appearance-btn"></button><div id="appearance-popover" hidden>
-        <label for="panel-opacity"></label><input id="panel-opacity" type="range" min="0" max="100">
-        <output id="panel-opacity-value"></output></div></div>
-        <div id="language-control"><button id="language-btn"></button>
-        <div id="language-popover" hidden><select id="app-language">
-        <option value="en">English</option><option value="ja">Japanese</option>
-        <option value="es">Spanish</option></select></div></div>`;
+      const html = await (await fetch('./index.html')).text();
+      document.body.innerHTML = new DOMParser().parseFromString(html, 'text/html').body.innerHTML;
       const saved = window.__preferences = {panelOpacity:35, language:'ja', writes:[]};
       window.pywebview = {api:{
-        get_panel_opacity:async()=>({value:saved.panelOpacity}),
-        set_panel_opacity:async value=>{saved.panelOpacity=value; saved.writes.push(['opacity',value]); return {value};},
-        get_language:async()=>({value:saved.language}),
-        set_language:async value=>{saved.language=value; saved.writes.push(['language',value]); return {value};},
+        get_viewer_preferences:async()=>({value:{panelOpacity:saved.panelOpacity,language:saved.language}}),
+        set_viewer_preferences:async changes=>{
+          Object.assign(saved,changes); saved.writes.push(changes); return {value:changes};
+        },
       }};
-      const appearance = await import('./js/ui/appearance.js');
-      appearance.initPanelOpacityControl(); appearance.initLanguageControl();
+      const settings = await import('./js/ui/settings.js');
+      settings.initSettingsDialog();
     }""")
     module_page.wait_for_function('document.getElementById("panel-opacity").value === "35" && document.getElementById("app-language").value === "ja"')
     assert module_page.evaluate('window.__preferences.writes') == []
@@ -1104,7 +1098,7 @@ def test_appearance_controls_share_persistence_and_save_explicit_defaults(module
       const language=document.getElementById('app-language'); language.value='es';
       language.dispatchEvent(new Event('change',{bubbles:true}));
     }""")
-    module_page.wait_for_function('window.__preferences.writes.length === 2')
+    module_page.wait_for_function('window.__preferences.language === "es"')
     module_page.evaluate("""() => {
       const opacity=document.getElementById('panel-opacity'); opacity.value='58';
       opacity.dispatchEvent(new Event('input',{bubbles:true}));
@@ -1112,10 +1106,66 @@ def test_appearance_controls_share_persistence_and_save_explicit_defaults(module
       const language=document.getElementById('app-language'); language.value='en';
       language.dispatchEvent(new Event('change',{bubbles:true}));
     }""")
-    module_page.wait_for_function('window.__preferences.writes.length === 4')
+    module_page.wait_for_function('window.__preferences.language === "en"')
     assert module_page.evaluate('window.__preferences') == {
         'panelOpacity': 58, 'language': 'en',
-        'writes': [['opacity', 0], ['language', 'es'], ['opacity', 58], ['language', 'en']],
+        'writes': [{'panelOpacity': 0, 'language': 'es'}, {'panelOpacity': 58, 'language': 'en'}],
+    }
+
+
+def test_panel_surfaces_follow_opacity_without_fading_content(module_page):
+    module_page.add_style_tag(url=module_page.url.replace('/__module_test__.html', '/css/app.css'))
+    module_page.add_style_tag(content='* { transition: none !important; }')
+    result = module_page.evaluate("""async () => {
+      const html = await (await fetch('./index.html')).text();
+      document.body.innerHTML = new DOMParser().parseFromString(html, 'text/html').body.innerHTML;
+      window.pywebview = {api:{get_viewer_preferences:async()=>({value:{}})}};
+      const settings = await import('./js/ui/settings.js');
+      await settings.initSettingsDialog().ready;
+      const future = document.createElement('section');
+      future.className = 'panel-surface';
+      future.innerHTML = '<button class="ui-button">Example</button>';
+      document.body.append(future);
+      const editor = document.getElementById('ini-editor-text');
+      editor.classList.add('ace_editor');
+      editor.innerHTML = '<div class="ace_gutter"></div><div class="ace_search"><input class="ace_search_field"></div>';
+      const targets = [...document.querySelectorAll(`.panel-surface, .dock-tabs, .right-dock-tabs,
+        #toolbar, #mod-path, #ini-view-btn, #health-btn, #export-btn, #footer,
+        #tool-panel, #inspector-panel, #weight-rig-panel, #sidebar,
+        .ui-popover, .open-mod-menu, .ini-file-menu, .panel-action-menu,
+        #ini-editor-text, .ace_gutter, .ace_search, .ace_search_field,
+        .health-filters button, .modal-field input, .modal-field select,
+        .ui-button, .settings-language select, .modal-backdrop, .dialog-backdrop`)];
+      const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+      const ctx = canvas.getContext('2d', {willReadFrequently:true});
+      const alpha = color => {
+        ctx.clearRect(0,0,1,1); ctx.fillStyle = color; ctx.fillRect(0,0,1,1);
+        return ctx.getImageData(0,0,1,1).data[3];
+      };
+      const slider = document.getElementById('panel-opacity');
+      const snapshot = value => {
+        slider.value = String(value); slider.dispatchEvent(new Event('input'));
+        return targets.map(node => {
+          const style = getComputedStyle(node);
+          return {alpha:alpha(style.backgroundColor), color:style.color, opacity:style.opacity};
+        });
+      };
+      const full = snapshot(100), empty = snapshot(0), partial = snapshot(58);
+      return {
+        moved: !document.getElementById('appearance-btn') && !document.getElementById('language-btn')
+          && !!document.querySelector('#settings-dialog #panel-opacity')
+          && !!document.querySelector('#settings-dialog #app-language'),
+        opaque:empty.flatMap((item,i) => item.alpha ? [targets[i].id || targets[i].className] : []),
+        unscaled:partial.flatMap((item,i) => full[i].alpha !== 0 && !(item.alpha > 0 && item.alpha < full[i].alpha)
+          ? [targets[i].id || targets[i].className] : []),
+        foreground:empty.every((item,i) => item.color === full[i].color && item.opacity === full[i].opacity),
+        future:alpha(getComputedStyle(future).backgroundColor),
+        blur:getComputedStyle(future).backdropFilter,
+      };
+    }""")
+    assert result == {
+        'moved': True, 'opaque': [], 'unscaled': [], 'foreground': True,
+        'future': 148, 'blur': 'blur(5.8px)',
     }
 
 

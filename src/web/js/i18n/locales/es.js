@@ -6,7 +6,7 @@ export default {
   'settings.autoRestore': 'Restaurar automáticamente las partes del mod que faltan desde los recursos',
   'settings.autoRestoreDescription':
     'Tras cargar un mod, restaura las partes originales que faltan desde un recurso coincidente de tu biblioteca. Las partes restauradas solo se muestran en la vista previa.',
-  'settings.hint': 'Los cambios se guardan automáticamente y se aplican la próxima vez que se cargue un mod.',
+  'settings.hint': 'Los cambios se guardan automáticamente.',
   'asset.extractedPartial':
     'Extracción parcial: se guardaron {components} componentes y se omitieron {skipped} grupos de recursos. Pueden faltar partes. Consulta extraction_report.json para más detalles.',
   'asset.add': 'Añadir recurso',

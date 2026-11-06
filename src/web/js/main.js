@@ -31,7 +31,6 @@ import { requestRender } from './scene/render-scheduler.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
 import { getLoadedWeightRigFeature, loadWeightRigFeature } from './weight-rig/weight-rig-feature.js';
-import { initLanguageControl, initPanelOpacityControl } from './ui/appearance.js';
 import { alertDialog } from './ui/dialogs.js';
 import { LANGUAGE_CHANGED, t } from './i18n/index.js';
 import { getOutlineState as getMeshOutlineState, setOutlineSuppressedByDebug } from './scene/outline-renderer.js';
@@ -301,8 +300,6 @@ function syncBloomControl() {
 }
 
 initToolbarOverflow();
-initPanelOpacityControl();
-initLanguageControl();
 initSettingsDialog();
 initOpenModMenu();
 initExportMenu();

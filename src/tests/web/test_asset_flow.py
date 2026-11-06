@@ -188,14 +188,17 @@ def test_settings_auto_restore_lifecycle_is_persistent_and_preview_only(viewer):
     open_model(page, 'fixture-01')
     wait_loaded(page)
     assert bridge_calls(page, 'fill') == bridge_calls(page, 'preferencesSave') == []
-    assert page.evaluate('document.getElementById("language-control").nextElementSibling.id') == 'settings-btn'
-    page.locator('#language-btn').click()
+    page.locator('#environment-btn').click()
     page.locator('#settings-btn').click()
-    assert not page.locator('#language-popover').is_visible()
+    assert not page.locator('#environment-popover').is_visible()
     assert page.locator('#settings-dialog').get_attribute('aria-modal') == 'true'
     checkbox = page.locator('#settings-auto-restore')
     assert checkbox.evaluate('(element) => element === document.activeElement')
     assert not checkbox.is_checked()
+    page.keyboard.press('Shift+Tab')
+    assert page.locator('#app-language').evaluate('(element) => element === document.activeElement')
+    page.keyboard.press('Shift+Tab')
+    assert page.locator('#panel-opacity').evaluate('(element) => element === document.activeElement')
     page.keyboard.press('Shift+Tab')
     assert page.locator('#settings-close').evaluate('(element) => element === document.activeElement')
     page.keyboard.press('Shift+Tab')

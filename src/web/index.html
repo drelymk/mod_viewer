@@ -146,40 +146,6 @@
     <div id="environment-popover" class="ui-popover header-popover" role="menu"
          aria-label="Environment presets" data-i18n-aria-label="toolbar.environmentPresets" hidden></div>
   </div>
-  <div class="appearance-wrap">
-    <button id="appearance-btn" class="icon-btn" type="button"
-            aria-label="Panel opacity: 58%" aria-expanded="false"
-            aria-controls="appearance-popover" title="Panel opacity: 58%">
-      <svg class="ui-icon" aria-hidden="true"><use href="#icon-appearance"></use></svg>
-    </button>
-    <div id="appearance-popover" class="appearance-popover" role="dialog"
-         aria-label="Appearance" data-i18n-aria-label="toolbar.appearance" hidden>
-      <div class="range-control-row appearance-row">
-        <label for="panel-opacity" data-i18n="toolbar.panelOpacity">Panel opacity</label>
-        <output id="panel-opacity-value" class="range-control-value" for="panel-opacity">58%</output>
-      </div>
-      <input id="panel-opacity" class="range-control-slider" type="range" min="0" max="100" step="1" value="58"/>
-    </div>
-  </div>
-  <div id="language-control" class="header-control-wrap language-control">
-    <button id="language-btn" class="icon-btn header-setting-btn" type="button"
-            aria-label="Language" data-i18n-aria-label="toolbar.language"
-            aria-expanded="false" aria-controls="language-popover" title="Language">
-      <svg class="ui-icon" aria-hidden="true"><use href="#icon-language"></use></svg>
-    </button>
-    <div id="language-popover" class="language-popover" role="dialog"
-         aria-label="Language" data-i18n-aria-label="toolbar.language" hidden>
-      <label for="app-language" data-i18n="toolbar.language">Language</label>
-      <select id="app-language" aria-label="Language" data-i18n-aria-label="toolbar.language">
-        <option value="en">English</option>
-        <option value="zh-CN">简体中文</option>
-        <option value="ja">日本語</option>
-        <option value="ko">한국어</option>
-        <option value="es">Español</option>
-        <option value="ru">Русский</option>
-      </select>
-    </div>
-  </div>
   <button id="settings-btn" class="icon-btn header-setting-btn" type="button"
           aria-label="Settings" data-i18n-aria-label="settings.title"
           title="Settings" data-i18n-title="settings.title" aria-haspopup="dialog"
@@ -426,7 +392,7 @@
 </div>
 
 <div id="asset-extract-backdrop" class="modal-backdrop">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="asset-extract-title">
+  <div class="modal panel-surface" role="dialog" aria-modal="true" aria-labelledby="asset-extract-title">
     <h4 id="asset-extract-title"></h4>
     <div id="asset-extract-error" class="modal-error" role="alert"></div>
     <form id="asset-extract-form">
@@ -451,7 +417,7 @@
 </div>
 
 <div id="asset-folder-modal-backdrop" class="modal-backdrop">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="afm-title">
+  <div class="modal panel-surface" role="dialog" aria-modal="true" aria-labelledby="afm-title">
     <h4 id="afm-title" data-i18n="folder.addAsset">Add Asset Folder</h4>
     <div id="afm-error" class="modal-error"></div>
     <form id="afm-form">
@@ -475,7 +441,7 @@
 </div>
 
 <div id="mod-folder-modal-backdrop" class="modal-backdrop">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mfm-title">
+  <div class="modal panel-surface" role="dialog" aria-modal="true" aria-labelledby="mfm-title">
     <h4 id="mfm-title" data-i18n="folder.addMod">Add Mod Folder</h4>
     <div id="mfm-error" class="modal-error"></div>
     <form id="mfm-form">
@@ -499,7 +465,7 @@
 </div>
 
 <div id="present-modal-backdrop" class="modal-backdrop">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pm-title">
+  <div class="modal panel-surface" role="dialog" aria-modal="true" aria-labelledby="pm-title">
     <h4 id="pm-title">Add PRESENT</h4>
     <div id="pm-error" class="modal-error"></div>
     <form id="pm-form">
@@ -520,7 +486,7 @@
 </div>
 
 <div id="toggle-modal-backdrop" class="modal-backdrop">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tm-title">
+  <div class="modal panel-surface" role="dialog" aria-modal="true" aria-labelledby="tm-title">
     <h4 id="tm-title">Add Toggle</h4>
     <div id="tm-error" class="modal-error"></div>
     <form id="tm-form">
@@ -564,7 +530,7 @@
 </div>
 
 <div id="texture-modal-backdrop" class="modal-backdrop">
-  <div class="modal texture-modal" role="dialog" aria-modal="true" aria-labelledby="texm-title">
+  <div class="modal panel-surface texture-modal" role="dialog" aria-modal="true" aria-labelledby="texm-title">
     <h4 id="texm-title" data-i18n="modal.manageTextures">Manage Textures</h4>
     <div id="texm-list" class="texm-list"></div>
     <div class="modal-actions">
@@ -575,7 +541,7 @@
 </div>
 
 <div id="health-modal-backdrop" class="modal-backdrop">
-  <div class="modal health-modal" role="dialog" aria-modal="true" aria-labelledby="health-title">
+  <div class="modal panel-surface health-modal" role="dialog" aria-modal="true" aria-labelledby="health-title">
     <div class="health-title-row">
       <div>
     <h4 id="health-title" data-i18n="modal.iniDiagnostics">INI Diagnostics</h4>
@@ -599,7 +565,7 @@
 </div>
 
 <div id="ini-editor-backdrop" class="modal-backdrop">
-  <div class="modal ini-editor-modal" role="dialog" aria-modal="true" aria-labelledby="ini-editor-title">
+  <div class="modal panel-surface ini-editor-modal" role="dialog" aria-modal="true" aria-labelledby="ini-editor-title">
     <div class="ini-editor-title-row">
       <div>
         <h4 id="ini-editor-title" data-i18n="modal.iniEditor">INI Editor</h4>
@@ -617,7 +583,7 @@
 </div>
 
 <div id="texture-bake-modal-backdrop" class="modal-backdrop">
-  <div class="modal texture-bake-modal" role="dialog" aria-modal="true"
+  <div class="modal panel-surface texture-bake-modal" role="dialog" aria-modal="true"
        aria-labelledby="texture-bake-title">
     <div class="texture-bake-title-row">
     <h4 id="texture-bake-title" data-i18n="modal.saveToTexture">Save to Texture</h4>
@@ -634,7 +600,7 @@
 </div>
 
 <div id="dialog-backdrop" class="dialog-backdrop">
-  <div class="dialog-box" role="alertdialog" aria-modal="true" aria-describedby="dialog-message">
+  <div class="dialog-box panel-surface" role="alertdialog" aria-modal="true" aria-describedby="dialog-message">
     <div id="dialog-message" class="dialog-message"></div>
     <input id="dialog-input" class="dialog-input" type="text" autocomplete="off"/>
     <label id="dialog-range-field" class="dialog-range-field">
@@ -650,7 +616,7 @@
 </div>
 
 <div id="settings-backdrop" class="modal-backdrop">
-  <section id="settings-dialog" class="modal settings-modal" role="dialog" aria-modal="true"
+  <section id="settings-dialog" class="modal panel-surface settings-modal" role="dialog" aria-modal="true"
            aria-labelledby="settings-title" aria-describedby="settings-hint">
     <div class="settings-title-row">
       <h4 id="settings-title" data-i18n="settings.title">Settings</h4>
@@ -658,6 +624,25 @@
               title="Close" data-i18n-title="common.close">
         <svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg>
       </button>
+    </div>
+    <div class="settings-appearance">
+      <div class="range-control-row">
+        <label for="panel-opacity" data-i18n="toolbar.panelOpacity">Panel opacity</label>
+        <output id="panel-opacity-value" class="range-control-value" for="panel-opacity">58%</output>
+      </div>
+      <input id="panel-opacity" class="range-control-slider" type="range" min="0" max="100" step="1" value="58"
+             aria-label="Panel opacity" data-i18n-aria-label="toolbar.panelOpacity"/>
+      <label class="settings-language" for="app-language">
+        <span data-i18n="toolbar.language">Language</span>
+      <select id="app-language" aria-label="Language" data-i18n-aria-label="toolbar.language">
+        <option value="en">English</option>
+        <option value="zh-CN">简体中文</option>
+        <option value="ja">日本語</option>
+        <option value="ko">한국어</option>
+        <option value="es">Español</option>
+        <option value="ru">Русский</option>
+      </select>
+      </label>
     </div>
     <label class="settings-option" for="settings-auto-restore">
       <span class="settings-option-copy">
@@ -667,7 +652,7 @@
       <input id="settings-auto-restore" type="checkbox" role="switch" aria-labelledby="settings-auto-restore-label"
              aria-describedby="settings-auto-restore-description">
     </label>
-    <p id="settings-hint" class="modal-field-hint" data-i18n="settings.hint">Changes are saved automatically and apply the next time a mod loads.</p>
+    <p id="settings-hint" class="modal-field-hint" data-i18n="settings.hint">Changes are saved automatically.</p>
     <div class="modal-actions">
       <button id="settings-done" class="ui-button ui-button-primary" type="button" data-i18n="common.close">Close</button>
     </div>

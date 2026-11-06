@@ -5,7 +5,7 @@ export default {
   'settings.autoRestore': '不足している Mod パーツをアセットから自動復元',
   'settings.autoRestoreDescription':
     'Mod の読み込み後、アセットライブラリ内の一致するアセットから不足している元のパーツを復元します。復元したパーツはプレビュー専用です。',
-  'settings.hint': '変更は自動保存され、次回 Mod を読み込む際に適用されます。',
+  'settings.hint': '変更は自動保存されます。',
   'asset.extractedPartial':
     'アセットの抽出は一部のみ完了しました：{components} 個のコンポーネントを保存し、{skipped} 個のリソースグループをスキップしました。パーツが不足している可能性があります。詳細は extraction_report.json を確認してください。',
   'asset.add': 'アセットを追加',

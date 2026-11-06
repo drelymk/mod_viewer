@@ -13,8 +13,8 @@ It supports Zenless Zone Zero (ZZMI), Genshin Impact (GIMI), and Wuthering Waves
 
 ## What the app can do
 
-The instructions below use the English UI labels. Use `Language` in the top
-toolbar to switch between English, Simplified Chinese, Japanese, Korean,
+The instructions below use the English UI labels. Open `Settings` in the top
+toolbar and use `Language` to switch between English, Simplified Chinese, Japanese, Korean,
 Spanish, and Russian. Optional actions can be hidden in portable builds; source
 runs enable all features. See [Compatibility and limitations](#compatibility-and-limitations).
 
@@ -80,8 +80,8 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
    Drag the light marker in the viewport to move it across the view; hold Shift
    when starting the drag to move it toward or away from the camera.
 7. Use the top-bar environment menu to choose `Default`, `Studio`, `Indoor`,
-   `Outdoor`, or `Sunset`, and the panel-opacity control to adjust panel
-   transparency. Language, environment, panel opacity, and viewport tool
+   `Outdoor`, or `Sunset`. Open `Settings` to adjust `Panel opacity` for panels,
+   dialogs, menus, and button backgrounds. Language, environment, panel opacity, and viewport tool
    preferences persist between launches; camera and model orientation do not.
 
 #### Inspect UVs and texture tiling
