@@ -15,14 +15,9 @@ from . import paths as asset_paths
 from . import textures as asset_textures
 from .package_format import FORMAT, is_viewer_metadata
 from .wuwa_texture_names import texture_component_ordinals
+from .metadata import entries as _entries, texture_role, authored_range, authored_role
 
 
-_ROLE_NAMES = {
-    "diffuse": "diffuse",
-    "normalmap": "normal_map",
-    "lightmap": "light_map",
-    "materialmap": "material_map",
-}
 _ROLE_SUFFIXES = {
     "diffuse": "Diffuse",
     "normal_map": "NormalMap",
@@ -46,21 +41,11 @@ class TextureSemanticEvidence:
     classification: str | None = None
     # None permits legacy naming; an empty reference is explicitly invalid.
     file_reference: str | None = None
+    authored: bool = False
 
 
 # Preserve the AssetTextureEvidence import name for existing callers.
 AssetTextureEvidence = TextureSemanticEvidence
-
-
-def _entries(value):
-    if isinstance(value, list):
-        return value
-    if isinstance(value, dict):
-        for key in ("objects", "components", "entries", "records"):
-            candidate = value.get(key)
-            if isinstance(candidate, list):
-                return candidate
-    return []
 
 
 def _values(entry, keys):
@@ -104,7 +89,9 @@ def _texture_records(binding, raw):
         return []
     records = []
     compact = is_viewer_metadata(raw)
-    native_wwmi = compact and binding.asset_type == "WWMI" and raw.get("vb0_hash")
+    native_wwmi = (isinstance(raw, dict) and binding.asset_type == "WWMI" and raw.get("vb0_hash")
+                   and (compact or any(authored_range(entry, 0) for entry in _entries(raw)
+                                       if isinstance(entry, dict))))
     for entry in _entries(raw):
         if not isinstance(entry, dict):
             continue
@@ -122,7 +109,7 @@ def _texture_records(binding, raw):
             "classifications"))
         if native_wwmi:
             first_values = [entry.get("index_offset", 0)]
-            classifications = [entry.get("component_name")]
+            classifications = [entry.get("component_name") or entry.get("componentName") or entry.get("name")]
         positions = [
             position for position, value in enumerate(first_values)
             if _integer(value) == binding.first_index
@@ -134,31 +121,40 @@ def _texture_records(binding, raw):
             continue
         position = positions[0]
         component_name = entry.get("component_name") or entry.get(
-            "componentName")
+            "componentName") or (entry.get("name") if native_wwmi else None)
         classification = (
             classifications[position]
             if position < len(classifications)
             and isinstance(classifications[position], str) else None)
-        textures = entry.get("texture_hashes")
+        textures = entry.get("texture_hashes", entry.get("textureHashes"))
         if not isinstance(textures, list) or position >= len(textures):
             continue
         for item in textures[position] or []:
             if not isinstance(item, list) or len(item) < 3:
                 continue
-            role = _ROLE_NAMES.get(str(item[0]).replace("_", "").lower())
+            native_role = texture_role(item[0])
+            authored = authored_role(entry, position, native_role)
+            if native_wwmi and not compact and not authored:
+                continue
+            role = "normal_map" if native_role == "normal_data" else native_role
             texture_hash = normalize_geometry_hash(item[2])
             extension = item[1] if isinstance(item[1], str) else None
             file_reference = None
-            if compact and len(item) > 3:
+            if (compact or authored) and len(item) > 3:
                 relative = item[3]
                 file_reference = (asset_paths.safe_asset_path(
                     binding.root, os.path.join(os.path.dirname(binding.metadata), relative))
                     if isinstance(relative, str) else None) or ""
-            if texture_hash:
+                if authored and file_reference:
+                    directory = asset_paths.safe_asset_dir(binding.root, binding.asset)
+                    if (not directory or asset_paths.relative_asset_path(directory, file_reference) is None
+                            or not file_reference.lower().endswith((".dds", ".png", ".jpg", ".jpeg"))):
+                        file_reference = ""
+            if texture_hash or (authored and role and file_reference):
                 records.append(AssetTextureEvidence(
-                    role, texture_hash, extension,
+                    role, texture_hash or "", extension,
                     component_name=component_name,
-                    classification=classification, file_reference=file_reference))
+                    classification=classification, file_reference=file_reference, authored=authored))
         if records:
             return records
     return records
@@ -199,7 +195,7 @@ def _locate_texture(binding, evidence, candidates):
         path = candidate["path"]
         if asset_paths.relative_asset_path(asset_dir, path) is None:
             continue
-        if wwmi and (not asset_textures.component_texture_matches(
+        if wwmi and not evidence.authored and (not asset_textures.component_texture_matches(
                 path, {0: binding.component_ordinal}, wwmi=True)
                 or not any(os.path.normcase(os.path.dirname(path)) == os.path.normcase(directory)
                            for directory in directories)):
@@ -217,7 +213,9 @@ def _hash_evidence(binding, cache):
     filename = _safe_asset_path(binding.root, binding.metadata)
     raw = _json(cache, filename) if filename else None
     if binding.asset_type == "WWMI" and (
-            not isinstance(raw, dict) or raw.get("format") != FORMAT or not raw.get("vb0_hash")):
+            not isinstance(raw, dict) or not raw.get("vb0_hash") or (
+                raw.get("format") != FORMAT and not any(
+                    authored_range(entry, 0) for entry in _entries(raw) if isinstance(entry, dict)))):
         return []
     return _texture_records(binding, raw)
 
@@ -274,7 +272,7 @@ def _mod_texture_conditions(draw, role):
 
 def _clear_null_texture_assignments(draw):
     """Leave null states unassigned so labelled Asset defaults can apply."""
-    for role in ("diffuse", "normal_map", "light_map", "material_map"):
+    for role in draw._TEXTURE_PREFIX:
         rules = draw.texture_rules(role)
         if not any(rule.get("file") is None for rule in rules):
             continue
@@ -298,15 +296,6 @@ def _clear_null_texture_assignments(draw):
         if role == "diffuse":
             draw.texture_assignments = []
         draw.set_texture_variants(role, remaining)
-
-
-def _texture_variant_list(draw, role):
-    return getattr(draw, {
-        "diffuse": "texture_variants",
-        "normal_map": "normal_map_variants",
-        "light_map": "light_map_variants",
-        "material_map": "material_map_variants",
-    }[role])
 
 
 def _apply_hash_replacements(draw, evidence, texture_index):
@@ -360,13 +349,7 @@ def _apply_hash_replacements(draw, evidence, texture_index):
             additions.append(addition)
         if not additions:
             continue
-        if item.role == "diffuse":
-            if draw.texture_assignments:
-                draw.texture_assignments.extend(additions)
-            else:
-                _texture_variant_list(draw, item.role).extend(additions)
-        else:
-            _texture_variant_list(draw, item.role).extend(additions)
+        draw.texture_rules(item.role).extend(additions)
         if not draw.texture_default(item.role):
             unconditional = next(
                 (rule for rule in additions if not rule["conditions"]), None)
@@ -484,7 +467,7 @@ def _texture_declarations(resources, inventory):
         identity = _texture_file_identity(filename)
         if inventory.get(identity, {}).get("source") == "mod":
             result.append((match[1].casefold(), match[2].casefold(),
-                           _ROLE_NAMES[match[3].casefold()], identity))
+                           texture_role(match[3]), identity))
     return result
 
 
@@ -521,6 +504,15 @@ def _associate_textures(group, records, inventory, filename_matches,
             hashes.update(slot.texture_hashes)
     exact_records = [record for record in records
                      if asset_textures.exact_texture_binding(record[1])]
+    for _draw, binding, evidence, _slots in exact_records:
+        for item in evidence:
+            if not item.authored or not item.role or not item.file_reference:
+                continue
+            path = item.file_reference
+            identity = asset_textures.asset_logical_key(binding.root, path)
+            candidates.setdefault(os.path.normcase(identity), dict(
+                source="asset", file=identity, path=path, identity=identity,
+                label=os.path.splitext(os.path.basename(path))[0] + " (Asset)"))
     for _draw, _binding, evidence, slots in exact_records:
         hashes.update(item.texture_hash for item in evidence)
         hashes.update(usage["texture_hash"]

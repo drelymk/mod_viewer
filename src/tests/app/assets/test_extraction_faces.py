@@ -72,7 +72,7 @@ def _family():
     return {m.component.id: m for m in (eyes, anchor, lower, brow, duplicate)}
 
 
-def _open_face_mesh(*, openings=2):
+def _open_face_mesh(*, openings=2, extra_opening=0):
     mesh = _mesh(2, ((0, 0, -0.75), (0, 0, 0.75)), annular=True)
     mesh.vertices = [[(0, -1.2 + row * 0.1, -1.5 + column * 0.125), (1, 0, 0),
                       (column / 24, row / 24)] for row in range(25) for column in range(25)]
@@ -80,7 +80,8 @@ def _open_face_mesh(*, openings=2):
     for row in range(24):
         for column in range(24):
             hole = 10 <= row < 14 and (4 <= column < 8 or (openings == 2 and 16 <= column < 20))
-            if openings and hole:
+            extra = 17 <= row < 17 + extra_opening and 11 <= column < 11 + extra_opening
+            if (openings and hole) or extra:
                 continue
             a = row * 25 + column
             indices.extend((a, a + 25, a + 1, a + 1, a + 25, a + 26))
@@ -269,12 +270,13 @@ def test_baked_face_directions_preserve_handedness_packed_data_and_source_bytes(
         assert new[4] == old[4]
 
 
-@pytest.mark.parametrize("case", ["open", "transformed", "closed", "one_eye", "closed_slits", "unequal_eyes", "split_rings",
+@pytest.mark.parametrize("case", ["open", "transformed", "small_opening", "third_eye", "closed", "one_eye", "closed_slits", "unequal_eyes", "split_rings",
                                  "different_material", "ambiguous_face", "different_uv", "multiple_faces"])
 def test_open_face_proves_family_without_native_eyes(case):
     meshes = _family()
     del meshes["surface-1"]
-    mesh = _open_face_mesh(openings=0 if case == "closed" else 1 if case == "one_eye" else 2)
+    mesh = _open_face_mesh(openings=0 if case == "closed" else 1 if case == "one_eye" else 2,
+                           extra_opening=2 if case == "small_opening" else 4 if case == "third_eye" else 0)
     if case == "split_rings":
         mesh = meshes["surface-2"]
     elif case == "closed_slits":
@@ -315,16 +317,96 @@ def test_open_face_proves_family_without_native_eyes(case):
     before = copy.deepcopy([(m.vertices, m.indices) for m in meshes.values()])
     classify_faces(meshes, Context())
     assert [(m.vertices, m.indices) for m in meshes.values()] == before
-    if case not in ("open", "transformed"):
+    if case in ("ambiguous_face", "different_uv"):
+        selected = [m.component for m in meshes.values() if m.component.default_included]
+        assert len(selected) == 1
+        assert selected[0].provenance["suggested_name"] == "FaceEye"
+        assert selected[0].provenance["gimi_face_selection"] == dict(status="best_effort", candidates=2)
+        assert "Ambiguous facial candidates" in selected[0].diagnostics[-1]
+        assert not any(m.component.provenance.get("duplicate_capture_pass") for m in meshes.values())
+        return
+    if case not in ("open", "transformed", "small_opening"):
         assert all(m.component.requires_review for m in meshes.values())
         return
     assert mesh.component.provenance["suggested_name"] == "FaceEye"
     assert mesh.component.provenance["face_anchor_proof"]["eye_separation"] > 0
+    assert mesh.component.provenance["face_anchor_proof"]["extra_boundary_count"] == (case == "small_opening")
     assert meshes["surface-3"].component.provenance["suggested_name"] == "Face"
     assert meshes["surface-4"].component.provenance["suggested_name"] == "FaceEyebrow"
     assert all(meshes[key].component.default_included for key in ("surface-2", "surface-3", "surface-4"))
     assert duplicate.component.provenance["duplicate_capture_pass"] == mesh.component.id
     assert not duplicate.component.default_included
+
+
+def test_ambiguous_face_fallback_survives_analysis_export_and_reload(tmp_path, monkeypatch):
+    meshes = list(_family().values())[:-1]
+    meshes[1] = _open_face_mesh()
+    competitor = _open_face_mesh(extra_opening=2)
+    competitor.component = meshes[2].component
+    competitor.component.parts[0].count = len(competitor.indices[0])
+    meshes[2] = competitor
+    dump, material = make_face_capture(tmp_path, meshes)
+    monkeypatch.setattr(discovery, "collect", lambda *_: copy.deepcopy(material))
+    analysis = discovery.analyze(dump)
+    selected = [c for c in analysis.components if c.provenance.get("gimi_face_selection")]
+    assert len(selected) == 1 and selected[0].ib == meshes[1].component.ib
+    assert selected[0].provenance["gimi_face_placement"]["status"] == "proven"
+    assert all(not c.default_included for c in analysis.components
+               if c.provenance.get("geometry_kind") == "direct" and c is not selected[0])
+    analysis.save(tmp_path / "analysis.json")
+    restored = Analysis.read(tmp_path / "analysis.json")
+    package = extract(restored, Selection("FallbackAsset"))
+    assert package.partial and package.skipped == 0 and package.unproven_candidates == 2
+    assert len(package.meshes) == 2
+    report, loaded = _export_and_load(package, tmp_path / "exports")
+    assert report.partial and not loaded.warnings
+    face = next(p for p in loaded.parts if p.component_name == "FaceEye")
+    expected = _points((-meshes[1].vertices[i][0][2], 2 - meshes[1].vertices[i][0][0],
+                        3 + meshes[1].vertices[i][0][1]) for i in meshes[1].indices[0])
+    assert _points(struct.iter_unpack("<3f", face.positions)) == expected
+    assert any("best-effort face" in note for note in report.diagnostics)
+
+
+@pytest.mark.parametrize("difference", ["uv", "material", "resource", "coverage", "unique_family"])
+def test_face_choice_is_stable_across_order_and_labels(difference):
+    original = _open_face_mesh()
+    competitor = copy.deepcopy(original)
+    competitor.component.id = "competing-surface"
+    if difference in ("uv", "unique_family"):
+        competitor.vertices[0][2] = (0.25, 0.75)
+    elif difference == "material":
+        competitor.component.parts[0].textures[0]["sha256"] = "a" * 64
+    elif difference == "resource":
+        competitor.component.streams["position"]["resource"]["version"] += 1
+    else:
+        first = len(competitor.vertices)
+        positions, indices = _discs(((0, -0.7, 0),), radius=0.1)
+        competitor.vertices.extend([[p, (1, 0, 0), (0, 0)] for p in positions])
+        competitor.indices[0].extend(i + first for i in indices)
+        competitor.component.parts[0].count = len(competitor.indices[0])
+    order = (original, competitor)
+    if difference == "unique_family":
+        unique = copy.deepcopy(original)
+        unique.component.id = "unique-family"
+        unique.component.parts[0].textures[0]["sha256"] = "a" * 64
+        order += (unique,)
+    choices = []
+    for ordered in (order, tuple(reversed(order))):
+        candidates = copy.deepcopy(ordered)
+        for ordinal, mesh in enumerate(candidates):
+            mesh.component.name = f"Generated{ordinal}"
+        classify_faces({m.component.id: m for m in candidates}, Context())
+        selected, = [m for m in candidates if m.component.default_included]
+        choices.append(selected.component.id)
+        if difference == "unique_family":
+            assert selected.component.id == unique.component.id
+            assert "gimi_face_selection" not in selected.component.provenance
+        else:
+            assert selected.component.provenance["gimi_face_selection"]["candidates"] == 2
+        assert not any(m.component.provenance.get("duplicate_capture_pass") for m in candidates)
+    assert choices[0] == choices[1]
+    if difference == "coverage":
+        assert choices[0] == original.component.id
 
 
 @pytest.mark.parametrize("case", ["family", "normal_map", "unknown_map", "conflicting_normal", "missing_anchor", "ambiguous_eyes", "missing_material", "ambiguous_material", "different_uv", "unrelated_material", "unrelated_geometry"])
@@ -358,6 +440,14 @@ def test_face_family_requires_unique_reference_loops_and_matching_materials(case
         for vertex in meshes["surface-3"].vertices:
             vertex[0] = tuple(v + 99 for v in vertex[0])
     classify_faces(meshes, Context())
+    if case in ("conflicting_normal", "different_uv"):
+        selected = [m.component for m in meshes.values()
+                    if m.component.provenance.get("geometry_kind") == "direct" and m.component.default_included]
+        assert len(selected) == 1 and selected[0].provenance["suggested_name"] == "FaceEye"
+        assert selected[0].provenance["gimi_face_selection"]["candidates"] == 2
+        assert not meshes["surface-3"].component.default_included
+        assert not meshes["surface-4"].component.default_included
+        return
     if case not in ("family", "normal_map", "unknown_map", "unrelated_material", "unrelated_geometry"):
         assert not any(m.component.provenance.get("gimi_face_family") for m in meshes.values())
         assert all(m.component.requires_review for m in meshes.values()

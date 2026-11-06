@@ -12,17 +12,12 @@ from core.geometry.migoto_dump import (MigotoDumpError, pack_indices,
 from core.textures import normalize_texture_role
 
 from app.assets import paths as asset_paths
+from app.assets.metadata import entries as _entries, texture_role
 from . import gimi_face_alignment
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      make_texture, part_filter_matches)
 
 
-_ROLE_NAMES = {
-    "diffuse": "diffuse", "normalmap": "normal_map",
-    "normal_map": "normal_map", "lightmap": "light_map",
-    "light_map": "light_map", "materialmap": "material_map",
-    "material_map": "material_map",
-}
 _DUMP_RE = re.compile(
     r"(?:^|[-_])(?P<kind>vb\d*|ib)=(?P<hash>[0-9a-f]+)", re.I)
 _TEXTURE_SUFFIXES = (
@@ -36,6 +31,7 @@ _TEXTURE_SUFFIXES = (
 @dataclass(frozen=True, slots=True)
 class _HashAssetRecord:
     metadata_path: str
+    entry_index: int
     entry: dict
     component_name: str | None
     geometry_hash: str
@@ -43,17 +39,6 @@ class _HashAssetRecord:
     ranges: tuple
     vb_file: str | None
     ib_files: tuple[str | None, ...]
-
-
-def _entries(value):
-    if isinstance(value, list):
-        return value
-    if isinstance(value, dict):
-        for key in ("objects", "components", "entries", "records"):
-            candidate = value.get(key)
-            if isinstance(candidate, list):
-                return candidate
-    return []
 
 
 def _values(entry, keys):
@@ -159,11 +144,16 @@ def _find_dump(files, kind, hash_value=None, label=None, directory=None):
     return matches[0] if matches and len(identities) == 1 else None
 
 
-def _metadata_file(root, metadata_path, relative, files):
+def _metadata_file(root, metadata_path, relative, files, *, texture=False, texture_root=None):
     if not isinstance(relative, str):
         return None
     path = asset_paths.safe_asset_path(
         root, os.path.join(os.path.dirname(metadata_path), relative))
+    if texture:
+        if not path or not path.lower().endswith((".dds", ".png", ".jpg", ".jpeg")):
+            return None
+        if texture_root and asset_paths.relative_asset_path(texture_root, path) is not None:
+            return path
     return path if path and any(os.path.normcase(path) == os.path.normcase(candidate)
                                 for candidate in files) else None
 
@@ -277,7 +267,7 @@ def _range_texture_records(files, ib_candidates, first, count, vertex_count,
 
 def _texture_records(entry, position, files, root, component, classification,
                      texture_source, *, ib_candidates=(), first=0, count=None,
-                     vertex_count=0, ib_cache=None, metadata_path=""):
+                     vertex_count=0, ib_cache=None, metadata_path="", asset_dir=None):
     textures = entry.get("texture_hashes")
     if not isinstance(textures, list) or position >= len(textures):
         textures = entry.get("textureHashes")
@@ -288,8 +278,8 @@ def _texture_records(entry, position, files, root, component, classification,
     for item in items:
         if not isinstance(item, (list, tuple)) or len(item) < 3:
             continue
-        role = _ROLE_NAMES.get(str(item[0]).replace(" ", "").casefold())
-        filename = (_metadata_file(root, metadata_path, item[3], files)
+        role = texture_role(item[0])
+        filename = (_metadata_file(root, metadata_path, item[3], files, texture=True, texture_root=asset_dir)
                     if len(item) > 3 else _texture_file(
                         files, item[2], item[1], component, classification, role))
         if not filename:
@@ -627,7 +617,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 None, None, "metadata_empty",
                 "Nested hash.json contains no renderable component records."))
             continue
-        for entry in entries:
+        for entry_index, entry in enumerate(entries):
             if not isinstance(entry, dict):
                 continue
             geometry_hash = _entry_hash(
@@ -645,7 +635,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
             vb_candidates = _find_dumps(files, "vb", vb_hash)
             ib_candidates = _find_dumps(files, "ib", geometry_hash)
             records.append(_HashAssetRecord(
-                metadata_path=metadata_path, entry=entry,
+                metadata_path=metadata_path, entry_index=entry_index, entry=entry,
                 component_name=component, geometry_hash=geometry_hash,
                 vb_hash=vb_hash, ranges=tuple(ranges),
                 vb_file=(_metadata_file(root, metadata_path, entry["vb_file"], vb_candidates)
@@ -774,7 +764,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 texture_source, ib_candidates=range_ib_files, first=first,
                 count=effective_count,
                 vertex_count=vertex_dump.layout.vertex_count,
-                ib_cache=ib_cache, metadata_path=item.metadata_path)
+                ib_cache=ib_cache, metadata_path=item.metadata_path, asset_dir=asset_dir)
             label = component or os.path.basename(asset_path)
             if classification:
                 label = f"{label} {classification}"
@@ -790,7 +780,8 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 index_count=effective_count, positions=positions,
                 indices=indices,
                 uvs=uvs, normals=normals, textures=textures,
-                texture_candidates=texture_candidates))
+                texture_candidates=texture_candidates, metadata_path=item.metadata_path,
+                metadata_entry=item.entry_index, texture_range=ordinal))
     if not parts:
         raise AssetLoadError("Asset contains no complete renderable parts.")
     return AssetAdapterResult(tuple(parts), tuple(warnings))

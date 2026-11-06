@@ -2,6 +2,7 @@
 
 import { viewerState, samePath } from './state.js';
 import { syncModelExportAvailability } from './model-export.js';
+import { assetTextureExportState, exportAssetTextures, initializeAssetTextureExport } from './asset-texture-export.js';
 import { loadMissingAssetParts, resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
 import { shouldAutoRestoreMissingAssetParts } from '../ui/settings.js';
 import { fitTo, isRendererAvailable, setBloomSuppressedByDebug } from '../scene/scene.js';
@@ -74,6 +75,10 @@ function hasUnwiredToggle() {
 // the toolbar: Export only enables once there's something to export, and the
 // indicator is the persistent signal that something is unsaved.
 export async function refreshPendingState(path = viewerState.currentModPath, guard = null) {
+  if (viewerState.currentSource?.kind === 'asset') {
+    syncModelExportAvailability();
+    return;
+  }
   const pending = path ? await window.pywebview.api.has_pending_changes(path) : false;
   if ((guard && !guard()) || (path && !samePath(viewerState.currentModPath, path))) {
     return false;
@@ -317,6 +322,8 @@ export async function displayMeshPayload(
   );
 
   updateAssetFillButton();
+  initializeAssetTextureExport(payload.metadata?.asset?.texture_session);
+  syncModelExportAvailability();
   showLoading(false);
 }
 
@@ -436,6 +443,7 @@ async function loadAssetAt(path, entry = {}, handlers = {}) {
 }
 
 async function performModSwitch(path, handlers = {}) {
+  if (assetTextureExportState().pending && !(await confirmDialog(t('confirm.unsavedAssetTextures')))) return false;
   // Switching to a different folder while the current one has staged,
   // not-yet-exported edits would silently strand them in memory, so ask first.
   if (
@@ -454,6 +462,9 @@ async function performModSwitch(path, handlers = {}) {
 }
 
 async function confirmLeaveCurrentModIfDirty() {
+  if (viewerState.currentSource?.kind === 'asset') {
+    return !assetTextureExportState().pending || (await confirmDialog(t('confirm.unsavedAssetTextures')));
+  }
   if (viewerState.currentSource?.kind !== 'mod' || !viewerState.currentModPath) return true;
   if (!hasUnappliedMeshChanges() && !(await window.pywebview.api.has_pending_changes(viewerState.currentModPath))) {
     return true;
@@ -548,6 +559,7 @@ export async function reloadCurrentMod(handlers = {}) {
 }
 
 export async function exportChanges() {
+  if (viewerState.currentSource?.kind === 'asset') return exportAssetTextures();
   if (!viewerState.currentModPath) return;
   const button = $('export-btn');
   button.disabled = true;

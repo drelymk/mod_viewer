@@ -5,21 +5,11 @@ import hashlib
 import os
 
 from .models import AssetRecord, DrawRange, GeometryRecord
+from ..metadata import entries as _entries
 
 
 class MetadataError(ValueError):
     """A recognized metadata file that cannot produce a usable record."""
-
-
-def _entries(value):
-    if isinstance(value, list):
-        return value
-    if isinstance(value, dict):
-        for key in ("objects", "components", "entries", "records"):
-            candidate = value.get(key)
-            if isinstance(candidate, list):
-                return candidate
-    return []
 
 
 def _integer(value, *, minimum=0):

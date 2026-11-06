@@ -168,6 +168,9 @@ class ModViewerAPI:
         return self._asset_preview.pick_asset_texture_file(
             self._window, folder_path, texture_role)
 
+    def export_asset_textures(self, folder_path, token, textures):
+        return self._asset_preview.export_asset_textures(folder_path, token, textures)
+
     def load_missing_asset_parts(self, folder_path):
         """Append original Asset parts not covered by the current mod INIs."""
         try:
@@ -191,6 +194,7 @@ class ModViewerAPI:
     # -- Mod preview --------------------------------------------------------
 
     def load_mod(self, folder_path, disabled_ini=False):
+        self._asset_preview.clear_preview()
         self._asset_preview.clear_fill()
         return self._mod_preview.load_mod(folder_path, disabled_ini)
 

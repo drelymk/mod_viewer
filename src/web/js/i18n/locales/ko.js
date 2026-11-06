@@ -1,4 +1,6 @@
 export default {
+  'toolbar.exportAssetTextures': '에셋 텍스처 저장',
+  'confirm.unsavedAssetTextures': '이 에셋에 저장하지 않은 텍스처 할당이 있습니다. 변경 사항을 버리고 계속할까요?',
   'settings.title': '설정',
   'settings.autoRestore': '에셋에서 누락된 모드 파츠 자동 복원',
   'settings.autoRestoreDescription':

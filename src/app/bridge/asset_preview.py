@@ -3,6 +3,7 @@
 import os
 import traceback
 import uuid
+from threading import RLock
 
 import webview
 
@@ -12,10 +13,13 @@ from app.assets import folders as asset_folders
 from app.assets import index as asset_index
 from app.assets import loader as asset_loader
 from app.assets import paths as asset_paths
+from app.assets import texture_assignments
 from app.assets.composition import plan_missing_asset_parts
 from app.assets.loader.models import build_asset_fill_payload
 from app.runtime import server
 from app.session import edit as edit_session
+from app.settings import config
+from core.textures import split_texture_key
 
 
 class AssetPreview:
@@ -23,6 +27,15 @@ class AssetPreview:
         self._access = access
         self._asset_fill_sessions = {}
         self._asset_fill_plan_cache = {}
+        self._preview_lock = RLock()
+        self._preview_generation = 0
+        self._texture_session = None
+
+    def clear_preview(self):
+        with self._preview_lock:
+            self._preview_generation += 1
+            self._texture_session = None
+            return self._preview_generation
 
     def clear_fill(self, folder_path=None):
         """Release session-only Asset-fill resources before a model change."""
@@ -92,18 +105,35 @@ class AssetPreview:
 
     def load_asset(self, folder_path):
         """Load one exact indexed Asset without creating or editing an INI."""
+        generation = self.clear_preview()
         self.clear_fill()
         try:
             selected, entry, _index, record = self._asset_selection(folder_path)
             geometry = GeometryBlob()
             publication = server.begin_texture_publication(selected)
             try:
+                try:
+                    revision = texture_assignments.capture(entry["path"], record)
+                except (ValueError, UnicodeError, OSError):
+                    revision = None
                 loaded = asset_loader.load_asset(
                     entry["type"], entry["path"], record, geometry=geometry,
                     texture_source=publication.register)
                 payload = loaded.payload
-                server.publish_payload_geometry(payload, geometry)
-                publication.commit()
+                with self._preview_lock:
+                    if generation != self._preview_generation:
+                        raise asset_loader.AssetLoadError("The Asset preview is no longer active.")
+                    server.publish_payload_geometry(payload, geometry)
+                    publication.commit()
+                    parts = getattr(loaded, "parts", ())
+                    if parts and revision is not None:
+                        token = uuid.uuid4().hex
+                        self._texture_session = dict(
+                            folder=selected, token=token, revision=revision,
+                            parts={p.key: p for p in parts},
+                            textures={t.key: t.path for p in parts for t in (
+                                *p.texture_candidates, *p.textures.values())})
+                        payload["metadata"]["asset"]["texture_session"] = token
                 return payload
             except Exception:
                 publication.discard()
@@ -122,30 +152,75 @@ class AssetPreview:
             if texture_role not in (
                     None, "normal_map", "light_map", "material_map", "emission_map"):
                 return {"error": "Unknown texture role."}
+            with self._preview_lock:
+                session = self._texture_session
+                if not session or session["folder"] != selected:
+                    return {"error": "The Asset preview is no longer active."}
             result = window.create_file_dialog(
                 webview.FileDialog.OPEN, directory=selected,
                 file_types=("Textures (*.dds;*.png;*.jpg;*.jpeg)",))
             if not result:
                 return None
             chosen = asset_folders.normalize_path(result[0])
-            relative = asset_paths.relative_asset_path(entry["path"], chosen)
-            safe = asset_paths.safe_asset_path(entry["path"], relative)
+            relative = asset_paths.relative_asset_path(selected, chosen)
+            safe = asset_paths.safe_asset_path(selected, relative)
             if not safe:
-                return {"error": "Choose a texture inside the registered Asset root."}
+                return {"error": "Choose a texture inside the open Asset folder."}
             publication = server.active_texture_publication(selected)
             if publication is None:
                 return {"error": "The Asset preview is no longer active."}
             role = texture_role or "diffuse"
+            if role == "normal_map" and entry["type"] == "WWMI":
+                role = "normal_data"
             from app.assets.loader.models import make_texture
             texture = make_texture(
                 entry["path"], safe, role,
-                texture_source=publication.register, source="session")
+                texture_source=lambda path, role: publication.register(path, role, validate=True), source="session")
             if not texture:
                 return {"error": "The selected texture could not be published."}
+            with self._preview_lock:
+                if self._texture_session is not session:
+                    return {"error": "The Asset preview is no longer active."}
+                session["textures"][texture.key] = safe
             return {"tex_key": texture.key, "uri": texture.uri,
                     "file": relative, "role": role}
         except (PermissionError, asset_folders.AssetFolderError,
                 asset_index.AssetIndexError, asset_loader.AssetLoadError) as error:
+            return {"error": str(error)}
+
+    @config.transaction()
+    def export_asset_textures(self, folder_path, token, textures):
+        """Save only role keys authorized by the currently open Asset preview."""
+        try:
+            selected, entry, _index, record = self._asset_selection(folder_path)
+            with self._preview_lock:
+                session = self._texture_session
+                if not session or session["folder"] != selected or session["token"] != token:
+                    raise ValueError("The Asset preview is no longer active. Reopen the Asset before exporting.")
+                if not isinstance(textures, dict) or not textures or not set(textures) <= set(session["parts"]):
+                    raise ValueError("Asset parts changed. Reopen the Asset before exporting.")
+                assignments = {}
+                for part, roles in textures.items():
+                    if not isinstance(roles, dict) or not roles or not set(roles) <= set(texture_assignments.ROLES):
+                        raise ValueError("Invalid Asset texture roles.")
+                    resolved = {}
+                    for role, key in roles.items():
+                        if key is None:
+                            resolved[role] = None
+                            continue
+                        if not isinstance(key, str) or split_texture_key(key)[0] != role:
+                            raise ValueError("Invalid Asset texture identity.")
+                        path = session["textures"].get(key)
+                        relative = asset_paths.relative_asset_path(selected, path)
+                        if not relative or not asset_paths.safe_asset_path(selected, relative):
+                            raise ValueError("Choose an available texture inside the open Asset folder.")
+                        resolved[role] = relative
+                    assignments[part] = resolved
+                session["revision"] = texture_assignments.save(
+                    entry["path"], record, session["parts"], assignments, session["revision"])
+                self.invalidate_plan_cache()
+                return {"saved": len(assignments)}
+        except (PermissionError, ValueError, OSError) as error:
             return {"error": str(error)}
 
     def load_missing_asset_parts(self, folder_path, context):

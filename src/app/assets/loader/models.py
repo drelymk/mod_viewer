@@ -42,6 +42,9 @@ class AssetMeshPart:
     normals: bytes | None = None
     textures: dict[str, AssetTexture] = field(default_factory=dict)
     texture_candidates: tuple[AssetTexture, ...] = ()
+    metadata_path: str | None = None
+    metadata_entry: int | None = None
+    texture_range: int = 0
 
     @property
     def asset_source(self):
@@ -144,11 +147,13 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
             "normal_data_key": None,
             "light_map_key": None,
             "material_map_key": None,
+            "emission_map_key": None,
             "texture_variants": [],
             "normal_map_variants": [],
             "normal_data_variants": [],
             "light_map_variants": [],
             "material_map_variants": [],
+            "emission_map_variants": [],
             "material_kind": "unknown",
             "material_kind_reliable": False,
             "material_kind_reason": "Asset preview has no mod material override.",
@@ -164,6 +169,7 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
                 "diffuse": "tex_key", "normal_map": "normal_map_key",
                 "normal_data": "normal_data_key", "light_map": "light_map_key",
                 "material_map": "material_map_key",
+                "emission_map": "emission_map_key",
             }.get(role)
             if field:
                 entry[field] = texture.key

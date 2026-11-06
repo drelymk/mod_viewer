@@ -5,6 +5,29 @@ import { usesPackedNormal } from './material-profile.js';
 
 const textureRunGroups = new Set();
 
+function automaticBoundaryIdentity(mesh) {
+  const data = mesh.userData;
+  const variants = data.textureVariants || [];
+  if (!data.defaultTexKey && !variants.length && !data.assetTextureDefaultExplicit) return null;
+  return JSON.stringify({
+    defaultKey: data.defaultTexKey || null,
+    variants: variants.map((variant) => ({ conditions: variant?.conditions || [], tex_key: variant?.tex_key || null })),
+  });
+}
+
+export function recomputeAutomaticTextureBoundaries(groupMeshes) {
+  let previous = null;
+  for (const mesh of groupMeshes) {
+    const identity = automaticBoundaryIdentity(mesh);
+    mesh.userData.automaticTextureBoundary = identity !== null && identity !== previous;
+    if (identity !== null) previous = identity;
+  }
+}
+
+export function refreshAutomaticTextureBoundaries() {
+  textureRunGroups.forEach(recomputeAutomaticTextureBoundaries);
+}
+
 function normalMapsFor(mesh, option) {
   if (usesPackedNormal(mesh.material)) {
     return {
