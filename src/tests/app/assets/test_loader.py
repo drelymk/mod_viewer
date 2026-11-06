@@ -16,7 +16,7 @@ from app.runtime import server as server
 from app.assets.index import build_index
 from app.assets.loader import (AssetLoadResult, AssetMeshPart, hash_asset,
                                load_asset)
-from app.assets.loader.models import AssetTexture, build_asset_fill_payload
+from app.assets.loader.models import build_asset_fill_payload
 from app.bridge.api import ModViewerAPI
 from core.geometry.component_coverage import ComponentCoverageKey
 from core.geometry.transport import GeometryBlob
@@ -193,9 +193,8 @@ def _wwmi_triangle(folder, *, component_name="Body", vb_hash="11111111",
     ("GIMI", "genshin", "genshin:gimi", "normal_map"),
     ("WWMI", "wuwa", "wuwa:wwmi", "normal_data"),
 ])
-@pytest.mark.parametrize("with_normal", [False, True])
 def test_asset_preview_and_fill_use_authoritative_material_profile(
-        tmp_path, asset_type, game, profile_id, normal_source, with_normal):
+        tmp_path, asset_type, game, profile_id, normal_source):
     part = AssetMeshPart(
         key="part-01", label="Component01", asset_type=asset_type,
         asset_path="Asset01", geometry_hash="12345678",
@@ -203,18 +202,12 @@ def test_asset_preview_and_fill_use_authoritative_material_profile(
         component_ordinal=0, first_index=0, index_count=3,
         positions=struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0),
         indices=struct.pack("<3I", 0, 1, 2))
-    if with_normal:
-        part.textures[normal_source] = AssetTexture(normal_source, str(tmp_path / "normal.png"),
-                                                   normal_source + "::normal.png", "normal")
     record = {"path": "Asset01"}
     preview = AssetLoadResult.from_parts(
         asset_type, str(tmp_path), record, [part],
         geometry=GeometryBlob()).payload
     fill = build_asset_fill_payload(
         asset_type, str(tmp_path), record, [part], geometry=GeometryBlob())
-    entry = next(iter(preview["meshes"].values()))
-    assert preview["texture_pools"][entry["texture_pool_id"]] == []
-    assert not fill["texture_pools"]
     for payload in (preview, fill):
         metadata = payload["metadata"]
         assert metadata["game"]["id"] == game
@@ -559,13 +552,12 @@ def test_hash_asset_prefers_generic_texture_over_more_specific_suffix_match(
     assert entry["tex_key"].endswith("/Asset07/Asset07HeadDiffuse.dds")
 
 
-@pytest.mark.parametrize("component_name", ["Component01", ""])
-def test_hash_asset_recovers_unique_range_texture_families(tmp_path, component_name):
+def test_hash_asset_recovers_unique_range_texture_families(tmp_path):
     root = tmp_path / "assets"
     asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
-        "ib": "87654321", "vb0": "12345678", "component_name": component_name,
+        "ib": "87654321", "vb0": "12345678", "component_name": "Component01",
         "object_indexes": [0, 3], "object_index_counts": [3, 3],
         "object_classifications": ["Head", "Body"],
         "texture_hashes": [[], []],
@@ -592,16 +584,8 @@ def test_hash_asset_recovers_unique_range_texture_families(tmp_path, component_n
                         geometry=GeometryBlob())
 
     entries = list(result.payload["meshes"].values())
-    assert entries[0]["asset_component_key"] == entries[1]["asset_component_key"]
-    assert entries[0]["texture_pool_id"] == entries[1]["texture_pool_id"]
-    assert result.parts[0].textures["diffuse"].key.endswith("/Component02ADiffuse.dds")
-    assert entries[0]["tex_key"] == entries[1]["tex_key"]
+    assert entries[0]["tex_key"].endswith("/Component02ADiffuse.dds")
     assert entries[1]["tex_key"].endswith("/Component02BDiffuse.dds")
-    fill = build_asset_fill_payload("GIMI", str(root), index["assets"][0], result.parts, geometry=GeometryBlob())
-    filled = list(fill["meshes"].values())
-    assert filled[0]["tex_key"].endswith("/Component02ADiffuse.dds")
-    assert filled[1]["tex_key"].endswith("/Component02BDiffuse.dds")
-    assert all("asset_component_key" not in entry for entry in filled)
 
 
 def test_hash_asset_loads_both_metadata_sources_for_shared_geometry_hash(tmp_path):

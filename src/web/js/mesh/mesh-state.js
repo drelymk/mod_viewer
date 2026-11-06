@@ -12,7 +12,11 @@ import { dnfSatisfied, getControlValue } from '../editing/control-state.js';
 import { disposeGameMaterial } from './material-profile.js';
 import { refreshMeshTexture, setMeshTextureState, updateGeometryNormals } from './mesh-factory.js';
 import { replaceMeshMaterial, updateMeshMaterialMetadata } from './mesh-material-state.js';
-import { clearTextureRunGroups, recomputeAllTextureRuns } from './mesh-texture-runs.js';
+import {
+  clearTextureRunGroups,
+  recomputeAllTextureRuns,
+  refreshAutomaticTextureBoundaries,
+} from './mesh-texture-runs.js';
 import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
@@ -398,6 +402,22 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
     oldMaterial.dispose();
   });
   return { success: true, materialChangedMeshes };
+}
+
+/** Refresh committed Asset defaults without replacing newer live choices. */
+export function updateAssetTextureDefaults(assignments) {
+  for (const mesh of activeMeshes) {
+    const roles = assignments[mesh.userData.semanticKey];
+    if (!roles || mesh.userData.assetFill) continue;
+    for (const { role, default: defaultField, resolved, payloadDefault } of TEXTURE_ROLE_FIELDS) {
+      if (!Object.hasOwn(roles, role)) continue;
+      mesh.userData[defaultField] = roles[role];
+      mesh.userData[resolved] = roles[role];
+      mesh.userData.assetEntry = { ...mesh.userData.assetEntry, [payloadDefault]: roles[role] };
+      if (role === 'diffuse') mesh.userData.assetTextureDefaultExplicit = true;
+    }
+  }
+  refreshAutomaticTextureBoundaries();
 }
 
 /** Pin or clear one mesh's highlighted diffuse. */

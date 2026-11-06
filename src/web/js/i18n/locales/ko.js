@@ -521,7 +521,6 @@ export default {
   'texture.lightMap': 'LightMap',
   'texture.normalMap': 'NormalMap',
   'texture.materialMap': 'MaterialMap',
-  'texture.emissionMap': 'EmissionMap',
   'texture.noTextures': '텍스처가 아직 없음.',
   'texture.loadFailed':
     '텍스처 "{file}"을(를) 불러올 수 없습니다. 지원되지 않는 형식이거나 유효하지 않은 파일일 수 있습니다.',

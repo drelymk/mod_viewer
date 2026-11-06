@@ -320,7 +320,6 @@ def test_native_json_entry_and_range_provenance_is_preserved(asset_case, contain
     first = components[0]
     first.update(object_indexes=[0, 3], object_index_counts=[3, 3], object_classifications=["A", "B"])
     first["texture_hashes"].append(copy.deepcopy(first["texture_hashes"][0]))
-    first["texture_hashes"][1] = [item for item in first["texture_hashes"][1] if item[0] != "LightMap"]
     first["textureHashes"] = first.pop("texture_hashes")
     (case.asset / "00000001/Surface01B-ib=0000000a.txt").write_text(
         _index_text([0, 1, 2]).replace("first index: 0", "first index: 3"))
@@ -329,43 +328,21 @@ def test_native_json_entry_and_range_provenance_is_preserved(asset_case, contain
     filename.write_text(json.dumps(document))
     index.save_index(index.build_index(case.kind, str(case.root)))
     payload = case.api.load_asset(str(case.asset))
-    entries = list(payload["meshes"].values())
-    assert entries[0]["light_map_key"] and entries[0]["light_map_key"] == entries[1]["light_map_key"]
-    # A missing role retains the earlier assignment; an authored null clears it.
-    first["textureHashes"][1].append(["LightMap", "", "", None])
-    first["texture_assignment_roles"] = {"1": ["light_map"]}
-    filename.write_text(json.dumps(document))
-    index.save_index(index.build_index(case.kind, str(case.root)))
-    payload = case.api.load_asset(str(case.asset))
-    assert all(mesh["light_map_key"] is None for mesh in list(payload["meshes"].values())[:2])
     roles = _snapshot(payload)
     assert len(roles) == 3
     first_key, second_key, third_key = roles
-    component = payload["meshes"][first_key]["asset_component_key"]
-    assert payload["meshes"][second_key]["asset_component_key"] == component
-    chosen = _pick(case)["tex_key"]
-    roles[first_key]["diffuse"] = roles[second_key]["diffuse"] = chosen
-    assert case.api.export_asset_textures(str(case.asset), payload["metadata"]["asset"]["texture_session"],
-                                          {component: {"diffuse": chosen}}) == {"saved": 1}
+    roles[first_key]["diffuse"] = None
+    roles[second_key]["diffuse"] = _pick(case)["tex_key"]
+    assert case.api.export_asset_textures(str(case.asset), payload["metadata"]["asset"]["texture_session"], _changes(payload, roles)) == {"saved": 2}
     actual = json.loads(filename.read_bytes())
     entries = actual if container == "list" else actual[container]
     assert "texture_hashes" not in entries[0]
-    assert all([item for item in row if item[0] == "Diffuse"] == [["Diffuse", ".png", "", "00000001/chosen.png"]]
-               for row in entries[0]["textureHashes"])
-    assert entries[1] == components[1]
+    assert ["Diffuse", "", "", None] in entries[0]["textureHashes"][0]
+    assert ["Diffuse", ".png", "", "00000001/chosen.png"] in entries[0]["textureHashes"][1]
     if container != "list":
         assert actual["custom"] == "retained"
-    reopened = case.api.load_asset(str(case.asset))
-    assert _snapshot(reopened) == roles
-    assert roles[third_key]["diffuse"] is not None
-    assert case.api.export_asset_textures(str(case.asset), reopened["metadata"]["asset"]["texture_session"],
-                                          {component: {"diffuse": None}}) == {"saved": 1}
-    roles[first_key]["diffuse"] = roles[second_key]["diffuse"] = None
     assert _snapshot(case.api.load_asset(str(case.asset))) == roles
-    actual = json.loads(filename.read_bytes())
-    entries = actual if container == "list" else actual[container]
-    assert all([item for item in row if item[0] == "Diffuse"] == [["Diffuse", "", "", None]]
-               for row in entries[0]["textureHashes"])
+    assert roles[third_key]["diffuse"] is not None
 
 
 def test_asset_metadata_and_texture_symlinks_cannot_escape(asset_case, tmp_path):

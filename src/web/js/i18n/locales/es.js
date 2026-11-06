@@ -527,7 +527,6 @@ export default {
   'texture.lightMap': 'LightMap',
   'texture.normalMap': 'NormalMap',
   'texture.materialMap': 'MaterialMap',
-  'texture.emissionMap': 'EmissionMap',
   'texture.noTextures': 'Aún no hay texturas.',
   'texture.loadFailed':
     'No se puede cargar la textura "{file}". Puede que su formato no sea compatible o que el archivo no sea válido.',

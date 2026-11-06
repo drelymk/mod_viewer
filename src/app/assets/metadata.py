@@ -34,12 +34,3 @@ def authored_range(entry, position):
 
 def authored_role(entry, position, role):
     return role in authored_roles(entry, position)
-
-
-def cleared_roles(entry, position):
-    rows = entry.get("texture_hashes", entry.get("textureHashes", []))
-    row = rows[position] if isinstance(rows, list) and position < len(rows) else []
-    if not isinstance(row, list):
-        return ()
-    return tuple(texture_role(item[0]) for item in row if isinstance(item, list) and len(item) > 3
-                 and item[3] is None and authored_role(entry, position, texture_role(item[0])))

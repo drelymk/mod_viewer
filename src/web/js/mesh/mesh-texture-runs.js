@@ -8,7 +8,7 @@ const textureRunGroups = new Set();
 function automaticBoundaryIdentity(mesh) {
   const data = mesh.userData;
   const variants = data.textureVariants || [];
-  if (!data.defaultTexKey && !variants.length) return null;
+  if (!data.defaultTexKey && !variants.length && !data.assetTextureDefaultExplicit) return null;
   return JSON.stringify({
     defaultKey: data.defaultTexKey || null,
     variants: variants.map((variant) => ({ conditions: variant?.conditions || [], tex_key: variant?.tex_key || null })),

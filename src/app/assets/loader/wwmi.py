@@ -14,7 +14,7 @@ from core.textures.profiles import texture_profile_for
 from app.assets import paths as asset_paths
 from app.assets import textures as asset_textures
 from ..package_format import FORMAT
-from ..metadata import texture_role, authored_range, authored_role, cleared_roles
+from ..metadata import texture_role, authored_range, authored_role
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      AssetTexture, make_texture, part_filter_matches)
 
@@ -384,8 +384,6 @@ def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
                 component_ordinal=ordinal, first_index=first_index,
                 index_count=index_count, positions=pos, indices=packed_indices,
                 uvs=uv, normals=normal, textures=textures, texture_candidates=candidates,
-                texture_clears=tuple(texture_profile_for("wuwa").normal_transport_role if role == "normal_map" else role
-                                     for role in cleared_roles(component, 0)),
                 metadata_path=metadata_relative, metadata_entry=ordinal))
     if not parts:
         raise AssetLoadError("WWMI Asset contains no renderable components.")

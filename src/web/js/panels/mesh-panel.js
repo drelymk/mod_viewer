@@ -1,12 +1,7 @@
 // MESHES component registration, appearance callbacks and panel lifecycle.
 import { bridgeReady } from '../app/bridge.js';
-import { hasTexture, setMeshTextureState } from '../mesh/mesh-factory.js';
-import {
-  clearMeshIsolation,
-  isMeshIsolationActive,
-  setManualTexOverride,
-  TEXTURE_ROLE_FIELDS,
-} from '../mesh/mesh-state.js';
+import { hasTexture } from '../mesh/mesh-factory.js';
+import { clearMeshIsolation, isMeshIsolationActive, setManualTexOverride } from '../mesh/mesh-state.js';
 import {
   clearTextureRunGroups,
   recomputeTextureRuns,
@@ -56,7 +51,7 @@ function saveComponentMaterialKind(modPath, source, component, kind) {
 function groupByComponent(names, meshes) {
   const grouped = {};
   for (const name of names) {
-    const explicit = meshes[name]?.asset_component_key || meshes[name]?.identity?.component || meshes[name]?.component;
+    const explicit = meshes[name]?.identity?.component || meshes[name]?.component;
     let key = explicit;
     if (!key) {
       const m = name.match(/^(.+)-\d+$/);
@@ -80,12 +75,6 @@ function createComponentDescriptor(groupName, names, meshes, src, modPath, optio
     names.map((n) => meshes[n].identity?.component || meshes[n].component).find(Boolean) || null;
 
   const itemObjs = [];
-  const assetComponent = options.onAssetTextureAssignment ? meshes[names[0]].asset_component_key || names[0] : null;
-  const assetTextures = options.onAssetTextureAssignment
-    ? Object.fromEntries(
-        TEXTURE_ROLE_FIELDS.map(({ role, payloadDefault }) => [role, meshes[names.at(-1)][payloadDefault] || null]),
-      )
-    : null;
   const componentDescriptor = {
     type: 'component',
     component: groupName,
@@ -93,8 +82,6 @@ function createComponentDescriptor(groupName, names, meshes, src, modPath, optio
     meshes: itemObjs,
     texturePool,
     modPath,
-    assetComponent,
-    textureAssignments: assetTextures,
   };
   const assetSummary = summarizeAssetBindings(
     names.map((name) => meshes[name]),
@@ -155,14 +142,6 @@ function createComponentDescriptor(groupName, names, meshes, src, modPath, optio
       showTextureLoadError(value);
       return false;
     }
-    if (assetTextures) {
-      if (value !== undefined) return setTextureAssignment('diffuse', value);
-      itemObjs.forEach((item) => {
-        item.userData.manualTexOverride = undefined;
-      });
-      updateTextures();
-      return true;
-    }
     mesh.userData.textureHighlightDisabled = false;
     setManualTexOverride(mesh, value, { notify: false });
     updateTextures();
@@ -174,18 +153,7 @@ function createComponentDescriptor(groupName, names, meshes, src, modPath, optio
     resolved: mesh.userData.resolvedTexKey || null,
   });
   const updateTextures = (reason = null) => {
-    if (assetTextures) {
-      for (const mesh of itemObjs) {
-        for (const { role, default: defaultField, resolved, payloadDefault } of TEXTURE_ROLE_FIELDS) {
-          mesh.userData[defaultField] = assetTextures[role];
-          mesh.userData[resolved] = assetTextures[role];
-          mesh.userData.assetEntry[payloadDefault] = assetTextures[role];
-        }
-        setMeshTextureState(mesh, assetTextures);
-      }
-    } else {
-      recomputeTextureRuns(itemObjs);
-    }
+    recomputeTextureRuns(itemObjs);
     notifyMeshStateChanged(itemObjs);
     if (reason)
       window.dispatchEvent(
@@ -195,37 +163,13 @@ function createComponentDescriptor(groupName, names, meshes, src, modPath, optio
       );
     saveTextureState(modPath);
   };
-  const setTextureAssignment = (role, value) => {
-    const previousValue = assetTextures[role];
-    assetTextures[role] = value;
-    if (role === 'diffuse')
-      itemObjs.forEach((mesh) => {
-        mesh.userData.manualTexOverride = value;
-      });
-    options.onAssetTextureAssignment(assetComponent, role, value, previousValue);
-    updateTextures('assignment');
-    return true;
-  };
   Object.assign(componentDescriptor, {
     getMaterialKind: () => itemObjs[0]?.userData.materialKindOverride || materialKind,
     setMaterialKind: canEdit ? setMaterialKind : undefined,
     openTextureManager: () =>
-      openTextureModal(
-        groupName,
-        texturePool,
-        modPath,
-        (changes) => {
-          if (assetTextures && changes) {
-            for (const [role, value] of Object.entries(changes)) setTextureAssignment(role, value);
-          } else updateTextures('pool');
-        },
-        texturePicker,
-        assetTextures,
-      ),
+      openTextureModal(groupName, texturePool, modPath, () => updateTextures('pool'), texturePicker),
     getTextureOverride,
     setTextureOverride,
-    setTextureAssignment: assetTextures ? setTextureAssignment : undefined,
-    refreshTextures: updateTextures,
   });
 
   return componentDescriptor;
@@ -270,8 +214,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
       sourceHeader.insertBefore(button, sourceHeader.querySelector('.group-name'));
     }
 
-    for (const [groupKey, names] of Object.entries(groupByComponent(bySource[src], meshes))) {
-      const groupName = options.onAssetTextureAssignment ? meshes[names[0]].component || groupKey : groupKey;
+    for (const [groupName, names] of Object.entries(groupByComponent(bySource[src], meshes))) {
       const itemsWrap = document.createElement('div');
       itemsWrap.className = 'group-items';
       itemsWrap.id = `mesh-group-${++meshSectionId}`;
@@ -310,13 +253,9 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
           onToggleChange: options.onToggleChange,
         });
       }
-      if (componentDescriptor.textureAssignments) {
-        componentDescriptor.refreshTextures();
-      } else {
-        recomputeAutomaticTextureBoundaries(itemObjs);
-        recomputeTextureRuns(itemObjs);
-        registerTextureRunGroup(itemObjs);
-      }
+      recomputeAutomaticTextureBoundaries(itemObjs);
+      recomputeTextureRuns(itemObjs);
+      registerTextureRunGroup(itemObjs);
 
       groupsUI.push({
         visibilityButton,

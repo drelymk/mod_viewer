@@ -12,7 +12,7 @@ from core.geometry.migoto_dump import (MigotoDumpError, pack_indices,
 from core.textures import normalize_texture_role
 
 from app.assets import paths as asset_paths
-from app.assets.metadata import entries as _entries, texture_role, cleared_roles
+from app.assets.metadata import entries as _entries, texture_role
 from . import gimi_face_alignment
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      make_texture, part_filter_matches)
@@ -780,7 +780,6 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 index_count=effective_count, positions=positions,
                 indices=indices,
                 uvs=uvs, normals=normals, textures=textures,
-                texture_clears=cleared_roles(item.entry, ordinal),
                 texture_candidates=texture_candidates, metadata_path=item.metadata_path,
                 metadata_entry=item.entry_index, texture_range=ordinal))
     if not parts:

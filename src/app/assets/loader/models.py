@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 import os
 
 from core.materials.profiles import material_profile_for
-from core.textures import TEXTURE_ROLES
 from core.geometry.identity import (
     DrawOccurrence, MeshIdentity, make_geometry_match, normalize_identity_source,
 )
@@ -42,7 +41,6 @@ class AssetMeshPart:
     uvs: bytes | None = None
     normals: bytes | None = None
     textures: dict[str, AssetTexture] = field(default_factory=dict)
-    texture_clears: tuple[str, ...] = ()
     texture_candidates: tuple[AssetTexture, ...] = ()
     metadata_path: str | None = None
     metadata_entry: int | None = None
@@ -108,8 +106,6 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
         base = part.component_name or part.label
         component_hashes.setdefault(base, set()).add(part.geometry_hash)
     component_labels = {}
-    component_keys = {}
-    component_defaults = {}
     for base, hashes in component_hashes.items():
         if len(hashes) <= 1:
             continue
@@ -167,9 +163,6 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
             "fill_reason": ("missing_mod_coverage" if asset_fill
                             else None),
         }
-        if not asset_fill:
-            native_component = (part.metadata_path, part.metadata_entry) if part.metadata_path else part.key
-            entry["asset_component_key"] = component_keys.setdefault(native_component, part.key)
         for role, texture in part.textures.items():
             textures[texture.key] = texture.uri or texture.key
             field = {
@@ -180,20 +173,14 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
             }.get(role)
             if field:
                 entry[field] = texture.key
-        if not asset_fill:
-            defaults = component_defaults.setdefault(entry["asset_component_key"], {})
-            for role in TEXTURE_ROLES:
-                if role in part.textures or role in part.texture_clears:
-                    field = "tex_key" if role == "diffuse" else role + "_key"
-                    defaults[field] = None if role in part.texture_clears else entry[field]
         pool = []
         if part.texture_candidates:
             pool = [candidate.as_candidate()
                     for candidate in part.texture_candidates]
         pool.extend(texture.as_candidate() for texture in part.textures.values()
                     if texture.role == "diffuse")
-        if pool or not asset_fill:
-            component = entry.get("asset_component_key", entry["component"])
+        if pool:
+            component = entry["component"]
             pool_id = pool_ids.get(component)
             if pool_id is None:
                 pool_id = f"asset-pool-{len(pool_ids)}"
@@ -208,12 +195,6 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
                 seen.add(key)
             entry["texture_pool_id"] = pool_id
         meshes[mesh_key] = entry
-
-    if not asset_fill:
-        # Merge ordered, defined roles independently; only authored clears erase
-        # an earlier value. Missing or unavailable maps supply no replacement.
-        for entry in meshes.values():
-            entry.update(component_defaults[entry["asset_component_key"]])
 
     asset_metadata = {
         "source_kind": "asset-fill" if asset_fill else "asset",

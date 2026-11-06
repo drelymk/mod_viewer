@@ -518,7 +518,6 @@ export default {
   'texture.lightMap': 'LightMap',
   'texture.normalMap': 'NormalMap',
   'texture.materialMap': 'MaterialMap',
-  'texture.emissionMap': 'EmissionMap',
   'texture.noTextures': 'No textures yet.',
   'texture.loadFailed': 'Cannot load texture "{file}". Its format may be unsupported or the file may be invalid.',
   'texture.replace': 'Replace {title}: {file}',

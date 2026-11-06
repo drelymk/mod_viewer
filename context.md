@@ -541,41 +541,28 @@ of documentation, comments and tests; use portable fixtures instead.
   Direct Assets never synthesize INIs/mods or write `.mod_viewer.json`.
   Texture choices stay pending until Asset-only Export updates `texture_hashes`
   in the existing `hash.json` or `Metadata.json` at the loader-proven component
-  across all of its loaded native ranges. Direct Asset editing has one active
-  assignment per component and role; the latest explicit assignment replaces
-  the previous value, and null clears only that role. Identify components by
-  loader-proven metadata document/entry, never by a display name. Every mesh in
-  the component uses those same assignments, including Automatic mode.
-  Merge initial range defaults separately per role: later missing roles retain
-  the earlier defined value, while authored null records explicitly clear it.
-  Every direct component owns a shared candidate pool, even when empty; its
-  role controls remain available independently of candidate rows.
-  Store metadata-relative image references and explicit role clears;
+  and range. Store metadata-relative image references and explicit role clears;
   retain captured native hashes for the same source file and never copy a role's
   previous hash to a newly selected file. Preserve unedited parts and roles,
   including unavailable textures, rather than saving a rendered null as a clear.
-  Record pending roles at the user action, overwriting earlier pending values;
-  never infer edits from rendered mesh state or texture-run propagation. Export
-  submits only changed component roles. Mod bindings, conditional variants and
-  normal texture-run behavior retain their separate existing semantics.
-  Reselecting or returning to a known saved texture leaves no pending write;
-  a save already in flight must still preserve a newer return to that value.
+  Only manual diffuse overrides and manually edited map roles on independent
+  texture-run owners are edits; inherited rendered changes never author metadata.
   Never fabricate hashes for new files. Preserve unassigned images as unclassified
   candidates, geometry, image bytes and unrelated metadata. There is no separate
   assignment JSON.
   Commit all participating metadata and the rebuilt Asset index under one shared
   config transaction; restore their exact previous bytes if any step fails.
   Only the current backend-issued preview session
-  may save changed components/roles and published/native-picked texture keys.
+  may save changed parts/roles and published/native-picked texture keys.
   Reject stale metadata revisions, role mismatches and images outside that Asset.
   Reopen, Asset Fill and automatic mod texture defaults consume those same native
   records lazily, including explicit paths without a native texture hash. A
   per-role range marker identifies these deliberate selections without weakening
   ordinary WWMI filename-membership rules. Mods and archives
   cannot invoke this save path. Exact owned image references may be deeper than
-  the bounded discovery inventory. Assignment changes update live Automatic
-  defaults immediately; a successful save preserves newer pending choices.
-  Ambiguity may yield candidates, never bindings. Block model transitions while an Asset save runs,
+  the bounded discovery inventory. A successful save updates live Automatic
+  defaults while preserving newer pending choices. Ambiguity may yield
+  candidates, never bindings. Block model transitions while an Asset save runs,
   so a switch cannot offer to discard a write already in progress.
 - Asset Fill treats an authored component/range as handled when its component
   identity is present in the mod, including staged documents. Geometry overrides

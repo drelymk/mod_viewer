@@ -3,16 +3,13 @@
 While an Asset is open, assign textures in the mesh panel, then click **Export**
 or **Export → Save Asset Textures** to save the current assignments. Export
 enables when an assignment changes; the Edited indicator clears after a successful
-save. Each Asset component has one active texture per role. Assigning another
-texture replaces that role for every mesh in the component; clearing it sets
-only that role to None. Automatic uses the latest assignment too.
-Map controls are available even before any diffuse candidates are added.
-Export saves only changed component roles, preserving unrelated roles and
-components, including unavailable textures. Model switching waits until saving
+save. Export saves edited parts and roles, preserving untouched assignments even
+when their images are unavailable. Changes inherited from another mesh stay
+inherited. Deliberate clears are saved too. Model switching waits until saving
 finishes. Export permanently updates the texture records
 in the Asset's existing `hash.json` or `Metadata.json` and refreshes its index.
 Those records are used when the Asset is reopened and when textures are assigned
-automatically to matching mods.
+automatically to matching mods. Automatic uses the newly saved defaults immediately.
 No separate assignment JSON is created. Choose images from
 inside the open Asset folder. This action is available only for an open Asset;
 mod Export keeps its existing behavior.

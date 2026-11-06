@@ -2,12 +2,7 @@
 
 import { viewerState, samePath } from './state.js';
 import { syncModelExportAvailability } from './model-export.js';
-import {
-  assetTextureExportState,
-  exportAssetTextures,
-  initializeAssetTextureExport,
-  recordAssetTextureAssignment,
-} from './asset-texture-export.js';
+import { assetTextureExportState, exportAssetTextures, initializeAssetTextureExport } from './asset-texture-export.js';
 import { loadMissingAssetParts, resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
 import { shouldAutoRestoreMissingAssetParts } from '../ui/settings.js';
 import { fitTo, isRendererAvailable, setBloomSuppressedByDebug } from '../scene/scene.js';
@@ -289,7 +284,6 @@ export async function displayMeshPayload(
       texturePicker: assetMode
         ? (role) => window.pywebview.api.pick_asset_texture_file(viewerState.currentSource.path, role)
         : null,
-      onAssetTextureAssignment: assetMode ? recordAssetTextureAssignment : null,
       onAllMeshChangesApplied: assetMode ? null : onReload,
     });
   });
