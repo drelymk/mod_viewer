@@ -156,8 +156,8 @@ class ModViewerAPI:
         return self._asset_preview.pick_asset_texture_file(
             self._window, folder_path, texture_role)
 
-    def export_asset_textures(self, folder_path, token, textures):
-        return self._asset_preview.export_asset_textures(folder_path, token, textures)
+    def export_asset_textures(self, folder_path, token, textures, removed_sections=None):
+        return self._asset_preview.export_asset_textures(folder_path, token, textures, removed_sections)
 
     def load_missing_asset_parts(self, folder_path):
         """Append original Asset parts not covered by the current mod INIs."""

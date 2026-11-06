@@ -14,7 +14,7 @@ from app.assets import textures as asset_textures
 from app.settings import paths as paths
 from app.runtime import server as server
 from app.assets.index import build_index
-from app.assets.loader import (AssetLoadResult, AssetMeshPart, hash_asset,
+from app.assets.loader import (AssetLoadResult, AssetMeshPart, AssetTexture, hash_asset,
                                load_asset)
 from app.assets.loader.models import build_asset_fill_payload
 from app.bridge.api import ModViewerAPI
@@ -260,6 +260,21 @@ def test_asset_identity_keeps_root_and_part_provenance_across_selective_fill(
     assert identities(tmp_path, [part]) == [all_identities[0]]
     assert identities(tmp_path, [part], fill=True) == [all_identities[0]]
     assert identities(tmp_path / "other-root", [part])[0]["key"] != all_identities[0]["key"]
+    shared = [replace(
+        part, key=f"Asset01/Object{ordinal}/part-01",
+        metadata_path=f"Asset01/Object{ordinal}/hash.json",
+        texture_candidates=(AssetTexture(
+            None, f"texture-{ordinal}.png", f"diffuse::texture-{ordinal}.png", f"Texture{ordinal}"),))
+        for ordinal in (1, 2)]
+    for fill in (False, True):
+        payload = (build_asset_fill_payload(
+            asset_type, str(tmp_path), record, shared, geometry=GeometryBlob())
+            if fill else AssetLoadResult.from_parts(
+                asset_type, str(tmp_path), record, shared, geometry=GeometryBlob()).payload)
+        entries = list(payload["meshes"].values())
+        expected_groups = 1 if fill else 2
+        assert len({entry["source"] for entry in entries}) == expected_groups
+        assert len({entry["texture_pool_id"] for entry in entries}) == expected_groups
 
 
 def test_migoto_dump_uses_declared_semantics_and_streams_layouts(tmp_path):

@@ -348,6 +348,13 @@ of documentation, comments and tests; use portable fixtures instead.
 
 ## Asset loading and composition
 
+- Direct Asset previews group meshes by their exact hash.json/Metadata.json source.
+  Source-header Remove stages the whole owning folder until Export, including
+  descendant sections for legacy root manifests. Export renames only active
+  preview-authorized folders with a DISABLED_ prefix and updates the Asset index
+  atomically. Asset discovery and loading skip folders with a case-insensitive
+  DISABLED prefix. Failed removals stay pending;
+  switching sources discards them. Asset fill in mods remains preview-only.
 - Add/Update Asset extracts only native-picker-authorized frame dumps into
   registered Asset Folders. Extraction has no game-marker/type gate; unfamiliar
   layouts fail explicitly. Stage compact output, swap whole directories and

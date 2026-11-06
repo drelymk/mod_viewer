@@ -48,7 +48,7 @@ def _metadata_paths(record):
         if not isinstance(candidates, list):
             candidates = []
         for path in [*candidates, geometry.get("metadata")]:
-            if path and path not in paths:
+            if path and not asset_paths.is_disabled_path(path, file=True) and path not in paths:
                 paths.append(path)
     return paths
 

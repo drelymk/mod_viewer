@@ -1,7 +1,7 @@
 export default {
-  'toolbar.exportAssetTextures': 'Guardar texturas del recurso',
-  'confirm.unsavedAssetTextures':
-    'Este recurso tiene asignaciones de texturas sin guardar. ¿Descartar los cambios y continuar?',
+  'asset.removeSection': 'Quitar',
+  'toolbar.exportAssetTextures': 'Guardar cambios del recurso',
+  'confirm.unsavedAssetTextures': 'Este recurso tiene cambios sin guardar. ¿Descartarlos y continuar?',
   'settings.title': 'Ajustes',
   'settings.autoRestore': 'Restaurar automáticamente las partes del mod que faltan desde los recursos',
   'settings.autoRestoreDescription':

@@ -14,7 +14,7 @@ import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui
 import { clearSelection } from '../scene/selection.js';
 import { openTextureModal } from '../ui/texture-modal.js';
 import { registerInspectorMesh } from './inspector-panel.js';
-import { closeMeshContextMenu } from './mesh-panel-context-menu.js';
+import { closeMeshContextMenu, showMeshContextMenu } from './mesh-panel-context-menu.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import { summarizeAssetBindings } from './asset-diagnostics.js';
 import { isRecording } from '../editing/record-session.js';
@@ -212,6 +212,13 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
     if (sourceHeader) {
       const button = buildGroupVisibilityButton(src, () => sourceMeshes(sourceHeader), 'source-visibility-btn');
       sourceHeader.insertBefore(button, sourceHeader.querySelector('.group-name'));
+      if (options.assetSections?.[src] && options.onRemoveAssetSection) {
+        sourceHeader.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          showMeshContextMenu(event, [{ key: 'asset.removeSection', run: () => options.onRemoveAssetSection(src) }]);
+        });
+      }
     }
 
     for (const [groupName, names] of Object.entries(groupByComponent(bySource[src], meshes))) {
@@ -279,10 +286,14 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
 }
 
 export function removeAssetFillMeshPanel(targetMeshes = null) {
+  return removeMeshPanelMeshes(targetMeshes, true);
+}
+
+export function removeMeshPanelMeshes(targetMeshes, assetFillOnly = false) {
   closeMeshContextMenu();
   const target = targetMeshes === null ? null : new Set(targetMeshes);
   const groups = groupsUI.filter(
-    (group) => group.assetFill && (!target || group.itemObjs.some((mesh) => target.has(mesh))),
+    (group) => (!assetFillOnly || group.assetFill) && (!target || group.itemObjs.some((mesh) => target.has(mesh))),
   );
   if (!groups.length) return [];
   clearSelection();
@@ -313,7 +324,7 @@ export function removeAssetFillMeshPanel(targetMeshes = null) {
       recomputeTextureRuns(group.itemObjs);
     }
   }
-  groupsUI.splice(0, groupsUI.length, ...groupsUI.filter((group) => !group.assetFill || group.itemObjs.length));
+  groupsUI.splice(0, groupsUI.length, ...groupsUI.filter((group) => group.itemObjs.length));
   for (const source of new Set(groups.map((group) => group.sourceContainer).filter(Boolean))) {
     if (!source.children.length) {
       source.previousElementSibling?.remove();

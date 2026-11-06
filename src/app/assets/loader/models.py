@@ -128,7 +128,7 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
             "normal": geometry.add(part.normals) if part.normals else None,
             "component": component,
             "display_name": part.label,
-            "source": "ORIGINAL ASSET" if asset_fill else source,
+            "source": "ORIGINAL ASSET" if asset_fill else part.metadata_path or source,
             "conditions": [],
             "sources": [{"asset": part.asset_source}],
             "drawindexed": [part.index_count or 0, part.first_index or 0, 0],
@@ -181,10 +181,11 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
                     if texture.role == "diffuse")
         if pool:
             component = entry["component"]
-            pool_id = pool_ids.get(component)
+            pool_key = (None if asset_fill else part.metadata_path, component)
+            pool_id = pool_ids.get(pool_key)
             if pool_id is None:
                 pool_id = f"asset-pool-{len(pool_ids)}"
-                pool_ids[component] = pool_id
+                pool_ids[pool_key] = pool_id
                 pools[pool_id] = []
             seen = {item.get("tex_key") for item in pools[pool_id]}
             for item in pool:
