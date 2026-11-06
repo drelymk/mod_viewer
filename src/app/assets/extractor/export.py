@@ -123,7 +123,7 @@ def _texture_plan(meshes, name, options, *, wwmi=False, folders=None):
         c = mesh.component
         for i, part in enumerate(c.parts):
             for t in part.textures:
-                selected = not t.get("auxiliary")
+                selected = t.get("captured_pass", not t.get("auxiliary"))
                 if not selected and not options.debug_assets:
                     omitted.append(dict(component=c.id, part=i, file=t["file"], role=t["role"],
                                         hash=t["hash"], sha256=t["sha256"], reason=t.get("role_note", "Not a supported viewer material binding")))
@@ -398,7 +398,7 @@ def export(package, output, context=None, *, options=None):
                         raise Unsupported("Texture changed since analysis; analyze again")
                     texname = texture_plan[key]
                     payloads.texture(source, texname, identity)
-                    if not texture.get("auxiliary"):
+                    if texture.get("captured_pass", not texture.get("auxiliary")):
                         texmeta.append([texture["role"], source.suffix, texture["hash"],
                                         os.path.relpath(stage / texname, mesh_directory).replace(os.sep, "/")])
                     mappings.append(dict(output=texname, **texture))

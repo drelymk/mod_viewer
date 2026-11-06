@@ -465,6 +465,14 @@ of documentation, comments and tests; use portable fixtures instead.
   Facial and standalone all-face selections use the same hash folders and local
   texture ownership as other objects. Preserve geometry, bindings
   and source provenance; names, component ordinals and position are not evidence.
+  Geometry deduplication retains every captured pixel-texture binding per source
+  draw in the extraction report, including slot, shader, native hash, resource
+  version and payload identity. Export/picker membership retains the chosen
+  pass's captured images even when roles are unknown or auxiliary; automatic
+  role inference cannot discard them. Other passes remain separate in the report
+  (optional debug assets), never mixed into the chosen pass's choices.
+  Bound-resource count is not material-pass evidence; unresolved pass ties use
+  the first captured color pass rather than the largest inherited binding set.
   GIMI diffuse recognition requires capture evidence, a color pass, bound texture
   identities and a supported neighboring format/size signature. Prefer recognized
   material passes over effects with more resources.

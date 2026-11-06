@@ -239,6 +239,58 @@ def test_texture_lookup_retains_log_only_snapshots_and_dynamic_alternates(tmp_pa
         assert inv.find("000002", "ib", "44444444", ".txt") == next(dump.glob("000002-ib=*.txt")).name
 
 
+@pytest.mark.parametrize("asset_type", ["GIMI", "ZZMI", "WWMI"])
+def test_draw_texture_membership_survives_failed_inference_without_mixing_passes(tmp_path, monkeypatch, asset_type):
+    dump = make_capture(tmp_path)
+    log = dump / "log.txt"
+    text = log.read_text().replace("ZZMIv1", asset_type + "v1")
+    expected = set()
+    for call, count in (("000002", 9), ("000003", 20)):
+        bindings = []
+        for slot in range(count):
+            identity = f"{int(call) * 64 + slot:08x}"
+            name = f"{call}-ps-t{slot}={identity}.png"
+            Image.new("RGBA", (4 if slot == 3 else 16, 4 if slot == 3 else 16),
+                      (slot * 10, int(call) * 20, 100, 255)).save(dump / name)
+            bindings.append(f"       {slot}: resource=0x{int(call) * 64 + slot:x}0 hash={identity}\n")
+            expected.add((call, slot, identity))
+        shader = ("c" if call == "000002" else "d") * 16
+        setup = (f"{call} PSSetShader(pPixelShader:0x90) hash={shader}\n"
+                 f"{call} PSSetShaderResources(StartSlot:0, NumViews:20)\n" + "".join(bindings))
+        text = text.replace(call + " DrawIndexed", setup + call + " DrawIndexed")
+        Image.new("RGB", (16, 16)).save(dump / f"{call}-o0=aaaaaaaa.png")
+    Image.new("RGB", (16, 16)).save(dump / "000099-ps-t0=ffffffff.png")
+    log.write_text(text)
+    monkeypatch.setattr("app.assets.extractor.textures._captured_roles", lambda *_args: ({}, 0))
+    monkeypatch.setattr("app.assets.extractor.pixel_roles.apply_fallback", lambda *_args: None)
+    analysis = analyze(dump)
+    component, = analysis.components
+    part, = component.parts
+    assert part.draws == ["000002", "000003"]
+    assert {(t["draw"], t["slot"], t["hash"]) for t in part.textures} == expected
+    chosen = [t for t in part.textures if t["captured_pass"]]
+    assert len(chosen) == 9 and all(t["draw"] == "000002" for t in chosen)
+    assert all(t["role"].startswith("TextureSlot") for t in part.textures)
+    assert next(t for t in chosen if t["slot"] == 3)["auxiliary"]
+    report = export(extract(analysis, Selection("Sample")), tmp_path / "exports", options=ExportOptions(asset_type=asset_type))
+    asset = Path(report.output)
+    marker = "Metadata.json" if asset_type == "WWMI" else "hash.json"
+    document = json.loads((asset / "11111111" / marker).read_text())
+    rows = document["components"][0]["texture_hashes"][0]
+    assert len(rows) == report.texture_files == 9
+    assert {item[2] for item in rows} == {t["hash"] for t in chosen}
+    details = json.loads(Path(report.report_path).read_text())
+    recorded = details["analysis"]["components"][0]["parts"][0]["textures"]
+    assert {(t["draw"], t["slot"], t["hash"]) for t in recorded} == expected
+    assert all(t["resource"] and t["shader"] and t["vertex_shader"] for t in recorded)
+    record, = index.build_index(asset_type, str(asset.parent))["assets"]
+    loaded, = loader.load_asset_parts(asset_type, str(asset.parent), record).parts
+    assert not loaded.textures
+    assert len(loaded.texture_candidates) == 9
+    assert {digest(Path(t.path)) for t in loaded.texture_candidates} == {t["sha256"] for t in chosen}
+    assert {t["hash"] for t in details["outputs"][0]["textures"]} == {t["hash"] for t in chosen}
+
+
 @pytest.mark.parametrize("role,declared,first,trim,expected", [
     ("texcoord", 3, 0, 0, "included"),
     ("texcoord", 5, 0, 0, "Partial vertex snapshot"),
@@ -615,13 +667,13 @@ def test_gimi_material_pass_exports_named_diffuse_and_loads_automatically(tmp_pa
     assert digest(Path(part.textures["diffuse"].path)) == diffuse["sha256"]
     assert all(t["role"] in ("Diffuse",) or t["role"].startswith("TextureSlot")
                for t in component.parts[0].textures)
-    candidates = [t for t in component.parts[0].textures if not t.get("auxiliary")]
+    candidates = [t for t in component.parts[0].textures if t["captured_pass"]]
     assert report.texture_files == len(candidates)
-    unknown = [t for t in component.parts[0].textures if t["role"].startswith("TextureSlot") and not t.get("auxiliary")]
+    unknown = [t for t in component.parts[0].textures if t["role"].startswith("TextureSlot") and t["captured_pass"]]
     assert len(part.texture_candidates) == len(unknown)
     assert {digest(Path(t.path)) for t in part.texture_candidates} == {t["sha256"] for t in unknown}
     assert all(t.role is None for t in part.texture_candidates)
-    assert len(unknown) == sum(fmt == "BC7_UNORM" for fmt in formats)
+    assert len(unknown) == len(formats) - 1
     debug = export(extract(analysis, Selection("Asset_001")), tmp_path / "debug",
                    options=ExportOptions(debug_assets=True))
     if report.omitted_texture_associations:
@@ -679,7 +731,8 @@ def test_gimi_complete_material_pass_precedes_larger_inherited_bindings(tmp_path
     diffuse, = [t for t in component.parts[0].textures if t["role"] == "Diffuse"]
     assert diffuse["draw"] == "000003"
     assert diffuse["slot"] == 2
-    assert all(t["draw"] == "000003" for t in component.parts[0].textures)
+    assert all(t["draw"] == "000003" for t in component.parts[0].textures if t["captured_pass"])
+    assert {t["draw"] for t in component.parts[0].textures} == {"000002", "000003"}
 
 
 def _layered_eye_textures():
@@ -774,7 +827,8 @@ def test_gimi_layered_eye_diffuse_round_trip_precedes_inherited_primary_material
     part, = loaded.parts
     assert set(part.textures) == {"diffuse"}
     assert digest(Path(part.textures["diffuse"].path)) == diffuse["sha256"]
-    assert len(part.texture_candidates) == 7
+    # The repeated constant is captured in two slots but owns one image file.
+    assert len(part.texture_candidates) == 8
 
 
 @pytest.mark.parametrize("evidence", ["slot_only", "other_snapshot", "invalid_alias", "wrong_extension", "unlogged_file"])
