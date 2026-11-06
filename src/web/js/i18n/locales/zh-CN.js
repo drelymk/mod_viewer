@@ -510,6 +510,7 @@ export default {
   'texture.lightMap': 'LightMap',
   'texture.normalMap': 'NormalMap',
   'texture.materialMap': 'MaterialMap',
+  'texture.emissionMap': 'EmissionMap',
   'texture.noTextures': '暂无纹理。',
   'texture.loadFailed': '无法加载纹理“{file}”。其格式可能不受支持，或文件可能无效。',
   'texture.replace': '替换 {title}：{file}',

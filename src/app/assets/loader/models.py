@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import os
 
 from core.materials.profiles import material_profile_for
+from core.textures import TEXTURE_ROLES
 from core.geometry.identity import (
     DrawOccurrence, MeshIdentity, make_geometry_match, normalize_identity_source,
 )
@@ -106,6 +107,7 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
         base = part.component_name or part.label
         component_hashes.setdefault(base, set()).add(part.geometry_hash)
     component_labels = {}
+    component_keys = {}
     for base, hashes in component_hashes.items():
         if len(hashes) <= 1:
             continue
@@ -163,6 +165,9 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
             "fill_reason": ("missing_mod_coverage" if asset_fill
                             else None),
         }
+        if not asset_fill:
+            native_component = (part.metadata_path, part.metadata_entry) if part.metadata_path else part.key
+            entry["asset_component_key"] = component_keys.setdefault(native_component, part.key)
         for role, texture in part.textures.items():
             textures[texture.key] = texture.uri or texture.key
             field = {
@@ -180,7 +185,7 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
         pool.extend(texture.as_candidate() for texture in part.textures.values()
                     if texture.role == "diffuse")
         if pool:
-            component = entry["component"]
+            component = entry.get("asset_component_key", entry["component"])
             pool_id = pool_ids.get(component)
             if pool_id is None:
                 pool_id = f"asset-pool-{len(pool_ids)}"
@@ -195,6 +200,15 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
                 seen.add(key)
             entry["texture_pool_id"] = pool_id
         meshes[mesh_key] = entry
+
+    if not asset_fill:
+        # Metadata ranges are ordered; the last range supplies the component's
+        # initial roles. Export only writes roles explicitly changed by the user.
+        fields = ["tex_key" if role == "diffuse" else role + "_key" for role in TEXTURE_ROLES]
+        defaults = {entry["asset_component_key"]: {field: entry[field] for field in fields}
+                    for entry in meshes.values()}
+        for entry in meshes.values():
+            entry.update(defaults[entry["asset_component_key"]])
 
     asset_metadata = {
         "source_kind": "asset-fill" if asset_fill else "asset",

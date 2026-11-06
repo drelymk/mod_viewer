@@ -552,12 +552,13 @@ def test_hash_asset_prefers_generic_texture_over_more_specific_suffix_match(
     assert entry["tex_key"].endswith("/Asset07/Asset07HeadDiffuse.dds")
 
 
-def test_hash_asset_recovers_unique_range_texture_families(tmp_path):
+@pytest.mark.parametrize("component_name", ["Component01", ""])
+def test_hash_asset_recovers_unique_range_texture_families(tmp_path, component_name):
     root = tmp_path / "assets"
     asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
-        "ib": "87654321", "vb0": "12345678", "component_name": "Component01",
+        "ib": "87654321", "vb0": "12345678", "component_name": component_name,
         "object_indexes": [0, 3], "object_index_counts": [3, 3],
         "object_classifications": ["Head", "Body"],
         "texture_hashes": [[], []],
@@ -584,8 +585,16 @@ def test_hash_asset_recovers_unique_range_texture_families(tmp_path):
                         geometry=GeometryBlob())
 
     entries = list(result.payload["meshes"].values())
-    assert entries[0]["tex_key"].endswith("/Component02ADiffuse.dds")
+    assert entries[0]["asset_component_key"] == entries[1]["asset_component_key"]
+    assert entries[0]["texture_pool_id"] == entries[1]["texture_pool_id"]
+    assert result.parts[0].textures["diffuse"].key.endswith("/Component02ADiffuse.dds")
+    assert entries[0]["tex_key"] == entries[1]["tex_key"]
     assert entries[1]["tex_key"].endswith("/Component02BDiffuse.dds")
+    fill = build_asset_fill_payload("GIMI", str(root), index["assets"][0], result.parts, geometry=GeometryBlob())
+    filled = list(fill["meshes"].values())
+    assert filled[0]["tex_key"].endswith("/Component02ADiffuse.dds")
+    assert filled[1]["tex_key"].endswith("/Component02BDiffuse.dds")
+    assert all("asset_component_key" not in entry for entry in filled)
 
 
 def test_hash_asset_loads_both_metadata_sources_for_shared_geometry_hash(tmp_path):

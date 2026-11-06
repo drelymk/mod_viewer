@@ -128,9 +128,14 @@ class AssetPreview:
                     parts = getattr(loaded, "parts", ())
                     if parts and revision is not None:
                         token = uuid.uuid4().hex
+                        components = {}
+                        for part in parts:
+                            component = payload["meshes"][part.key]["asset_component_key"]
+                            components.setdefault(component, []).append(part.key)
                         self._texture_session = dict(
                             folder=selected, token=token, revision=revision,
                             parts={p.key: p for p in parts},
+                            components=components,
                             textures={t.key: t.path for p in parts for t in (
                                 *p.texture_candidates, *p.textures.values())})
                         payload["metadata"]["asset"]["texture_session"] = token
@@ -197,10 +202,10 @@ class AssetPreview:
                 session = self._texture_session
                 if not session or session["folder"] != selected or session["token"] != token:
                     raise ValueError("The Asset preview is no longer active. Reopen the Asset before exporting.")
-                if not isinstance(textures, dict) or not textures or not set(textures) <= set(session["parts"]):
-                    raise ValueError("Asset parts changed. Reopen the Asset before exporting.")
+                if not isinstance(textures, dict) or not textures or not set(textures) <= set(session["components"]):
+                    raise ValueError("Asset components changed. Reopen the Asset before exporting.")
                 assignments = {}
-                for part, roles in textures.items():
+                for component, roles in textures.items():
                     if not isinstance(roles, dict) or not roles or not set(roles) <= set(texture_assignments.ROLES):
                         raise ValueError("Invalid Asset texture roles.")
                     resolved = {}
@@ -215,11 +220,12 @@ class AssetPreview:
                         if not relative or not asset_paths.safe_asset_path(selected, relative):
                             raise ValueError("Choose an available texture inside the open Asset folder.")
                         resolved[role] = relative
-                    assignments[part] = resolved
+                    for part in session["components"][component]:
+                        assignments[part] = resolved
                 session["revision"] = texture_assignments.save(
                     entry["path"], record, session["parts"], assignments, session["revision"])
                 self.invalidate_plan_cache()
-                return {"saved": len(assignments)}
+                return {"saved": len(textures)}
         except (PermissionError, ValueError, OSError) as error:
             return {"error": str(error)}
 

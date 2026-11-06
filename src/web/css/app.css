@@ -563,6 +563,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .modal.texture-modal { width: min(960px, calc(100vw - 80px)); }
 .texm-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; max-height: 300px; overflow-y: auto; }
 .texm-grid { display: grid; grid-template-columns: minmax(120px, 1.2fr) repeat(3, minmax(120px, 1fr)) 30px; gap: 6px; align-items: center; }
+.texm-asset-grid { grid-template-columns: minmax(120px, 1.2fr) repeat(4, minmax(100px, 1fr)) 30px; }
 .texm-header { padding: 0 6px; color: #8b949e; font-size: 10px; font-weight: 600; }
 .texm-row {
   font-size: 12px; color: #cdd9e5; padding: 4px 6px; background: #0d1117;

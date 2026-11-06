@@ -523,6 +523,7 @@ export default {
   'texture.lightMap': 'LightMap',
   'texture.normalMap': 'NormalMap',
   'texture.materialMap': 'MaterialMap',
+  'texture.emissionMap': 'EmissionMap',
   'texture.noTextures': 'Текстур пока нет.',
   'texture.loadFailed':
     'Не удалось загрузить текстуру "{file}". Возможно, формат не поддерживается или файл некорректен.',

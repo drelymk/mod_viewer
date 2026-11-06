@@ -331,18 +331,31 @@ def test_native_json_entry_and_range_provenance_is_preserved(asset_case, contain
     roles = _snapshot(payload)
     assert len(roles) == 3
     first_key, second_key, third_key = roles
-    roles[first_key]["diffuse"] = None
-    roles[second_key]["diffuse"] = _pick(case)["tex_key"]
-    assert case.api.export_asset_textures(str(case.asset), payload["metadata"]["asset"]["texture_session"], _changes(payload, roles)) == {"saved": 2}
+    component = payload["meshes"][first_key]["asset_component_key"]
+    assert payload["meshes"][second_key]["asset_component_key"] == component
+    chosen = _pick(case)["tex_key"]
+    roles[first_key]["diffuse"] = roles[second_key]["diffuse"] = chosen
+    assert case.api.export_asset_textures(str(case.asset), payload["metadata"]["asset"]["texture_session"],
+                                          {component: {"diffuse": chosen}}) == {"saved": 1}
     actual = json.loads(filename.read_bytes())
     entries = actual if container == "list" else actual[container]
     assert "texture_hashes" not in entries[0]
-    assert ["Diffuse", "", "", None] in entries[0]["textureHashes"][0]
-    assert ["Diffuse", ".png", "", "00000001/chosen.png"] in entries[0]["textureHashes"][1]
+    assert all([item for item in row if item[0] == "Diffuse"] == [["Diffuse", ".png", "", "00000001/chosen.png"]]
+               for row in entries[0]["textureHashes"])
+    assert entries[1] == components[1]
     if container != "list":
         assert actual["custom"] == "retained"
-    assert _snapshot(case.api.load_asset(str(case.asset))) == roles
+    reopened = case.api.load_asset(str(case.asset))
+    assert _snapshot(reopened) == roles
     assert roles[third_key]["diffuse"] is not None
+    assert case.api.export_asset_textures(str(case.asset), reopened["metadata"]["asset"]["texture_session"],
+                                          {component: {"diffuse": None}}) == {"saved": 1}
+    roles[first_key]["diffuse"] = roles[second_key]["diffuse"] = None
+    assert _snapshot(case.api.load_asset(str(case.asset))) == roles
+    actual = json.loads(filename.read_bytes())
+    entries = actual if container == "list" else actual[container]
+    assert all([item for item in row if item[0] == "Diffuse"] == [["Diffuse", "", "", None]]
+               for row in entries[0]["textureHashes"])
 
 
 def test_asset_metadata_and_texture_symlinks_cannot_escape(asset_case, tmp_path):

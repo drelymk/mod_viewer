@@ -12,6 +12,7 @@ let currentPool = null; // the shared array for the open component
 let currentTitle = '';
 let currentModPath = '';
 let currentTexturePicker = null;
+let currentAssignments = null;
 let onChange = null; // re-render callback for every open per-mesh list
 let currentError = null;
 
@@ -33,6 +34,12 @@ async function pickInto(opt, field) {
   if (!result) return;
   if (result.error) return showError(result);
   addTexture(result.tex_key, result.uri);
+  if (currentAssignments) {
+    onChange({ [result.role || field]: result.tex_key });
+    currentError = null;
+    render();
+    return;
+  }
   if (field === 'normal_map') {
     const transportRole = result.role;
     if (transportRole === 'normal_data') {
@@ -71,7 +78,9 @@ function render() {
   }
   const header = document.createElement('div');
   header.className = 'texm-grid texm-header';
-  for (const key of ['texture.diffuse', 'texture.lightMap', 'texture.normalMap', 'texture.materialMap', null]) {
+  const columns = currentAssignments ? [...mapColumns, ['emission_map', 'texture.emissionMap']] : mapColumns;
+  header.classList.toggle('texm-asset-grid', !!currentAssignments);
+  for (const key of ['texture.diffuse', ...columns.map(([, title]) => title), null]) {
     const cell = document.createElement('span');
     cell.textContent = key ? t(key) : '';
     header.appendChild(cell);
@@ -86,17 +95,19 @@ function render() {
   for (const opt of currentPool || []) {
     const row = document.createElement('div');
     row.className = 'texm-row texm-grid';
+    row.classList.toggle('texm-asset-grid', !!currentAssignments);
     const label = document.createElement('span');
     label.className = 'texm-diffuse';
     label.textContent = textureDisplayLabel(opt.tex_key, opt.label);
     label.title = opt.file || opt.tex_key;
     row.appendChild(label);
-    for (const [field, titleKey] of mapColumns) {
+    for (const [field, titleKey] of columns) {
       const title = t(titleKey);
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'texm-map-cell';
-      const displayKey = field === 'normal_map' ? opt.normal_map || opt.normal_data : opt[field];
+      const maps = currentAssignments || opt;
+      const displayKey = field === 'normal_map' ? maps.normal_map || maps.normal_data : maps[field];
       const file = textureFile(displayKey);
       cell.title = displayKey ? t('texture.replace', { title, file }) : t('texture.add', { title });
       const name = document.createElement('span');
@@ -110,6 +121,12 @@ function render() {
         clear.title = t('texture.remove', { title });
         clear.addEventListener('click', (evt) => {
           evt.stopPropagation();
+          if (currentAssignments) {
+            const role = field === 'normal_map' && !maps.normal_map ? 'normal_data' : field;
+            onChange({ [role]: null });
+            render();
+            return;
+          }
           if (field === 'normal_map') {
             const hadNormalData = Object.hasOwn(opt, 'normal_data') || Object.hasOwn(opt, 'normal_data_manual');
             delete opt.normal_map;
@@ -148,11 +165,12 @@ function render() {
 
 /** Open a component's shared texture pool. Mutate `pool` in place so every
  * mesh sees changes; `onPoolChange` refreshes open per-mesh lists. */
-export function openTextureModal(componentName, pool, modPath, onPoolChange, texturePicker = null) {
+export function openTextureModal(componentName, pool, modPath, onPoolChange, texturePicker = null, assignments = null) {
   currentPool = pool;
   currentTitle = componentName;
   currentModPath = modPath;
   currentTexturePicker = texturePicker;
+  currentAssignments = assignments;
   onChange = onPoolChange;
   currentError = null;
   render();
@@ -183,6 +201,7 @@ function close() {
   currentPool = null;
   currentModPath = '';
   currentTexturePicker = null;
+  currentAssignments = null;
   onChange = null;
   currentError = null;
 }
