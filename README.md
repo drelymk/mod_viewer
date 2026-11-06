@@ -14,9 +14,11 @@ It supports Zenless Zone Zero (ZZMI), Genshin Impact (GIMI), and Wuthering Waves
 ## What the app can do
 
 The instructions below use the English UI labels. Open `Settings` in the top
-toolbar and use `Language` to switch between English, Simplified Chinese, Japanese, Korean,
-Spanish, and Russian. Optional actions can be hidden in portable builds; source
-runs enable all features. See [Compatibility and limitations](#compatibility-and-limitations).
+toolbar and use `Language` to switch between English, Simplified Chinese,
+Japanese, Korean, Spanish, and Russian. The portable build includes Export,
+Toggle editing, and mesh editing. Disabled-mod loading is hidden by default;
+source runs enable all features. See
+[Compatibility and limitations](#compatibility-and-limitations).
 
 ### 1. Open the app and load a mod
 
@@ -61,7 +63,6 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
    changed visibility variables, preserving other manual visibility choices.
    Right-click the selection and choose `Isolate Selected` to focus on those
    meshes; use `Exit Isolation` in the `Meshes` header to restore the view.
-   Isolation is available even when mesh editing is hidden.
 4. Select a component or mesh and open `Inspector` on the right. Choose a
    material kind under `Material`, or leave it on `Auto`. For a selected mesh,
    choose a texture, `Automatic`, or `None` under `Texture`. Use
@@ -81,8 +82,9 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
    when starting the drag to move it toward or away from the camera.
 7. Use the top-bar environment menu to choose `Default`, `Studio`, `Indoor`,
    `Outdoor`, or `Sunset`. Open `Settings` to adjust `Panel opacity` for panels,
-   dialogs, menus, and button backgrounds. Language, environment, panel opacity, and viewport tool
-   preferences persist between launches; camera and model orientation do not.
+   dialogs, menus, and button backgrounds without fading text or texture previews.
+   Language, environment, panel opacity, and viewport tool preferences persist
+   between launches; camera and model orientation do not.
 
 #### Inspect UVs and texture tiling
 
@@ -96,7 +98,7 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
    bounds, matching the model's texture tiling. During `Separate by Selection`,
    selected faces are highlighted in the UV view as well.
 
-UV inspection is read-only and remains available when mesh editing is hidden.
+UV inspection is read-only and does not require starting a mesh edit.
 
 ### 3. Preview existing controls and save combinations
 
@@ -212,11 +214,11 @@ Use the pencil or delete button beside an existing toggle to edit or remove
 it. Its record button lets you update which meshes appear at each position.
 All these INI changes stay in memory until `Export`.
 
-### 5. Separate and merge mesh parts (when enabled)
+### 5. Separate and merge mesh parts
 
-Mesh editing is optional and may be hidden in portable builds. It requires a
-writable mod folder and supported authored draws; archive previews and original
-Assets cannot be edited this way.
+Mesh editing is enabled in the portable build. It requires a writable mod folder
+and supported authored draws; archive previews and original Assets cannot be
+edited this way.
 
 1. Select a mesh and use the edit icons to the left of the eye in the Inspector
    header, or right-click a mesh row or the mesh in the viewport, and choose a
@@ -251,8 +253,7 @@ Assets cannot be edited this way.
    their normal editing shortcuts. History is cleared when changes are applied,
    canceled, or the model is reloaded.
 
-   Isolation remains available when mesh editing is hidden; separation, merging,
-   and preview history require mesh editing to be enabled.
+   Isolation changes only visibility and does not stage a mesh edit.
 3. Inspector shows part, mesh-selection and face-selection counts, plus preview
    or staged status. Choose `Apply Mesh Changes` beside the component's `Edited`
    badge, or select the component and use its Inspector header or context menu,
@@ -343,7 +344,7 @@ that modifies the source texture file.
    the texture immediately, create a backup, and reload the result. The color
    controls reset after saving; `Reset Color` does not undo a texture save.
 
-### 9. Preview original Assets or fill missing parts (optional)
+### 9. Preview and manage original Assets or fill missing parts
 
 1. Open `Assets` on the left and click `Add Asset Folder` or `+`. Choose its
    type (`ZZMI`, `GIMI`, or `WWMI`), browse to the extracted Asset folder, and
@@ -353,16 +354,48 @@ that modifies the source texture file.
 3. With a mod loaded and a matching original Asset available, click
    `Load missing parts` in the `Meshes` header to preview original components
    the mod does not replace. Click it again to remove them from the preview.
+4. To restore missing parts on each mod load or reload, open `Settings` and
+   enable `Auto restore missing mod parts from assets`. This is off by default
+   and is saved automatically. Restoration requires a unique matching Asset
+   from an enabled Asset Folder; parts explicitly handled or skipped by the mod
+   are left alone.
 
-Direct Asset previews and missing-part fills leave the original files untouched.
-Filled parts last only for the current session and are removed on reload or
-when switching models. Automatic filling requires a unique matching Asset.
+Loading an Asset or filling missing parts leaves the original files untouched.
+Filled parts are preview-only. Reloading clears them and, if automatic
+restoration is enabled, restores eligible parts again; switching models clears
+the previous fill.
+
+#### Save Asset texture assignments
+
+1. Open an Asset directly from `Assets`, select a mesh, and use `Inspector` >
+   `Texture` or `Manage textures` to choose its diffuse texture and map roles.
+   Use `None` to explicitly clear a binding. Added image files must belong to
+   that Asset.
+2. Click `Export`, or open its arrow and choose `Save Asset Edits`, to save the
+   assignments in the Asset's existing metadata and refresh its index. This
+   changes texture bindings without recoloring or rewriting image files.
+3. Reopen the Asset to use the saved defaults. Missing-part restoration and
+   matched mod texture defaults also use these assignments. Export before
+   switching models to keep pending Asset edits.
+
+#### Remove an Asset source group
+
+Direct Asset previews group meshes in `Meshes` by their source metadata. Where
+a source header is shown, right-click it and choose `Remove` to remove that
+whole group from the preview. Click `Export` to disable its owning folder with a
+`DISABLED_` prefix and refresh the Asset index. The files remain on disk, and
+disabled folders are skipped on future loads. Switching models before Export
+discards the pending removal. Individual mesh separation and merging remain
+unavailable for Assets.
+
+#### Extract or update an Asset
 
 To extract from a frame dump, right-click an Asset Folder and choose `Add asset`.
 Enter a name, browse to the dump folder, and click OK. Use `Update asset` on an
 indexed asset to replace all of its files with a new extraction. Both actions
 refresh the index automatically. See [Asset extraction](docs/asset-extraction.md)
-for supported behavior and recovery.
+for supported behavior and recovery. A partial extraction shows a warning;
+review it before relying on the Asset to restore every missing component.
 
 ### 10. Check the INIs and export your edits
 
@@ -454,8 +487,9 @@ weights cannot be loaded, export reports an error instead of silently omitting t
 Editable game rigs, animation tracks, shape keys, hidden toggle alternatives, and
 viewer lighting/debug effects are not exported. Missing or unconvertible textures
 are reported after saving; geometry and available resources still export. A GLB
-snapshot does not commit staged INI or buffer edits. Export remains unavailable
-for compressed mods and direct Asset previews.
+snapshot does not commit staged INI or buffer edits. GLB export is unavailable
+for compressed mods and direct Asset previews; direct Assets use `Export` for
+their own pending edits as described in step 9.
 
 ### What is saved, and when
 
@@ -463,14 +497,14 @@ for compressed mods and direct Asset previews.
 | --- | --- |
 | INI text, Toggle CRUD/Record, and PRESENT combinations | Staged in memory until `Export`. |
 | Mesh separation and merging | Preview-only until `Apply Mesh Changes`, then staged until `Export`. |
+| Direct Asset texture assignments and source-group removals | Pending until `Export` / `Save Asset Edits`, which updates Asset metadata or disables source folders and refreshes the index. |
 | Mesh names, material/texture choices, and color previews | Saved as viewer metadata in `.mod_viewer.json` for writable mod folders. |
 | Bone selections, Rig corrections, and pose presets | Saved to `.mod_viewer.json` by their own `Save` actions. |
 | `Save to Texture...` | Writes the supported source DDS immediately after confirmation, with a backup. |
-| Language, environment, panel opacity, and viewport tool preferences | Saved globally as app settings. |
+| Language, environment, panel opacity, viewport tool preferences, and automatic missing-part restoration | Saved globally as app settings. |
 
-Archive previews cannot persist edits or metadata. Direct Asset texture choices,
-manual visibility, camera/model orientation, and live physics motion are
-session-only.
+Archive previews cannot persist edits or metadata. Missing-part fills, manual
+visibility, camera/model orientation, and live physics motion are session-only.
 
 ## Compatibility and limitations
 
@@ -510,7 +544,7 @@ Build output is written to `dist/`.
 
 Before building, `src/features.ini` can hide optional Export, Toggle editing,
 disabled-mod loading, and mesh-editing actions in the portable executable. The
-checked-in settings hide disabled-mod loading and mesh editing. These are
+checked-in settings enable mesh editing and hide disabled-mod loading. These are
 build-time UI settings; running from source enables every feature.
 
 
