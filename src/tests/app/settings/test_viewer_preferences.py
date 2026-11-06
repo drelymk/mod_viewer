@@ -13,10 +13,10 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
     assert viewer_preferences.save_preferences({}, filename) == {}
     assert not filename.exists()
 
-    mod_folders.save_panel_opacity(35, filename)
-    mod_folders.save_language("ja", filename)
-    original = json.loads(filename.read_text(encoding="utf-8"))
-    original["assetFolders"] = [{"name": "Library", "enabled": True}]
+    original = {
+        "version": 1, "modFolders": [], "panelOpacity": 35, "language": "ja",
+        "assetFolders": [{"name": "Library", "enabled": True}],
+    }
     filename.write_text(json.dumps(original), encoding="utf-8")
     assert viewer_preferences.load_preferences(filename) == {}
     settings = {

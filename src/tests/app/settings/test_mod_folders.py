@@ -59,59 +59,6 @@ def test_mod_folder_registry_lifecycle(tmp_path):
         mod_folders.edit_folder(missing, "Broken", str(tmp_path / "new"), filename)
 
 
-def test_panel_opacity_persists_explicit_values_and_survives_registry_edits(
-        tmp_path):
-    filename = _config(tmp_path)
-    assert mod_folders.load_panel_opacity(filename) == 58
-    assert not os.path.exists(filename)
-
-    assert mod_folders.save_panel_opacity(35, filename) == 35
-    assert json.loads(open(filename, encoding="utf-8").read()) == {
-        "version": 1, "modFolders": [], "panelOpacity": 35,
-    }
-
-    root = _directory(tmp_path, "root")
-    mod_folders.add_folder("Root", root, filename)
-    saved = json.loads(open(filename, encoding="utf-8").read())
-    assert saved["panelOpacity"] == 35
-    assert len(saved["modFolders"]) == 1
-    assert mod_folders.save_panel_opacity(58, filename) == 58
-    saved = json.loads(open(filename, encoding="utf-8").read())
-    assert saved["panelOpacity"] == 58
-    assert len(saved["modFolders"]) == 1
-
-
-@pytest.mark.parametrize("language", ["en", "zh-CN", "ja", "ko", "es", "ru"])
-def test_language_defaults_and_preserves_other_preferences(tmp_path, language):
-    filename = _config(tmp_path)
-    assert mod_folders.load_language(filename) == "en"
-    assert mod_folders.save_panel_opacity(35, filename) == 35
-    assert mod_folders.save_language(language, filename) == language
-    assert mod_folders.load_language(filename) == language
-
-    root = _directory(tmp_path, "root")
-    mod_folders.add_folder("Root", root, filename)
-    saved = json.loads(open(filename, encoding="utf-8").read())
-    assert saved["language"] == language
-    assert saved["panelOpacity"] == 35
-    assert len(saved["modFolders"]) == 1
-
-
-@pytest.mark.parametrize("value", ["fr", "ja-JP", "ZH-CN", None, 1])
-def test_language_rejects_unsupported_values(tmp_path, value):
-    with pytest.raises(
-            mod_folders.ModFolderError,
-            match="Language must be one of: en, zh-CN, ja, ko, es, ru\\."):
-        mod_folders.save_language(value, _config(tmp_path))
-
-
-@pytest.mark.parametrize("value", [-1, 101, 42.5, True, "50"])
-def test_panel_opacity_rejects_values_outside_whole_percent_range(
-        tmp_path, value):
-    with pytest.raises(mod_folders.ModFolderError, match="0 to 100"):
-        mod_folders.save_panel_opacity(value, _config(tmp_path))
-
-
 @pytest.mark.parametrize("name", ["", "   ", None])
 def test_add_rejects_empty_name(tmp_path, name):
     with pytest.raises(mod_folders.ModFolderError):
@@ -142,8 +89,6 @@ def test_invalid_config_is_reported_without_overwrite(tmp_path, bad_config):
         mod_folders.load_registry(filename)
     with pytest.raises(mod_folders.ModFolderError):
         mod_folders.add_folder("Root", _directory(tmp_path, "root"), filename)
-    with pytest.raises(mod_folders.ModFolderError):
-        mod_folders.save_panel_opacity(40, filename)
     assert open(filename, encoding="utf-8").read() == original
 
 

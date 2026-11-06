@@ -42,7 +42,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Missing config uses defaults; malformed/unsupported files remain untouched.
   Language and panel opacity live under `viewerPreferences`; ignore and preserve
   their old top-level values. Shared panel surfaces and control fills follow the
-  opacity scalar without fading foreground text or content previews.
+  opacity scalar without fading foreground text or content previews. Functional
+  active/selected states, editor selections and viewport annotations remain
+  visible independently of panel opacity.
   Panel opacity, language, environment and
   tool preferences are omitted until changed, then persist explicitly even if
   restored to their defaults. Save these globally, including navigation gizmo

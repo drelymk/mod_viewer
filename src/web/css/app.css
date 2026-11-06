@@ -17,6 +17,14 @@
   --panel-background: rgba(13,17,23,var(--panel-opacity));
   --panel-blur: calc(var(--panel-opacity) * 10px);
   --panel-shadow-opacity: calc(var(--panel-opacity) * .22);
+  /* Functional state feedback stays visible at every panel opacity. */
+  --state-selected: rgba(31,111,235,.24);
+  --state-selected-subtle: rgba(31,111,235,.09);
+  --state-warning-tint: rgba(227,179,65,.18);
+  --state-selection: rgba(88,166,255,.14);
+  --state-editor-line: rgba(110,118,129,.10);
+  --state-editor-selection: rgba(38,79,120,.85);
+  --state-selected-strong: rgba(31,111,235,.38);
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 #ui-icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
@@ -249,9 +257,9 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-glb-choic
 .mod-folder-node { min-width: 0; }
 .mod-folder-row { position: relative; display: flex; align-items: center; gap: 4px; min-height: 26px;
   padding: 2px 0; border-radius: 5px; }
-.mod-folder-row.active { background: var(--panel-fill-selected); }
+.mod-folder-row.active { background: var(--state-selected); }
 .mod-folder-row.active-descendant {
-  box-shadow: inset 2px 0 0 var(--accent-soft); background: var(--panel-fill-selected-subtle);
+  box-shadow: inset 2px 0 0 var(--accent-soft); background: var(--state-selected-subtle);
 }
 .mod-folder-row.missing { opacity: .58; }
 .mod-folder-expand { width: 20px; height: 22px; flex: 0 0 20px; padding: 0;
@@ -397,8 +405,8 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-glb-choic
 .mesh-state-btn.state-hidden { color: var(--text-muted); opacity: .7; }
 .mesh-state-btn.state-manual { color: var(--accent-soft); opacity: 1; }
 .mesh-state-btn:hover { filter: brightness(1.25); transform: scale(1.08); }
-#wire-btn.active { background: var(--panel-fill-accent); }
-#outline-btn.active { background: var(--panel-fill-accent); }
+#wire-btn.active { background: var(--accent); }
+#outline-btn.active { background: var(--accent); }
 #grid-btn { background: var(--panel-fill-accent); }
 #grid-btn.off { background: var(--panel-fill-control); }
 #shading-btn { background: var(--panel-fill-accent); }
@@ -414,11 +422,11 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-glb-choic
 .tool-btn.active,
 #grid-btn:not(.off), #shading-btn:not(.off), #toon-btn:not(.off),
 #texture-btn:not(.off), #trackball-btn:not(.off) {
-  background: var(--panel-fill-selected); border-color: var(--accent-soft); color: var(--accent-soft);
+  background: var(--state-selected); border-color: var(--accent-soft); color: var(--accent-soft);
 }
 #texture-btn.diffuse-normal, #texture-btn.diffuse-only, #ao-btn.partial,
 #light-btn.partial, #glossy-btn.partial {
-  background: var(--panel-fill-warning-tint); border-color: var(--warning); color: #f2cc72;
+  background: var(--state-warning-tint); border-color: var(--warning); color: #f2cc72;
 }
 .nav-gizmo-icon { width: 24px; height: 24px; overflow: visible; }
 .nav-gizmo-icon path { fill: none; stroke-width: 1.7; stroke-linecap: round; }
@@ -496,7 +504,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .mesh-context-menu .mesh-create-toggle-action { border-bottom: 1px solid var(--border); }
 .mesh-selection-box {
   position: fixed; z-index: 240; pointer-events: none; box-sizing: border-box;
-  border: 1px solid var(--accent-soft); background: var(--panel-fill-selection);
+  border: 1px solid var(--accent-soft); background: var(--state-selection);
 }
 .mesh-selection-box[hidden] { display: none; }
 
@@ -535,7 +543,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding-right: 0;
 }
-.group-hdr.selected { color: var(--accent-soft); background: var(--panel-fill-selected-subtle); border-radius: 4px; }
+.group-hdr.selected { color: var(--accent-soft); background: var(--state-selected-subtle); border-radius: 4px; }
 .group-items { display: flex; flex-direction: column; gap: 3px; overflow: hidden; }
 .group-items.collapsed { display: none; }
 .draw-item-wrap { display: flex; flex-direction: column; }
@@ -545,7 +553,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 }
 .draw-item input { width: 12px; height: 12px; cursor: pointer; accent-color: #3fb950; flex-shrink: 0; }
 .mesh-state-btn { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; font-size: 13px; line-height: 18px; cursor: pointer; flex-shrink: 0; }
-.draw-item.selected { background: var(--panel-fill-selection); outline: 1px solid var(--accent-soft); border-radius: 4px; }
+.draw-item.selected { background: var(--state-selection); outline: 1px solid var(--accent-soft); border-radius: 4px; }
 .mesh-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .draw-item .mesh-name-input {
   width: 100%; min-width: 0; box-sizing: border-box; padding: 2px 4px;
@@ -771,7 +779,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   content: ''; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px;
   border-radius: 50%; background: var(--text); transition: transform .15s;
 }
-.settings-option input:checked { background: var(--panel-fill-accent); border-color: var(--accent); }
+.settings-option input:checked { background: var(--accent); border-color: var(--accent); }
 .settings-option input:checked::before { transform: translateX(14px); }
 .settings-option input:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 3px; }
 #asset-folder-modal-backdrop .modal, #asset-extract-backdrop .modal { width: 360px; }
@@ -838,7 +846,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   color: #c9d1d9; background: var(--panel-fill-control); border: 1px solid #30363d;
   border-radius: 12px; padding: 3px 10px; font-size: 11px; cursor: pointer;
 }
-.health-filters button.active { color: #fff; background: var(--panel-fill-accent); border-color: #388bfd; }
+.health-filters button.active { color: #fff; background: var(--accent); border-color: #388bfd; }
 .health-list {
   flex: 1 1 0; min-height: 0;
   overflow-y: auto; padding-right: 4px;
@@ -886,9 +894,9 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 #ini-editor-text .ace_gutter {
   background: var(--panel-fill-raised); color: #7d8590; border-right: 1px solid #30363d;
 }
-#ini-editor-text .ace_gutter-active-line { background: var(--panel-fill-control); }
-#ini-editor-text .ace_marker-layer .ace_active-line { background: var(--panel-fill-editor-line); }
-#ini-editor-text .ace_marker-layer .ace_selection { background: var(--panel-fill-editor-selection); }
+#ini-editor-text .ace_gutter-active-line { background: var(--bg-control); }
+#ini-editor-text .ace_marker-layer .ace_active-line { background: var(--state-editor-line); }
+#ini-editor-text .ace_marker-layer .ace_selection { background: var(--state-editor-selection); }
 #ini-editor-text .ace_cursor { color: #f0f6fc; }
 #ini-editor-text .ace_comment { color: #6a9955; font-style: italic; }
 #ini-editor-text .ace_constant.ace_section { color: #4ec9b0; font-weight: 700; }
@@ -908,7 +916,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 #ini-editor-text .ace_searchbtn:hover { background: var(--panel-fill-border); }
 #ini-editor-text .ace_button { color: #c9d1d9; border-color: #484f58; }
 #ini-editor-text .ace_button:hover { background: var(--panel-fill-border); }
-#ini-editor-text .ace_button.checked { background: var(--panel-fill-accent); border-color: #58a6ff; }
+#ini-editor-text .ace_button.checked { background: var(--accent); border-color: #58a6ff; }
 #ini-editor-close { background: var(--panel-fill-control); color: #e6edf3; }
 #ini-editor-apply { background: var(--panel-fill-success); color: #fff; border-color: rgba(240,246,252,.15); }
 #ini-editor-apply:disabled { opacity: .55; cursor: default; }
@@ -1121,7 +1129,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   font-size: 11px; font-weight: 700; letter-spacing: .04em;
 }
 .right-dock-tab:hover { color: var(--text); background: var(--panel-fill-hover); }
-.right-dock-tab.active { color: var(--text); background: var(--panel-fill-accent); }
+.right-dock-tab.active { color: var(--text); background: var(--accent); }
 #inspector-panel, #weight-rig-panel {
   display: flex; flex-direction: column; min-height: 180px; max-height: calc(100vh - 152px);
   width: 100%; overflow: hidden; padding: 12px 14px;
@@ -1175,7 +1183,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .weight-rig-header h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
 .weight-rig-status { display: block; margin-top: 4px; color: var(--text-muted); font-size: 11px; line-height: 1.4; }
 .weight-rig-primary-action { width: 100%; margin: 10px 0 1px; }
-.weight-rig-primary-action.active { color: var(--text); background: var(--panel-fill-accent); border-color: var(--accent-soft); }
+.weight-rig-primary-action.active { color: var(--text); background: var(--accent); border-color: var(--accent-soft); }
 .weight-rig-section { display: flex; flex-direction: column; gap: 7px; padding: 10px 0; border-bottom: 1px solid rgba(48,54,61,.72); }
 .weight-rig-section-title { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; }
 .weight-rig-control-label { color: var(--text-muted); font-size: 11px; }
@@ -1190,7 +1198,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .rig-bone-select { width: 100%; min-height: 30px; color: var(--text); background: var(--panel-fill-button); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .rig-influences { display: flex; flex-direction: column; gap: 2px; }
 .rig-influence { display: flex; align-items: center; gap: 7px; min-height: 25px; padding: 2px 5px; color: var(--text-muted); border-radius: var(--radius-sm); cursor: pointer; }
-.rig-influence:hover, .rig-influence.selected { color: var(--text); background: var(--panel-fill-active); }
+.rig-influence:hover, .rig-influence.selected { color: var(--text); background: var(--surface-active); }
 .rig-influence input { margin: 0; }
 .rig-influence-id { color: var(--text); font-family: ui-monospace, monospace; }
 .rig-influence-weight { margin-left: auto; color: var(--accent-soft); font-variant-numeric: tabular-nums; }
@@ -1220,7 +1228,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .rig-preset-actions { flex-wrap: nowrap; }
 .rig-preset-actions .ui-button { min-width: 0; }
 .rig-hint { color: var(--text-muted); font-size: 11px; line-height: 1.4; }
-.rig-joint-pick-label { position: absolute; z-index: 20; pointer-events: none; padding: 2px 5px; color: #111827; background: var(--panel-fill-highlight); border-radius: 3px; font: 11px/1.2 ui-monospace, monospace; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,var(--panel-shadow-opacity)); }
+.rig-joint-pick-label { position: absolute; z-index: 20; pointer-events: none; padding: 2px 5px; color: #111827; background: #facc15; border-radius: 3px; font: 11px/1.2 ui-monospace, monospace; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
 .rig-joint-pick-label[hidden] { display: none; }
 .weight-picker { position: relative; }
 .weight-bone-select { width: 100%; text-align: left; font-size: 12px; }
@@ -1250,12 +1258,12 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 .weight-picker-view-option:hover:not(:disabled) { color: var(--text); }
 .weight-picker-view-option.active {
-  color: var(--text); background: var(--panel-fill-active);
+  color: var(--text); background: var(--surface-active);
 }
 .weight-picker-view-option:disabled { opacity: .45; cursor: default; }
 .weight-pick-model { width: 100%; }
 .weight-pick-model.active {
-  color: var(--text); background: var(--panel-fill-accent); border-color: var(--accent-soft);
+  color: var(--text); background: var(--accent); border-color: var(--accent-soft);
 }
 .weight-bone-filter { flex: 0 0 auto; padding: 2px 5px; }
 .weight-bone-list { min-height: 0; overflow-y: auto; }
@@ -1318,7 +1326,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;
 }
 .inspector-texture-option:hover, .inspector-texture-option.selected {
-  color: var(--accent-soft); border-color: var(--accent-soft); background: var(--panel-fill-active);
+  color: var(--accent-soft); border-color: var(--accent-soft); background: var(--surface-active);
 }
 .inspector-color-section { gap: 8px; }
 .inspector-color-control {
@@ -1395,7 +1403,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   min-height: 30px; border: 0; border-radius: var(--radius-sm); color: var(--text-muted);
   background: transparent; text-align: left; padding: 5px 9px; cursor: pointer; font-size: 11px;
 }
-.ui-popover-option:hover, .ui-popover-option.selected { color: var(--text); background: var(--panel-fill-active); }
+.ui-popover-option:hover, .ui-popover-option.selected { color: var(--text); background: var(--surface-active); }
 #tool-panel.viewport-toolbar {
   left: 50%; right: auto; bottom: calc(var(--footer-height) + 10px);
   transform: translateX(-50%);
@@ -1491,7 +1499,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 .mesh-selection-modes[hidden] { display: none; }
 .mesh-selection-modes .icon-btn { width: 30px; height: 32px; min-height: 32px; padding: 0; }
-.mesh-selection-modes .icon-btn[aria-pressed="true"] { color: var(--text); background: var(--panel-fill-accent); }
+.mesh-selection-modes .icon-btn[aria-pressed="true"] { color: var(--text); background: var(--accent); }
 .dock-tab, .right-dock-tab {
   min-height: 32px; border: 0; border-radius: var(--radius-sm);
   color: var(--text-muted); background: transparent; cursor: pointer;
@@ -1501,7 +1509,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .dock-tab span { white-space: nowrap; }
 .dock-tab .ui-icon { width: 15px; height: 15px; }
 .dock-tab:hover, .right-dock-tab:hover { color: var(--text); background: var(--panel-fill-hover); }
-.dock-tab.active, .right-dock-tab.active { color: var(--text); background: var(--panel-fill-accent); }
+.dock-tab.active, .right-dock-tab.active { color: var(--text); background: var(--accent); }
 .dock-tab:disabled { color: var(--text-muted); opacity: .45; cursor: default; }
 #left-panel-container {
   width: 100%; height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap));
@@ -1536,8 +1544,8 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .folder-node { min-width: 0; }
 .folder-row { position: relative; display: flex; align-items: center; gap: 4px; min-height: 32px;
   padding: 3px 0; border-radius: 5px; }
-.folder-row.active { background: var(--panel-fill-selected); }
-.folder-row.active-descendant { box-shadow: inset 2px 0 0 var(--accent-soft); background: var(--panel-fill-selected-subtle); }
+.folder-row.active { background: var(--state-selected); }
+.folder-row.active-descendant { box-shadow: inset 2px 0 0 var(--accent-soft); background: var(--state-selected-subtle); }
 .folder-row.missing { opacity: .58; }
 .folder-expand { width: 20px; height: 22px; flex: 0 0 20px; padding: 0; border: 0;
   background: transparent; color: var(--text-muted); cursor: pointer; font-size: 18px; line-height: 1; }
@@ -1592,7 +1600,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   background: var(--panel-fill-active); cursor: pointer; font-size: 9px; font-weight: 800;
   letter-spacing: .04em; }
 .asset-folder-switch[aria-checked="true"] { color: var(--text); border-color: var(--accent-soft);
-  background: var(--panel-fill-selected-strong); }
+  background: var(--state-selected-strong); }
 .asset-folder-switch:hover { color: var(--text); border-color: var(--accent-soft); }
 .asset-folder-switch:disabled { opacity: .55; cursor: wait; }
 #sidebar.left-dock-panel { overflow-x: hidden; overflow-y: auto; }
@@ -1670,7 +1678,8 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 }
 
 /* Shared opacity palette. Use panel-surface for a new floating panel and these
- * fill tokens for its controls. Foreground colors and content previews do not fade. */
+ * fill tokens for decorative control backgrounds. Functional state fills,
+ * foreground colors and content previews do not fade. */
 :root {
   --panel-fill-scrollbar-track: color-mix(in srgb, rgba(13,17,23,.45) var(--panel-opacity-percent), transparent);
   --panel-fill-raised: color-mix(in srgb, var(--bg-panel) var(--panel-opacity-percent), transparent);
@@ -1689,18 +1698,10 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   --panel-fill-button-highlight: color-mix(in srgb, rgba(240,246,252,.12) var(--panel-opacity-percent), transparent);
   --panel-fill-inset: color-mix(in srgb, var(--bg-canvas) var(--panel-opacity-percent), transparent);
   --panel-fill-danger-soft: color-mix(in srgb, rgba(248,81,73,.1) var(--panel-opacity-percent), transparent);
-  --panel-fill-selected: color-mix(in srgb, rgba(31,111,235,.24) var(--panel-opacity-percent), transparent);
-  --panel-fill-selected-subtle: color-mix(in srgb, rgba(31,111,235,.09) var(--panel-opacity-percent), transparent);
   --panel-fill-border: color-mix(in srgb, var(--border) var(--panel-opacity-percent), transparent);
-  --panel-fill-warning-tint: color-mix(in srgb, rgba(227,179,65,.18) var(--panel-opacity-percent), transparent);
-  --panel-fill-selection: color-mix(in srgb, rgba(88,166,255,.14) var(--panel-opacity-percent), transparent);
   --panel-fill-backdrop: color-mix(in srgb, rgba(1,4,9,.6) var(--panel-opacity-percent), transparent);
   --panel-fill-warning-soft: color-mix(in srgb, rgba(210,153,34,.1) var(--panel-opacity-percent), transparent);
-  --panel-fill-editor-line: color-mix(in srgb, rgba(110, 118, 129, .10) var(--panel-opacity-percent), transparent);
-  --panel-fill-editor-selection: color-mix(in srgb, rgba(38, 79, 120, .85) var(--panel-opacity-percent), transparent);
   --panel-fill-info-soft: color-mix(in srgb, rgba(56,139,253,.1) var(--panel-opacity-percent), transparent);
-  --panel-fill-highlight: color-mix(in srgb, #facc15 var(--panel-opacity-percent), transparent);
-  --panel-fill-selected-strong: color-mix(in srgb, rgba(31,111,235,.38) var(--panel-opacity-percent), transparent);
 }
 .panel-surface {
   background: var(--panel-background);

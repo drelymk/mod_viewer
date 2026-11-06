@@ -762,7 +762,7 @@ def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(m
       const {createPreferencePersistence} = await import('./js/ui/preference-persistence.js');
       const applied = [], writes = [], stored = {};
       let loadResolve, writeResolve, firstWriteResolve, finishedResolve;
-      let active = 0, maxActive = 0, opacity = 58;
+      let active = 0, maxActive = 0;
       const firstWrite = new Promise(resolve => firstWriteResolve = resolve);
       const finished = new Promise(resolve => finishedResolve = resolve);
       const prefs = createPreferencePersistence({getMethod:'get_viewer_preferences',
@@ -776,20 +776,19 @@ def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(m
           if(writes.length===1) {
             firstWriteResolve(); await new Promise(resolve=>writeResolve=resolve);
           }
-          Object.assign(stored,changes); active--; return {value:{...stored}};
-        },
-        get_panel_opacity:async()=>({value:opacity}),
-        set_panel_opacity:async value=>{
-          active++; maxActive=Math.max(maxActive,active); opacity=value; active--;
-          if(value===58) finishedResolve(); return {value};
+          Object.assign(stored,changes); active--;
+          if(changes.panelOpacity===58) finishedResolve();
+          return {value:{...stored}};
         },
       }};
       window.dispatchEvent(new Event('pywebviewready'));
       await Promise.resolve();
       loadResolve({value:{grid:true,environment:'indoor',bloom:true}});
       await firstWrite;
-      const panel = createPreferencePersistence({getMethod:'get_panel_opacity',
-        setMethod:'set_panel_opacity', key:'panelOpacity', apply:()=>{}});
+      window.pywebview.api.get_viewer_preferences = async()=>({value:{...stored}});
+      const panel = createPreferencePersistence({getMethod:'get_viewer_preferences',
+        setMethod:'set_viewer_preferences', apply:()=>{}});
+      await panel.ready;
       panel.change('panelOpacity',35);
       await Promise.resolve();
       panel.change('panelOpacity',58);
@@ -802,14 +801,16 @@ def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(m
       const restoredPrefs = createPreferencePersistence({getMethod:'get_viewer_preferences',
         setMethod:'set_viewer_preferences', apply:(key,value)=>restored[key]=value});
       await restoredPrefs.ready;
-      return {applied,writes,stored,restored,maxActive,opacity,noStartupSave:writes.length===count};
+      return {applied,writes,stored,restored,maxActive,noStartupSave:writes.length===count};
     }""")
     assert result == {
         'applied': [['bloom', True]],
-        'writes': [{'grid': False}, {'grid': True, 'wireframe': True, 'environment': 'studio'}],
-        'stored': {'grid': True, 'wireframe': True, 'environment': 'studio'},
-        'restored': {'grid': True, 'wireframe': True, 'environment': 'studio'},
-        'maxActive': 1, 'opacity': 58, 'noStartupSave': True,
+        'writes': [{'grid': False}, {'panelOpacity': 35},
+                   {'grid': True, 'wireframe': True, 'environment': 'studio'},
+                   {'panelOpacity': 58}],
+        'stored': {'grid': True, 'wireframe': True, 'environment': 'studio', 'panelOpacity': 58},
+        'restored': {'grid': True, 'wireframe': True, 'environment': 'studio', 'panelOpacity': 58},
+        'maxActive': 1, 'noStartupSave': True,
     }
 
 
@@ -1113,7 +1114,7 @@ def test_appearance_controls_share_persistence_and_save_explicit_defaults(module
     }
 
 
-def test_panel_surfaces_follow_opacity_without_fading_content(module_page):
+def test_panel_opacity_preserves_functional_feedback_and_fades_only_surfaces(module_page):
     module_page.add_style_tag(url=module_page.url.replace('/__module_test__.html', '/css/app.css'))
     module_page.add_style_tag(content='* { transition: none !important; }')
     result = module_page.evaluate("""async () => {
@@ -1134,7 +1135,7 @@ def test_panel_surfaces_follow_opacity_without_fading_content(module_page):
         #tool-panel, #inspector-panel, #weight-rig-panel, #sidebar,
         .ui-popover, .open-mod-menu, .ini-file-menu, .panel-action-menu,
         #ini-editor-text, .ace_gutter, .ace_search, .ace_search_field,
-        .health-filters button, .modal-field input, .modal-field select,
+        .health-filters button:not(.active), .modal-field input, .modal-field select,
         .ui-button, .settings-language select, .modal-backdrop, .dialog-backdrop`)];
       const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
       const ctx = canvas.getContext('2d', {willReadFrequently:true});
@@ -1151,7 +1152,58 @@ def test_panel_surfaces_follow_opacity_without_fading_content(module_page):
         });
       };
       const full = snapshot(100), empty = snapshot(0), partial = snapshot(58);
+      const feedback = document.createElement('div');
+      feedback.innerHTML = `
+        <button class="ui-popover-option selected"></button>
+        <button class="weight-picker-view-option active"></button>
+        <button class="rig-influence selected"></button>
+        <button class="inspector-texture-option selected"></button>
+        <button class="asset-folder-switch" aria-checked="true"></button>
+        <div class="folder-row active"></div><div class="draw-item selected"></div>
+        <button class="dock-tab active"></button><button class="right-dock-tab active"></button>
+        <span class="rig-joint-pick-label">Joint 01</span>`;
+      document.body.append(feedback);
+      editor.insertAdjacentHTML('beforeend', '<div class="ace_marker-layer"><span class="ace_selection"></span><span class="ace_active-line"></span></div>');
+      const indicators = [...feedback.children, ...editor.querySelectorAll('.ace_marker-layer span'),
+        document.querySelector('.health-filters button.active')];
+      const toolStates = [
+        ['wire-btn','active',''], ['outline-btn','active',''],
+        ['bloom-btn','active',''], ['grid-btn','','off'],
+        ['shading-btn','','off'], ['toon-btn','','off'],
+        ['texture-btn','','off'], ['texture-btn','diffuse-normal','off'],
+        ['texture-btn','diffuse-only','off'], ['ao-btn','active',''],
+        ['ao-btn','partial',''], ['glossy-btn','active','off'],
+        ['glossy-btn','partial','off'], ['light-btn','active','off'],
+        ['light-btn','partial','off'], ['trackball-btn','active','off'],
+      ];
+      const functionalSnapshot = value => {
+        slider.value = String(value); slider.dispatchEvent(new Event('input'));
+        const styles = indicators.map(node => getComputedStyle(node).backgroundColor);
+        const tools = toolStates.map(([id,on,off]) => {
+          const node = document.getElementById(id);
+          node.className = `tool-btn ${on}`;
+          const enabled = getComputedStyle(node).backgroundColor;
+          node.className = `tool-btn ${off}`;
+          const disabled = getComputedStyle(node).backgroundColor;
+          return {enabled, disabled};
+        });
+        return {styles, tools};
+      };
+      const normalFeedback = functionalSnapshot(100);
+      const feedbackStable = [0,5,58].every(value => {
+        const state = functionalSnapshot(value);
+        return state.styles.every((color,i) => color === normalFeedback.styles[i] && alpha(color) > 0)
+          && state.tools.every((tool,i) => tool.enabled === normalFeedback.tools[i].enabled
+            && alpha(tool.enabled) > 0 && tool.enabled !== tool.disabled);
+      });
+      const label = feedback.querySelector('.rig-joint-pick-label');
+      const annotationOpaque = [0,5,58,100].every(value => {
+        slider.value = String(value); slider.dispatchEvent(new Event('input'));
+        return alpha(getComputedStyle(label).backgroundColor) === 255;
+      });
+      slider.value = '58'; slider.dispatchEvent(new Event('input'));
       return {
+        feedbackStable, annotationOpaque,
         moved: !document.getElementById('appearance-btn') && !document.getElementById('language-btn')
           && !!document.querySelector('#settings-dialog #panel-opacity')
           && !!document.querySelector('#settings-dialog #app-language'),
@@ -1166,6 +1218,7 @@ def test_panel_surfaces_follow_opacity_without_fading_content(module_page):
     assert result == {
         'moved': True, 'opaque': [], 'unscaled': [], 'foreground': True,
         'future': 148, 'blur': 'blur(5.8px)',
+        'feedbackStable': True, 'annotationOpaque': True,
     }
 
 

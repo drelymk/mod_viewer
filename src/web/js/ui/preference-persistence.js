@@ -4,7 +4,7 @@ import { bridgeReady, reportPersistenceFailure } from '../app/bridge.js';
 
 let saveQueue = Promise.resolve();
 
-export function createPreferencePersistence({ getMethod, setMethod, key = null, apply }) {
+export function createPreferencePersistence({ getMethod, setMethod, apply }) {
   const touched = new Set();
   const pending = new Map();
   let loaded = false;
@@ -19,7 +19,7 @@ export function createPreferencePersistence({ getMethod, setMethod, key = null, 
       while (pending.size) {
         const changes = Object.fromEntries(pending);
         pending.clear();
-        const write = saveQueue.then(() => api[setMethod](key ? changes[key] : changes));
+        const write = saveQueue.then(() => api[setMethod](changes));
         saveQueue = write.catch(() => {});
         try {
           const result = await write;
@@ -44,7 +44,7 @@ export function createPreferencePersistence({ getMethod, setMethod, key = null, 
         const api = await bridgeReady();
         const result = await api[getMethod]();
         if (result?.error) throw new Error(result.error);
-        const values = key ? { [key]: result?.value } : result?.value || {};
+        const values = result?.value || {};
         for (const [name, value] of Object.entries(values)) {
           if (!touched.has(name)) apply(name, value);
         }

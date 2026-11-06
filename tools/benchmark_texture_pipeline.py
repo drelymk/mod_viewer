@@ -540,8 +540,6 @@ def _run_browser(
               consume_startup_request: async () => null,
               get_mod_folders: async () => ({folders: []}),
               get_asset_folders: async () => ({folders: []}),
-              get_panel_opacity: async () => ({value: 58}),
-              get_language: async () => ({value: 'en'}),
               get_viewer_preferences: async () => ({value: window.__benchmarkPreferences || {}}),
               set_viewer_preferences: async changes => {
                 window.__benchmarkPreferences = {...window.__benchmarkPreferences, ...changes};
