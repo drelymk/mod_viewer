@@ -14,6 +14,7 @@ from core.textures.profiles import texture_profile_for
 from app.assets import paths as asset_paths
 from app.assets import textures as asset_textures
 from ..package_format import FORMAT
+from ..metadata import texture_role, authored_range, authored_role
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      AssetTexture, make_texture, part_filter_matches)
 
@@ -231,10 +232,8 @@ def _warning(component, ordinal, reason, message):
             "reason": reason, "message": message}
 
 
-def _explicit_textures(root, metadata_relative, component, files, texture_source):
+def _explicit_textures(root, metadata_relative, component, files, texture_source, asset_dir=None, *, authored_only=False):
     """Use proven metadata roles and exact files; numeric slots remain candidates."""
-    roles = {"diffuse": "diffuse", "normalmap": texture_profile_for("wuwa").normal_transport_role,
-             "lightmap": "light_map", "materialmap": "material_map"}
     by_role = {}
     rows = component.get("texture_hashes")
     for row in rows if isinstance(rows, list) else ():
@@ -242,9 +241,16 @@ def _explicit_textures(root, metadata_relative, component, files, texture_source
             if not isinstance(item, list) or len(item) < 4 or not isinstance(item[3], str):
                 continue
             path = asset_paths.safe_asset_path(root, os.path.join(os.path.dirname(metadata_relative), item[3]))
-            if not path or path not in files:
+            role = texture_role(item[0])
+            authored = authored_role(component, 0, role)
+            if authored_only and not authored:
                 continue
-            role = roles.get(str(item[0]).replace("_", "").casefold())
+            owned = (asset_dir and path and path.lower().endswith(_IMAGE_EXTENSIONS)
+                     and asset_paths.relative_asset_path(asset_dir, path) is not None)
+            if not path or (path not in files and not (authored and owned)):
+                continue
+            if role == "normal_map":
+                role = texture_profile_for("wuwa").normal_transport_role
             if role:
                 by_role.setdefault(role, set()).add(path)
     textures = {}
@@ -366,9 +372,10 @@ def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
             candidates = _component_texture_candidates(
                 component_files, root, ordinal, texture_source)
             textures = {}
-            if raw.get("format") == FORMAT:
+            if raw.get("format") == FORMAT or authored_range(component, 0):
                 textures = _explicit_textures(
-                    root, metadata_relative, component, [item.path for item in candidates], texture_source)
+                    root, metadata_relative, component, [item.path for item in candidates], texture_source,
+                    asset_paths.safe_asset_dir(root, record.get("path", "")), authored_only=raw.get("format") != FORMAT)
             parts.append(AssetMeshPart(
                 key=key, label=label, asset_type="WWMI", asset_path=source_path,
                 geometry_hash=geometry_hash, component_name=name,
@@ -376,7 +383,8 @@ def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
                                 if component.get("classification") else name),
                 component_ordinal=ordinal, first_index=first_index,
                 index_count=index_count, positions=pos, indices=packed_indices,
-                uvs=uv, normals=normal, textures=textures, texture_candidates=candidates))
+                uvs=uv, normals=normal, textures=textures, texture_candidates=candidates,
+                metadata_path=metadata_relative, metadata_entry=ordinal))
     if not parts:
         raise AssetLoadError("WWMI Asset contains no renderable components.")
     return AssetAdapterResult(tuple(parts), tuple(warnings))

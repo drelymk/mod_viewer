@@ -19,6 +19,8 @@ import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import { summarizeAssetBindings } from './asset-diagnostics.js';
 import { isRecording } from '../editing/record-session.js';
 import { getLooseParts } from '../mesh/loose-parts.js';
+import { recomputeAutomaticTextureBoundaries } from '../mesh/mesh-texture-runs.js';
+export { refreshAutomaticTextureBoundaries } from '../mesh/mesh-texture-runs.js';
 import {
   groupsUI,
   showTextureLoadError,
@@ -58,36 +60,6 @@ function groupByComponent(names, meshes) {
     (grouped[key] = grouped[key] || []).push(name);
   }
   return grouped;
-}
-
-function automaticTextureBoundaryIdentity(mesh) {
-  const defaultKey = mesh.userData.defaultTexKey;
-  const variantKeys = mesh.userData.textureVariants || [];
-  if (!defaultKey && !variantKeys.length) return null;
-  return JSON.stringify({
-    defaultKey: defaultKey || null,
-    variants: variantKeys.map((variant) => ({
-      conditions: variant?.conditions || [],
-      tex_key: variant?.tex_key || null,
-    })),
-  });
-}
-
-function recomputeAutomaticTextureBoundaries(groupMeshes) {
-  let previousBoundaryIdentity = null;
-  for (const mesh of groupMeshes) {
-    mesh.userData.automaticTextureBoundary = false;
-    const boundaryIdentity = automaticTextureBoundaryIdentity(mesh);
-    if (boundaryIdentity && boundaryIdentity !== previousBoundaryIdentity) {
-      mesh.userData.automaticTextureBoundary = true;
-    }
-    if (boundaryIdentity) previousBoundaryIdentity = boundaryIdentity;
-  }
-}
-
-/** Rebuild authored texture-run boundaries after an in-place semantic update. */
-export function refreshAutomaticTextureBoundaries() {
-  groupsUI.forEach((group) => recomputeAutomaticTextureBoundaries(group.itemObjs));
 }
 
 function createComponentDescriptor(groupName, names, meshes, src, modPath, options) {

@@ -1,4 +1,6 @@
 export default {
+  'toolbar.exportAssetTextures': 'Сохранить текстуры ассета',
+  'confirm.unsavedAssetTextures': 'Есть несохранённые назначения текстур ассета. Отменить изменения и продолжить?',
   'settings.title': 'Настройки',
   'settings.autoRestore': 'Автоматически восстанавливать недостающие части мода из ассетов',
   'settings.autoRestoreDescription':

@@ -13,13 +13,14 @@ from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
 from app.mods.enrichment import _apply_texture_enrichment
 from app.mods.loader import ModLoadContext, load_mod, load_semantic_state
 from app.assets import index as asset_index
-from app.assets.enrichment import _clear_null_texture_assignments
+from app.assets.enrichment import _clear_null_texture_assignments, _apply_hash_replacements, TextureSemanticEvidence
 from app.assets.textures import collect_texture_inventory
 from app.assets.resolver import AssetComponentBinding
 from app.assets.textures import asset_texture_key
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.geometry.draw_call import DrawCall
 from core.ini import draw_scan
+from core.ini.texture_roles import TextureOverrideIndex, TextureReplacement
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import DirectoryModSource, ZipModSource
 from tests.support.model_data import standard_component_resources
@@ -27,10 +28,14 @@ from core.materials.game_profile import GameDetection
 from tests.support.provenance import visible
 
 
-@pytest.mark.parametrize("role", ["diffuse", "normal_map", "light_map", "material_map"])
-def test_conditional_null_preserves_independently_stored_default(role):
+@pytest.mark.parametrize("role", ["diffuse", "normal_map", "light_map", "material_map", "emission_map"])
+def test_hash_replacement_and_conditional_null_preserve_independently_stored_default(role):
     draw = DrawCall()
-    draw.set_texture_default(role, "base.dds")
+    replacement = TextureReplacement("11111111", "ResourceBase", file="base.dds")
+    _apply_hash_replacements(draw, [TextureSemanticEvidence(role, "11111111")],
+                             TextureOverrideIndex(replacements_by_hash={"11111111": (replacement,)}))
+    assert draw.texture_default(role) == "base.dds"
+    assert draw.texture_rules(role)[0]["file"] == "base.dds"
     draw.set_texture_variants(role, [{
         "conditions": [[{"var": "mode", "value": "1", "negate": False}]],
         "file": None}])

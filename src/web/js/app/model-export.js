@@ -6,13 +6,23 @@ import { alertDialog } from '../ui/dialogs.js';
 import { t } from '../i18n/index.js';
 import { loadModelExportSkinning } from '../weight-rig/weight-rig-feature.js';
 import { saveGlbBuffer } from '../export/glb-save.js';
+import { assetTextureExportState, exportAssetTextures } from './asset-texture-export.js';
 
 let exporting = false;
 const $ = (id) => document.getElementById(id);
 
 export function syncModelExportAvailability() {
+  const assetMode = viewerState.currentSource?.kind === 'asset';
+  const assetState = assetTextureExportState();
+  const busy = exporting || assetState.saving;
+  if (assetMode) {
+    $('export-btn').disabled = !assetState.available || busy;
+    $('export-btn').title = t('toolbar.exportAssetTextures');
+    $('pending-indicator').classList.toggle('show', !!assetState.pending);
+    $('pending-indicator').setAttribute('aria-hidden', String(!assetState.pending));
+  }
   const available =
-    !exporting &&
+    !busy &&
     !viewerState.modTransitionInFlight &&
     viewerState.currentSource?.kind === 'mod' &&
     !viewerState.currentSource.readOnly &&
@@ -20,9 +30,17 @@ export function syncModelExportAvailability() {
   const choice = $('export-glb-choice');
   const trigger = $('export-menu-btn');
   if (choice) choice.disabled = !available;
-  if (trigger) trigger.disabled = exporting || (!available && $('export-btn').disabled);
+  if (trigger) trigger.disabled = busy || (!available && $('export-btn').disabled);
   const edits = $('export-edits-choice');
-  if (edits) edits.disabled = exporting || $('export-btn').disabled;
+  if (edits) {
+    edits.hidden = assetMode;
+    edits.disabled = busy || assetMode || $('export-btn').disabled;
+  }
+  const assetChoice = $('export-asset-textures-choice');
+  if (assetChoice) {
+    assetChoice.hidden = !assetMode;
+    assetChoice.disabled = !assetMode || !assetState.available || busy;
+  }
 }
 
 export async function exportModelGlb() {
@@ -115,6 +133,10 @@ export function initExportMenu() {
     close();
     $('export-btn').click();
   });
+  $('export-asset-textures-choice').addEventListener('click', () => {
+    close();
+    void exportAssetTextures();
+  });
   document.addEventListener('click', (event) => {
     if (!event.target.closest('#export-control')) close();
   });
@@ -122,5 +144,6 @@ export function initExportMenu() {
     if (event.key === 'Escape') close();
   });
   window.addEventListener('mod-viewer-pending-state-changed', syncModelExportAvailability);
+  window.addEventListener('mod-viewer-mesh-state-changed', syncModelExportAvailability);
   syncModelExportAvailability();
 }

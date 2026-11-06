@@ -236,7 +236,9 @@ of documentation, comments and tests; use portable fixtures instead.
   evidence belong to each exact draw's metadata object; sibling objects do not
   share candidate textures. For WWMI, only filename ordinals establish candidate
   membership; texture-hash substrings and explicit file references cannot add
-  another component's candidates. Filename associations supply choices,
+  another component's candidates. Asset Export may explicitly assign an owned
+  image to a role in that exact component/range's existing metadata; only those
+  authored role records bypass filename membership. Filename associations supply choices,
   never automatic roles. Apply semantic/slot/conditional selection once per
   draw, preserving authored execution order, no-mod-diffuse Asset eligibility
   and game-specific normal transport. Original Asset defaults select unique
@@ -415,15 +417,27 @@ of documentation, comments and tests; use portable fixtures instead.
   Do not create special `Face/` output folders. GIMI face recognition is independent
   of storage layout and never fabricates a neutral expression or changes topology.
   GIMI uses
-  a unique open-eye face anchor: one connected surface with an enclosing contour
+  an open-eye face anchor: one connected surface with an enclosing contour
   and two comparable, separated internal eye openings. Require bilateral contour
   proportions and non-collapsed apertures independently of names, ordinals or a
-  native Eyes mesh. Legacy split eye-ring anchors may instead use a unique
+  native Eyes mesh. Additional internal openings may be ignored for recognition
+  only when their diagonal is at most half the smaller eye opening's diagonal;
+  preserve their geometry and record their count. Legacy split eye-ring anchors
+  may instead use a unique
   bilateral native Eyes mesh and matching eye-loop fit. Both proofs require shared
   diffuse/light payloads on nearby direct geometry. Group that proven family
   using those two required identities; extra recognized maps and
   unclassified candidates do not disqualify the family. Duplicate-pass exclusion
   also requires matching additional recognized material identities.
+  A unique anchor includes its nearby material family. If multiple supported
+  anchors compete, retain one best-effort anchor and its exact equivalent passes,
+  preferring candidates with proven captured-matrix placement, then connected-surface
+  coverage, fewer small openings and stable content/resource identity. Share native
+  replay validation between candidate ranking and final family placement. If none
+  can be placed, retain the topology-based fallback with unresolved placement.
+  Leave competing anchors and unproven attachments excluded;
+  record the ambiguity in provenance/diagnostics and mark extraction partial.
+  This fallback never relaxes material/topology or captured-matrix placement checks.
   Label the family independently of placement; retain source positions and UVs
   in analysis. Equivalent facial passes require matching rendered attributes,
   resource versions, ranges and materials before excluding a duplicate by default.
@@ -524,9 +538,32 @@ of documentation, comments and tests; use portable fixtures instead.
   Read geometry-object metadata once per index build and reuse that document
   through validation and record construction; each new build reads fresh data.
   Warn about discarded object metadata while retaining valid sibling objects.
-  Direct Assets never synthesize INIs/mods, modify sources or write
-  `.mod_viewer.json`; source paths stay within registered roots and texture
-  choices remain session-only. Ambiguity may yield candidates, never bindings.
+  Direct Assets never synthesize INIs/mods or write `.mod_viewer.json`.
+  Texture choices stay pending until Asset-only Export updates `texture_hashes`
+  in the existing `hash.json` or `Metadata.json` at the loader-proven component
+  and range. Store metadata-relative image references and explicit role clears;
+  retain captured native hashes for the same source file and never copy a role's
+  previous hash to a newly selected file. Preserve unedited parts and roles,
+  including unavailable textures, rather than saving a rendered null as a clear.
+  Only manual diffuse overrides and manually edited map roles on independent
+  texture-run owners are edits; inherited rendered changes never author metadata.
+  Never fabricate hashes for new files. Preserve unassigned images as unclassified
+  candidates, geometry, image bytes and unrelated metadata. There is no separate
+  assignment JSON.
+  Commit all participating metadata and the rebuilt Asset index under one shared
+  config transaction; restore their exact previous bytes if any step fails.
+  Only the current backend-issued preview session
+  may save changed parts/roles and published/native-picked texture keys.
+  Reject stale metadata revisions, role mismatches and images outside that Asset.
+  Reopen, Asset Fill and automatic mod texture defaults consume those same native
+  records lazily, including explicit paths without a native texture hash. A
+  per-role range marker identifies these deliberate selections without weakening
+  ordinary WWMI filename-membership rules. Mods and archives
+  cannot invoke this save path. Exact owned image references may be deeper than
+  the bounded discovery inventory. A successful save updates live Automatic
+  defaults while preserving newer pending choices. Ambiguity may yield
+  candidates, never bindings. Block model transitions while an Asset save runs,
+  so a switch cannot offer to discard a write already in progress.
 - Asset Fill treats an authored component/range as handled when its component
   identity is present in the mod, including staged documents. Geometry overrides
   and component-level `handling = skip` prevent restoration. Proven texture-only

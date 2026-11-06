@@ -134,6 +134,7 @@ def viewer(edge_browser, frontend_url):
               const path = state.nextPath || null; state.nextPath = null; return path;
             }),
             load_asset: call('asset', path => window.__fixtureLoad(path)),
+            export_asset_textures: call('assetTextures', {saved: 1}),
             has_pending_changes: call('pending', path => !!state.pending[path]),
             discard_changes: call('discard', path => {state.pending[path] = false;}),
             export_changes: call('export', path => {

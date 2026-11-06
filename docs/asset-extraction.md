@@ -1,5 +1,19 @@
 # Asset extraction
 
+While an Asset is open, assign textures in the mesh panel, then click **Export**
+or **Export → Save Asset Textures** to save the current assignments. Export
+enables when an assignment changes; the Edited indicator clears after a successful
+save. Export saves edited parts and roles, preserving untouched assignments even
+when their images are unavailable. Changes inherited from another mesh stay
+inherited. Deliberate clears are saved too. Model switching waits until saving
+finishes. Export permanently updates the texture records
+in the Asset's existing `hash.json` or `Metadata.json` and refreshes its index.
+Those records are used when the Asset is reopened and when textures are assigned
+automatically to matching mods. Automatic uses the newly saved defaults immediately.
+No separate assignment JSON is created. Choose images from
+inside the open Asset folder. This action is available only for an open Asset;
+mod Export keeps its existing behavior.
+
 Right-click an Asset Folder and choose **Add asset**.
 Enter a name, choose the frame-dump folder with Browse, and click OK. The new
 asset is indexed automatically. Right-click an indexed asset and choose
@@ -137,6 +151,13 @@ payloads on related geometry. Legacy split eye rings can instead use a bilateral
 native Eyes reference and matching eye-loop fit.
 Additional recognized maps, such as NormalMap, and unclassified texture candidates
 do not prevent grouping; duplicate passes still require matching recognized maps.
+Small additional internal openings do not prevent recognition when their diagonal
+is at most half the smaller eye opening's diagonal. Their geometry remains intact.
+When several supported facial anchors compete, extraction retains one best-effort
+face, preferring greater connected-surface coverage and fewer small openings, with
+a stable content/resource tie break. Competing candidates and unproven attachments
+stay excluded. The report records this ambiguity and the result is marked partial;
+captured-matrix placement must still pass its existing checks.
 Related nearby direct meshes receive facial labels independently of placement.
 Equivalent captured facial passes are excluded by default while their
 provenance remains in the report; differing UVs or ambiguous references stay separate.
