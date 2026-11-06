@@ -1,4 +1,5 @@
 export default {
+  'asset.removeSection': 'Remove',
   'settings.title': 'Settings',
   'settings.autoRestore': 'Auto restore missing mod parts from assets',
   'settings.autoRestoreDescription':
@@ -50,8 +51,8 @@ export default {
   'toolbar.chooseExport': 'Choose export format',
   'toolbar.exportOptions': 'Export options',
   'toolbar.exportEdits': 'Save Mod Edits',
-  'toolbar.exportAssetTextures': 'Save Asset Textures',
-  'confirm.unsavedAssetTextures': 'This Asset has unsaved texture assignments. Discard them and continue?',
+  'toolbar.exportAssetTextures': 'Save Asset Edits',
+  'confirm.unsavedAssetTextures': 'This Asset has unsaved edits. Discard them and continue?',
   'toolbar.exportGlb': 'Blender / glTF (.glb)…',
   'model.exportingGlb': 'Exporting model for Blender…',
   'model.exportNoMeshes': 'No visible meshes to export.',

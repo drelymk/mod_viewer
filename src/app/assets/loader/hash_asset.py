@@ -77,7 +77,8 @@ def _file_list(root):
                     try:
                         if entry.is_file(follow_symlinks=False):
                             result.append(os.path.abspath(entry.path))
-                        elif entry.is_dir(follow_symlinks=False):
+                        elif (entry.is_dir(follow_symlinks=False)
+                              and not asset_paths.is_disabled_folder(entry.name)):
                             visit(entry.path, depth + 1)
                     except OSError:
                         continue
@@ -583,7 +584,8 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
         if not isinstance(candidates, list):
             candidates = []
         for metadata_path in [*candidates, geometry.get("metadata")]:
-            if metadata_path and metadata_path not in metadata_paths:
+            if (metadata_path and not asset_paths.is_disabled_path(metadata_path, file=True)
+                    and metadata_path not in metadata_paths):
                 metadata_paths.append(metadata_path)
     if not metadata_paths:
         raise AssetLoadError("The indexed hash.json is missing from this Asset.")

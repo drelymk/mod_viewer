@@ -2,18 +2,24 @@
 
 import { viewerState, samePath } from './state.js';
 import { syncModelExportAvailability } from './model-export.js';
-import { assetTextureExportState, exportAssetTextures, initializeAssetTextureExport } from './asset-texture-export.js';
+import {
+  assetTextureExportState,
+  exportAssetTextures,
+  initializeAssetTextureExport,
+  stageAssetSectionRemoval,
+} from './asset-texture-export.js';
 import { loadMissingAssetParts, resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
 import { shouldAutoRestoreMissingAssetParts } from '../ui/settings.js';
 import { fitTo, isRendererAvailable, setBloomSuppressedByDebug } from '../scene/scene.js';
+import { requestRender } from '../scene/render-scheduler.js';
 import { setRightDockEnabled } from '../panels/right-dock.js';
 import { clearSelection } from '../scene/selection.js';
 import { clearInspector } from '../panels/inspector-panel.js';
-import { activeMeshes, refreshAll, reset, setStateRules } from '../mesh/visibility.js';
+import { activeMeshes, refreshAll, removeMesh, reset, setStateRules } from '../mesh/visibility.js';
 import { activateMeshTextures, setTextures } from '../mesh/mesh-factory.js';
 import { buildPayloadMeshes } from '../mesh/mesh-model-builder.js';
 import { resetAnimationRuntime } from '../mesh/animation-runtime.js';
-import { buildMeshPanel, hasUnappliedMeshChanges } from '../panels/mesh-panel.js';
+import { buildMeshPanel, hasUnappliedMeshChanges, removeMeshPanelMeshes } from '../panels/mesh-panel.js';
 import { setMeshesAvailable } from '../panels/left-dock.js';
 import { buildTogglePanel } from '../panels/toggle-panel.js';
 import { buildMenuPanel } from '../panels/menu-panel.js';
@@ -275,7 +281,7 @@ export async function displayMeshPayload(
       onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
       texturePools: payload.texture_pools || {},
       assetResolution: payload.asset_resolution || null,
-      // Asset Preview has no editing session at all. An archive mod is read-only
+      // Asset Preview has no INI/mesh edit session. An archive mod is read-only
       // only at the persistence boundary; viewer controls can still stage
       // session-local state while Export remains disabled.
       readOnlySource: assetMode,
@@ -283,6 +289,17 @@ export async function displayMeshPayload(
       canPersistMetadata: !assetMode && !sourceReadOnly,
       texturePicker: assetMode
         ? (role) => window.pywebview.api.pick_asset_texture_file(viewerState.currentSource.path, role)
+        : null,
+      assetSections: assetMode ? payload.metadata?.asset?.sections : null,
+      onRemoveAssetSection: assetMode
+        ? (source) => {
+            const parts = stageAssetSectionRemoval(source);
+            if (!parts) return;
+            const removed = activeMeshes.filter((mesh) => parts.has(mesh.userData.semanticKey));
+            removeMeshPanelMeshes(removed);
+            removed.forEach(removeMesh);
+            requestRender();
+          }
         : null,
       onAllMeshChangesApplied: assetMode ? null : onReload,
     });
@@ -322,7 +339,7 @@ export async function displayMeshPayload(
   );
 
   updateAssetFillButton();
-  initializeAssetTextureExport(payload.metadata?.asset?.texture_session);
+  initializeAssetTextureExport(payload.metadata?.asset?.texture_session, payload.metadata?.asset?.sections);
   syncModelExportAvailability();
   showLoading(false);
 }

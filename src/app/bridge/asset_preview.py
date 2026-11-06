@@ -14,6 +14,7 @@ from app.assets import index as asset_index
 from app.assets import loader as asset_loader
 from app.assets import paths as asset_paths
 from app.assets import texture_assignments
+from app.assets import sections as asset_sections
 from app.assets.composition import plan_missing_asset_parts
 from app.assets.loader.models import build_asset_fill_payload
 from app.runtime import server
@@ -131,9 +132,15 @@ class AssetPreview:
                         self._texture_session = dict(
                             folder=selected, token=token, revision=revision,
                             parts={p.key: p for p in parts},
+                            sections=asset_sections.capture(entry["path"], record, parts),
                             textures={t.key: t.path for p in parts for t in (
                                 *p.texture_candidates, *p.textures.values())})
                         payload["metadata"]["asset"]["texture_session"] = token
+                        payload["metadata"]["asset"]["sections"] = {
+                            source: {"parts": [p.key for p in parts if
+                                     asset_paths.relative_asset_path(section["directory"],
+                                         os.path.join(entry["path"], p.metadata_path)) is not None]}
+                            for source, section in self._texture_session["sections"].items()}
                 return payload
             except Exception:
                 publication.discard()
@@ -189,18 +196,33 @@ class AssetPreview:
             return {"error": str(error)}
 
     @config.transaction()
-    def export_asset_textures(self, folder_path, token, textures):
-        """Save only role keys authorized by the currently open Asset preview."""
+    def export_asset_textures(self, folder_path, token, textures, removed_sections=None):
+        """Save roles and disable sections authorized by the active Asset preview."""
         try:
             selected, entry, _index, record = self._asset_selection(folder_path)
             with self._preview_lock:
                 session = self._texture_session
                 if not session or session["folder"] != selected or session["token"] != token:
                     raise ValueError("The Asset preview is no longer active. Reopen the Asset before exporting.")
-                if not isinstance(textures, dict) or not textures or not set(textures) <= set(session["parts"]):
+                removed_sections = [] if removed_sections is None else removed_sections
+                if (not isinstance(removed_sections, list)
+                        or any(not isinstance(source, str) or source not in session["sections"]
+                               for source in removed_sections)):
+                    raise ValueError("Invalid Asset section removal.")
+                if (not isinstance(textures, dict) or (not textures and not removed_sections)
+                        or not set(textures) <= set(session["parts"])):
                     raise ValueError("Asset parts changed. Reopen the Asset before exporting.")
+                if texture_assignments.capture(entry["path"], record) != session["revision"]:
+                    raise ValueError("Asset metadata changed. Reopen the Asset before exporting.")
+                directories = [session["sections"][source]["directory"] for source in removed_sections]
+                removed_parts = {key for key, part in session["parts"].items()
+                                 if any(asset_paths.relative_asset_path(directory,
+                                     os.path.join(entry["path"], part.metadata_path)) is not None
+                                        for directory in directories)}
                 assignments = {}
                 for part, roles in textures.items():
+                    if part in removed_parts:
+                        continue
                     if not isinstance(roles, dict) or not roles or not set(roles) <= set(texture_assignments.ROLES):
                         raise ValueError("Invalid Asset texture roles.")
                     resolved = {}
@@ -214,12 +236,39 @@ class AssetPreview:
                         relative = asset_paths.relative_asset_path(selected, path)
                         if not relative or not asset_paths.safe_asset_path(selected, relative):
                             raise ValueError("Choose an available texture inside the open Asset folder.")
+                        if any(asset_paths.relative_asset_path(directory, path) is not None
+                               for directory in directories):
+                            raise ValueError("A selected texture belongs to a removed Asset section.")
                         resolved[role] = relative
                     assignments[part] = resolved
-                session["revision"] = texture_assignments.save(
-                    entry["path"], record, session["parts"], assignments, session["revision"])
+                if assignments:
+                    session["revision"] = texture_assignments.save(
+                        entry["path"], record, session["parts"], assignments, session["revision"])
+                removed, failed = [], []
+                # Parents first: a legacy root section may own nested sections.
+                for source in sorted(set(removed_sections), key=lambda value: (len(value), value)):
+                    if source in removed:
+                        continue
+                    section = session["sections"][source]
+                    try:
+                        rebuilt = asset_sections.remove(
+                            entry["type"], entry["path"], record, section, session["revision"])
+                        covered = [name for name, value in session["sections"].items()
+                                   if asset_paths.relative_asset_path(section["directory"], value["directory"]) is not None]
+                        removed.extend(covered)
+                        for name in covered:
+                            del session["sections"][name]
+                        session["parts"] = {key: part for key, part in session["parts"].items()
+                                            if part.metadata_path not in covered}
+                        record = asset_index.find_asset_by_path(rebuilt, record["path"])
+                        session["revision"] = texture_assignments.capture(entry["path"], record) if record else {}
+                    except (ValueError, OSError) as error:
+                        failed.append({"section": source, "error": str(error)})
                 self.invalidate_plan_cache()
-                return {"saved": len(assignments)}
+                result = {"saved": len(assignments)}
+                if removed_sections:
+                    result.update(removed=removed, failed=failed)
+                return result
         except (PermissionError, ValueError, OSError) as error:
             return {"error": str(error)}
 

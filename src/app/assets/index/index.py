@@ -9,6 +9,7 @@ import pickle
 import threading
 
 from app.assets import folders as asset_folders
+from app.assets import paths as asset_paths
 from app.settings import config, paths
 from core.geometry.identity import normalize_geometry_hash
 from app.assets.package_format import is_viewer_metadata
@@ -78,7 +79,8 @@ def _safe_child_dirs(path, root):
         with os.scandir(path) as entries:
             for entry in entries:
                 try:
-                    if not entry.is_dir(follow_symlinks=False):
+                    if (asset_paths.is_disabled_folder(entry.name)
+                            or not entry.is_dir(follow_symlinks=False)):
                         continue
                     child = os.path.abspath(entry.path)
                     if (child and asset_folders.is_within(child, root)
@@ -338,7 +340,7 @@ def _merge_asset_records(records):
         value.casefold(), value)))
 
 
-def build_index(asset_type, root, *, exclude_paths=()):
+def build_index(asset_type, root, *, exclude_paths=(), allow_empty=False):
     """Validate a registered root and build a metadata-only index in memory."""
     if asset_type not in asset_folders.ASSET_TYPES:
         raise AssetIndexError("Asset Folder type must be GIMI, ZZMI or WWMI.")
@@ -375,7 +377,7 @@ def build_index(asset_type, root, *, exclude_paths=()):
     warnings = [item for item in warnings
                 if not any(asset_folders.is_within(os.path.join(root, item["path"]), path)
                            for path in excluded)]
-    if not children:
+    if not children and not allow_empty:
         raise NoValidAssetsError(
             "Asset Folder must contain immediate child directories.")
 
@@ -399,7 +401,7 @@ def build_index(asset_type, root, *, exclude_paths=()):
             warnings.append(_warning(root, asset_path, error))
 
     records = _merge_asset_records(records)
-    if not records:
+    if not records and not allow_empty:
         raise NoValidAssetsError(
             "No valid assets with geometry hashes were found in this folder.")
 
@@ -602,7 +604,20 @@ def lookup_geometry(index, geometry_hash):
     if geometry_hash is None or not isinstance(index, dict):
         return []
     values = index.get("byGeometryHash", {}).get(geometry_hash, [])
-    return [dict(value) for value in values if isinstance(value, dict)]
+    result = []
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        try:
+            asset = index["assets"][value["asset"]]
+            geometry = asset["geometry"][value["geometry"]]
+        except (IndexError, KeyError, TypeError):
+            continue
+        if (asset_paths.is_disabled_path(asset.get("path", ""))
+                or asset_paths.is_disabled_path(geometry.get("metadata", ""), file=True)):
+            continue
+        result.append(dict(value))
+    return result
 
 
 def find_asset_by_path(index, relative_path):
@@ -610,7 +625,7 @@ def find_asset_by_path(index, relative_path):
     if not isinstance(index, dict) or not isinstance(relative_path, str):
         return None
     requested = relative_path.replace("\\", "/").strip("/")
-    if not requested or requested in (".", ".."):
+    if not requested or requested in (".", "..") or asset_paths.is_disabled_path(requested):
         return None
     requested = "/".join(part for part in requested.split("/") if part)
     for item in index.get("assets", ()):

@@ -52,8 +52,13 @@ unproven direct candidates have separate counts. Add/Update closes on success wi
 message. Partial results show a warning because some asset parts may be missing,
 including after an update. Failures, including duplicate asset names, stay visible in the dialog.
 The dump-field description identifies the FrameAnalysis folder to select.
-Unknown texture roles remain available without
-inventing material bindings. Recognized ZZMI material signatures retain their
+All captured images from the chosen draw pass remain available without
+requiring automatic role recognition. Geometry deduplication preserves every
+pass's draw, slot, shader, resource version and payload identity in the report.
+Other passes are kept separate from the chosen pass's texture choices. If no
+material signature resolves the choice, the first captured color pass wins;
+the number of bound textures does not establish material relevance.
+Recognized ZZMI material signatures retain their
 existing role interpretation when the capture supplies ZZMI evidence.
 Recognized GIMI material signatures label diffuse maps automatically using the
 capture marker, color pass, bound resource hashes and neighboring formats/sizes.
@@ -75,8 +80,10 @@ not infer MaterialMap for GIMI. Complete GIMI material triplets take priority ov
 larger inherited resource sets; confirmed roles still take priority over pixels.
 GIMI exports preserve unclassified textures as selectable candidates, including
 when a diffuse is recognized. Unknown roles never become automatic material
-bindings. Resources with auxiliary or unusable evidence remain in the report;
-debug exports can include their original payloads under `assets/`.
+bindings. Auxiliary inputs from the chosen pass remain candidates without
+automatic roles. Other passes remain in the report; debug exports can include
+their original payloads under `assets/`. Unsupported image formats may be
+retained in the export without being displayable by the texture picker.
 RGB pixel inspection resizes independently of alpha so near-zero data alpha does
 not distort the analyzed colors. Export preserves the original texture bytes.
 

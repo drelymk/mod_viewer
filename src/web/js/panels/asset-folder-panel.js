@@ -235,6 +235,15 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
     return tree.applyResponse(response);
   }
 
+  window.addEventListener('mod-viewer-asset-sections-exported', async () => {
+    try {
+      const response = await (await bridgeReady()).get_asset_folders();
+      for (const entry of response.folders || []) tree.updateRoot(entry, { refreshChildren: true });
+    } catch (caught) {
+      setTextError(error, caught.message || String(caught));
+    }
+  });
+
   function closeEditor(force = false) {
     if (editorBusy && !force) return;
     backdrop.classList.remove('show');

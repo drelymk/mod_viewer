@@ -1,6 +1,7 @@
 export default {
-  'toolbar.exportAssetTextures': 'アセットのテクスチャを保存',
-  'confirm.unsavedAssetTextures': 'このアセットには未保存のテクスチャ割り当てがあります。変更を破棄して続行しますか？',
+  'asset.removeSection': '削除',
+  'toolbar.exportAssetTextures': 'アセットの変更を保存',
+  'confirm.unsavedAssetTextures': 'このアセットには未保存の変更があります。変更を破棄して続行しますか？',
   'settings.title': '設定',
   'settings.autoRestore': '不足している Mod パーツをアセットから自動復元',
   'settings.autoRestoreDescription':

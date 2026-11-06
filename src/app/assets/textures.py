@@ -75,7 +75,8 @@ def texture_directory_files(directory, *, recursive):
         except OSError:
             files = []
     return sorted((filename for filename in files
-                   if filename.casefold().endswith(IMAGE_EXTENSIONS)),
+                   if filename.casefold().endswith(IMAGE_EXTENSIONS)
+                   and not asset_paths.is_disabled_path(filename, file=True)),
                   key=lambda value: (value.casefold(), value))
 
 

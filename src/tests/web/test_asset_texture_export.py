@@ -4,6 +4,59 @@ from .payloads import textured_payload
 from .support import bridge_calls, wait_loaded
 
 
+def test_asset_section_context_remove_failure_retry_last_section_and_switch_guard(viewer):
+    payload = textured_payload(3)
+    keys = list(payload['meshes'])
+    first, second = 'Asset01/00000001/hash.json', 'Asset01/00000002/hash.json'
+    for ordinal, mesh in enumerate(payload['meshes'].values()):
+        mesh['source'] = first if ordinal < 2 else second
+    payload['metadata'].update(source_kind='asset', asset={
+        'texture_session': 'session-01', 'sections': {
+            first: {'parts': keys[:2]}, second: {'parts': keys[2:]}}})
+    page = viewer({'asset-01': payload, 'asset-02': payload})
+    page.evaluate("""() => {
+      window.__assetLoad = window.modViewer.switchAsset('asset-01',{asset:true});
+      window.__assetLoad.then(value => window.__assetLoaded = value);
+    }""")
+    page.wait_for_function('window.__assetLoaded !== undefined || document.querySelector("#dialog-backdrop").classList.contains("show")')
+    assert not page.locator('#dialog-backdrop.show').count(), page.locator('#dialog-message').inner_text()
+    assert page.evaluate('window.__assetLoad')
+    wait_loaded(page, 3)
+    assert page.locator('.mesh-src-hdr .group-name').all_text_contents() == [first, second]
+    page.locator('.mesh-src-hdr').first.click(button='right')
+    remove = page.locator('.mesh-context-menu [data-i18n="asset.removeSection"]')
+    assert remove.inner_text() == 'Remove'
+    remove.click()
+    page.wait_for_function('window.modViewer.activeMeshes.length === 1')
+    assert page.locator('.mesh-src-hdr .group-name').all_text_contents() == [second]
+    assert bridge_calls(page, 'assetTextures') == []
+    assert page.locator('#export-btn').is_enabled()
+    page.evaluate("""source => window.__bridge.results.assetTextures = {
+        saved:0, removed:[], failed:[{section:source,error:'synthetic rename failure'}]
+      }""", first)
+    page.locator('#export-btn').click()
+    page.locator('#dialog-backdrop.show').wait_for()
+    page.locator('#dialog-ok').click()
+    assert page.locator('#pending-indicator').is_visible()
+    page.evaluate("source => window.__bridge.results.assetTextures = {saved:0,removed:[source],failed:[]}", first)
+    page.locator('#export-btn').click()
+    page.wait_for_function('document.querySelector("#export-btn").disabled')
+    assert bridge_calls(page, 'assetTextures')[-1] == ['asset-01', 'session-01', {}, [first]]
+    page.locator('.mesh-src-hdr').click(button='right')
+    remove.click()
+    page.wait_for_function('window.modViewer.activeMeshes.length === 0')
+    assert page.locator('.mesh-src-hdr').count() == 0
+    page.evaluate("() => { window.__switch=window.modViewer.switchAsset('asset-02',{asset:true}); }")
+    page.locator('#dialog-backdrop.show').wait_for()
+    page.locator('#dialog-cancel').click()
+    assert page.evaluate('window.__switch') is False
+    page.evaluate("source => window.__bridge.results.assetTextures = {saved:0,removed:[source],failed:[]}", second)
+    page.locator('#export-btn').click()
+    page.wait_for_function('document.querySelector("#export-btn").disabled')
+    assert bridge_calls(page, 'assetTextures')[-1] == ['asset-01', 'session-01', {}, [second]]
+    assert page.locator('#pending-indicator').is_hidden()
+
+
 def test_asset_texture_export_failure_retry_pending_edits_and_stale_completion(module_page):
     module_page.route('**/js/mesh/mesh-state.js', lambda route: route.fulfill(
         content_type='text/javascript', body='''

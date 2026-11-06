@@ -1,6 +1,7 @@
 export default {
-  'toolbar.exportAssetTextures': '保存资源纹理',
-  'confirm.unsavedAssetTextures': '此资源有尚未保存的纹理分配。要放弃更改并继续吗？',
+  'asset.removeSection': '移除',
+  'toolbar.exportAssetTextures': '保存资源更改',
+  'confirm.unsavedAssetTextures': '此资源有尚未保存的更改。要放弃更改并继续吗？',
   'settings.title': '设置',
   'settings.autoRestore': '从资产自动恢复模组缺失部件',
   'settings.autoRestoreDescription': '模组加载后，从资产库中匹配的资产恢复缺失的原始部件。恢复的部件仅用于预览。',

@@ -3,6 +3,7 @@
 import copy
 import json
 import shutil
+from pathlib import Path
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,6 +11,9 @@ from PIL import Image
 import pytest
 
 from app.assets import index, loader, texture_assignments
+from app.assets import sections as asset_sections
+from app.assets import paths as asset_paths
+from app.assets import textures as asset_textures
 from app.assets.package_format import FORMAT
 from app.bridge.api import ModViewerAPI
 from app.settings import paths
@@ -71,6 +75,158 @@ def _snapshot(payload):
                   light_map="light_map_key", material_map="material_map_key", emission_map="emission_map_key")
     return {key: {role: mesh.get(field) for role, field in fields.items()}
             for key, mesh in payload["meshes"].items()}
+
+
+@pytest.mark.parametrize("asset_case", ["GIMI", "ZZMI", "WWMI"], indirect=True)
+def test_asset_sections_disable_export_retry_restore_and_last_folder(asset_case, monkeypatch):
+    case = asset_case
+    payload = case.api.load_asset(str(case.asset))
+    metadata = payload["metadata"]["asset"]
+    token = metadata["texture_session"]
+    first, second = metadata["sections"]
+    assert {mesh["source"] for mesh in payload["meshes"].values()} == {first, second}
+    assert metadata["sections"][first]["parts"] == [next(iter(payload["meshes"]))]
+    original = _native_snapshot(case)
+    previous_index = index.snapshot_index(case.kind, str(case.root))
+    original_rename = asset_sections.os.rename
+    fail = True
+
+    def rename(source, destination):
+        if fail:
+            raise OSError("Synthetic rename failure")
+        return original_rename(source, destination)
+
+    monkeypatch.setattr(asset_sections.os, "rename", rename)
+    for invalid in (["invented"], [str(case.asset)], ["../hash.json"], "hash.json", [42]):
+        assert "error" in case.api.export_asset_textures(str(case.asset), token, {}, invalid)
+    failed = case.api.export_asset_textures(str(case.asset), token, {}, [first])
+    assert failed["removed"] == [] and failed["failed"][0]["section"] == first
+    assert _native_snapshot(case) == original
+    assert index.snapshot_index(case.kind, str(case.root)) == previous_index
+    fail = False
+    files = {p.relative_to(case.asset / "00000001"): p.read_bytes()
+             for p in (case.asset / "00000001").rglob("*") if p.is_file()}
+    assert case.api.export_asset_textures(str(case.asset), token, {}, [first]) == {
+        "saved": 0, "removed": [first], "failed": []}
+    disabled = case.asset / "DISABLED_00000001"
+    assert not (case.asset / "00000001").exists()
+    assert {p.relative_to(disabled): p.read_bytes() for p in disabled.rglob("*") if p.is_file()} == files
+    record, = index.load_index(case.kind, str(case.root))["assets"]
+    assert len(loader.load_asset_parts(case.kind, str(case.root), record).parts) == 1
+    assert len(index.build_index(case.kind, str(case.root))["assets"][0]["geometry"]) == 1
+    assert "error" in case.api.export_asset_textures(str(case.asset), token, {}, [first])
+    assert case.api.export_asset_textures(str(case.asset), token, {}, [second]) == {
+        "saved": 0, "removed": [second], "failed": []}
+    assert (case.asset / "DISABLED_00000002").is_dir()
+    assert index.load_index(case.kind, str(case.root))["assets"] == []
+    assert index.build_index(case.kind, str(case.root), allow_empty=True)["assets"] == []
+    disabled.rename(case.asset / "00000001")
+    index.save_index(index.build_index(case.kind, str(case.root)))
+    assert len(case.api.load_asset(str(case.asset))["meshes"]) == 1
+
+
+@pytest.mark.parametrize("failure", ["build", "save", "revision", "identity", "collision"])
+def test_asset_section_removal_preserves_data_on_preflight_failure(asset_case, monkeypatch, failure):
+    case = asset_case
+    payload = case.api.load_asset(str(case.asset))
+    metadata = payload["metadata"]["asset"]
+    source = next(iter(metadata["sections"]))
+    if failure == "revision":
+        with _metadata(case).open("a") as stream:
+            stream.write("\n")
+    elif failure == "identity":
+        folder = case.asset / "00000001"
+        retained = case.asset / "retained"
+        folder.rename(retained)
+        shutil.copytree(retained, folder)
+    elif failure == "collision":
+        disabled = case.asset / "DISABLED_00000001"
+        disabled.mkdir()
+        (disabled / "retained.json").write_text('{"keep": true}')
+    else:
+        name = "build_index" if failure == "build" else "save_index"
+        original_operation = getattr(index, name)
+        def fail(*args, **kwargs):
+            if failure == "save":
+                original_operation(*args, **kwargs)
+            raise OSError("Synthetic index failure")
+        monkeypatch.setattr(index, name, fail)
+    original = _native_snapshot(case)
+    previous_index = index.snapshot_index(case.kind, str(case.root))
+    result = case.api.export_asset_textures(str(case.asset), metadata["texture_session"], {}, [source])
+    assert "error" in result or result["failed"]
+    assert _native_snapshot(case) == original
+    assert index.snapshot_index(case.kind, str(case.root)) == previous_index
+
+
+def test_asset_section_removal_keeps_surviving_texture_edits_and_rejects_stale_preview(asset_case):
+    case = asset_case
+    payload = case.api.load_asset(str(case.asset))
+    metadata = payload["metadata"]["asset"]
+    first, second = metadata["sections"]
+    part = metadata["sections"][second]["parts"][0]
+    assert case.api.export_asset_textures(str(case.asset), metadata["texture_session"], {
+        part: {"diffuse": None}}, [first]) == {"saved": 1, "removed": [first], "failed": []}
+    fresh = case.api.load_asset(str(case.asset))
+    assert fresh["meshes"][part]["tex_key"] is None
+    assert "error" in case.api.export_asset_textures(str(case.asset), metadata["texture_session"], {}, [second])
+    assert (case.asset / "00000002").is_dir()
+
+
+def test_legacy_root_section_disables_its_descendants_once(asset_case):
+    case = asset_case
+    path = _metadata(case)
+    document = json.loads(path.read_bytes())
+    for row in document["components"][0]["texture_hashes"]:
+        for item in row:
+            item[3] = "00000001/" + item[3]
+    (case.asset / "hash.json").write_text(json.dumps(document))
+    path.unlink()
+    index.save_index(index.build_index(case.kind, str(case.root)))
+    payload = case.api.load_asset(str(case.asset))
+    metadata = payload["metadata"]["asset"]
+    parent = "Asset01/hash.json"
+    assert set(metadata["sections"][parent]["parts"]) == set(payload["meshes"])
+    original = {p.relative_to(case.asset): p.read_bytes() for p in case.asset.rglob("*") if p.is_file()}
+    result = case.api.export_asset_textures(str(case.asset), metadata["texture_session"], {}, list(metadata["sections"]))
+    assert set(result["removed"]) == set(metadata["sections"]) and not result["failed"]
+    disabled = case.root / "DISABLED_Asset01"
+    assert not case.asset.exists()
+    assert {p.relative_to(disabled): p.read_bytes() for p in disabled.rglob("*") if p.is_file()} == original
+    assert index.load_index(case.kind, str(case.root))["assets"] == []
+
+
+@pytest.mark.parametrize("asset_case", ["GIMI", "ZZMI", "WWMI"], indirect=True)
+def test_disabled_folders_are_excluded_from_discovery_cached_records_and_resources(asset_case):
+    case = asset_case
+    stale_record = index.load_index(case.kind, str(case.root))["assets"][0]
+    disabled = case.asset / "dIsAbLeD_old"
+    shutil.copytree(case.asset / "00000001", disabled)
+    shutil.copytree(case.asset, case.root / "DISABLED_Copy")
+    rebuilt = index.build_index(case.kind, str(case.root))
+    assert rebuilt["stats"]["assetCount"] == 1
+    assert len(rebuilt["assets"][0]["geometry"]) == 2
+    assert rebuilt["stats"]["skippedCount"] == 0
+    marker = "Metadata.json" if case.kind == "WWMI" else "hash.json"
+    relative = f"Asset01/dIsAbLeD_old/{marker}"
+    geometry = stale_record["geometry"][0]
+    geometry["metadata"] = relative
+    geometry["metadataPaths"] = [relative]
+    assert not index.lookup_geometry({**rebuilt, "assets": [stale_record]}, geometry["hash"])
+    loaded = loader.load_asset_parts(case.kind, str(case.root), stale_record)
+    assert len(loaded.parts) == 1 and loaded.parts[0].metadata_path != relative
+    assert asset_paths.safe_asset_path(str(case.root), relative) is None
+    assert asset_paths.safe_asset_dir(str(case.root), "DISABLED_Copy") is None
+    assert "error" in case.api.load_asset(str(case.root / "DISABLED_Copy"))
+    inventory = loader.hash_asset._file_list(str(case.asset))
+    assert not any(part.casefold().startswith("disabled")
+                   for path in inventory for part in Path(path).relative_to(case.asset).parts[:-1])
+    assert not any(part.casefold().startswith("disabled")
+                   for filename in asset_textures.texture_directory_files(str(case.asset), recursive=True)
+                   for part in Path(filename).parts[:-1])
+    filename = case.asset / "DISABLED_preview.png"
+    filename.write_bytes(b"synthetic data")
+    assert asset_paths.safe_asset_path(str(case.root), "Asset01/DISABLED_preview.png") == str(filename)
 
 
 def _changes(before, after):
