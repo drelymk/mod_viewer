@@ -189,8 +189,18 @@ of documentation, comments and tests; use portable fixtures instead.
   previously supported geometry merely because recognition fails. Validate
   geometry changes against representative compatibility cases; unexplained
   geometry loss is a regression.
+- Static geometry may use bounded NumPy batches. Preserve exact packed bytes,
+  source vertex IDs, triangle order and winding; select the scalar path for
+  prepared animations, sparse shapes, unsupported layouts and malformed data.
+  Read through the same ModSource/BufferStore and shared resource resolver;
+  never weld by position or let array views outlive their load-owned bytes.
 - Preserve authored normals; reconstruct only as fallback and never weld solely
   for smoothing. Normalize winding independently of authored normal direction.
+  All normal consumers share `decode_normals`; large supported inputs use bounded
+  batches with scalar-equivalent Float64 arithmetic, canonical Float32 bytes and
+  unchanged whole-stream validity/plausibility checks. Missing animation elements
+  retain zero-read semantics. Shared strided array views validate layouts only;
+  attribute-specific validation stays with each decoder and views stay load-local.
 - Deduplicate normalized effective buffer/material state. Classify new draw
   fields explicitly as render identity, visibility or provenance; do not derive
   identity reflectively from every field. Preserve numeric VB slots and the

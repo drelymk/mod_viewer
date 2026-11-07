@@ -557,9 +557,10 @@ def build(onedir=False, console=False, python=None):
             # analysis can miss them.
             "--hidden-import", "webview.platforms.edgechromium",
             "--hidden-import", "clr_loader",
+            # Include the installed NumPy distribution's license notices.
+            "--copy-metadata", "numpy",
             # Trimming these keeps the single-file payload from ballooning.
             "--exclude-module", "tkinter",
-            "--exclude-module", "numpy",
             "--exclude-module", "matplotlib",
             "--exclude-module", "pytest",
             os.path.join(HERE, ENTRY),

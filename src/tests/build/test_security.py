@@ -121,6 +121,10 @@ def test_pyinstaller_command_bundles_third_party_notices(monkeypatch):
     notice_index = command.index("--add-data", first_data + 1)
     assert command[notice_index:notice_index + 2] == [
         "--add-data", notice_data]
+    assert not any(command[index:index + 2] == ["--exclude-module", "numpy"]
+                   for index in range(len(command) - 1))
+    metadata_index = command.index("--copy-metadata")
+    assert command[metadata_index:metadata_index + 2] == ["--copy-metadata", "numpy"]
 
 
 def test_fetch_assets_rejects_tampered_cached_asset(tmp_path, monkeypatch):

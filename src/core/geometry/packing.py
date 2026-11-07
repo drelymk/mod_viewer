@@ -61,6 +61,34 @@ class PreparedDrawVertices:
     zero_out_of_bounds: bool = False
 
 
+def _resolve_vertex_streams(draw, group, *, mod_dir, default_streams, buffers,
+                            source=None):
+    """Resolve one draw's streams for both packing implementations."""
+    resolve = source.resolve_resource if source is not None \
+        else lambda value: safe_resource_path(mod_dir, value)
+    exists = source.is_file if source is not None else os.path.exists
+    draw_pos_path = resolve(draw.position_file)
+    draw_tc_path = resolve(draw.texcoord_file)
+    if not (draw_pos_path and draw_tc_path
+            and exists(draw_pos_path) and exists(draw_tc_path)):
+        return None
+    position_stride = (draw.position_stride if draw.position_stride is not None
+                       else default_streams.position_stride)
+    texcoord_stride = (draw.texcoord_stride if draw.texcoord_stride is not None
+                       else default_streams.texcoord_stride)
+    same = source.same_reference if source is not None \
+        else lambda left, right: left == right
+    if (not same(draw_pos_path, resolve(group["position_file"]))
+            or not same(draw_tc_path, resolve(group["texcoord_file"]))
+            or position_stride != default_streams.position_stride
+            or texcoord_stride != default_streams.texcoord_stride):
+        streams = buffers.vertex_streams(
+            draw_pos_path, position_stride, draw_tc_path, texcoord_stride)
+    else:
+        streams = default_streams
+    return streams, draw_pos_path, draw_tc_path
+
+
 def _prepare_draw_vertices(
     draw: DrawCall,
     group,
@@ -90,40 +118,30 @@ def _prepare_draw_vertices(
     # against the vertex buffer.
     if draw.base:
         raw = [value + draw.base for value in raw]
-    # Reject before buffer decoding, where negative offsets could be treated as
-    # end-relative instead of failing safely.
-    if any(index < 0 for index in raw):
+    # Buffer indices are unsigned; only a base offset can make them negative.
+    # Reject before decoding can treat negative offsets as end-relative.
+    if draw.base and any(index < 0 for index in raw):
         return None
 
-    draw_pos_path = resolve(draw.position_file)
-    draw_tc_path = resolve(draw.texcoord_file)
-    if not (draw_pos_path and draw_tc_path
-            and exists(draw_pos_path)
-            and exists(draw_tc_path)):
+    resolved = _resolve_vertex_streams(
+        draw, group, mod_dir=mod_dir, default_streams=default_streams,
+        buffers=buffers, source=source)
+    if resolved is None:
         return None
-    draw_position_stride = (
-        draw.position_stride
-        if draw.position_stride is not None else default_streams.position_stride)
-    draw_texcoord_stride = (
-        draw.texcoord_stride
-        if draw.texcoord_stride is not None else default_streams.texcoord_stride)
-    same = source.same_reference if source is not None \
-        else lambda left, right: left == right
-    if (not same(draw_pos_path, resolve(group["position_file"]))
-            or not same(draw_tc_path, resolve(group["texcoord_file"]))
-            or draw_position_stride != default_streams.position_stride
-            or draw_texcoord_stride != default_streams.texcoord_stride):
-        draw_streams = buffers.vertex_streams(
-            draw_pos_path, draw_position_stride,
-            draw_tc_path, draw_texcoord_stride)
-    else:
-        draw_streams = default_streams
+    draw_streams, draw_pos_path, draw_tc_path = resolved
 
     pos_data = draw_streams.position_data
     tc_data = draw_streams.texcoord_data
+    position_stride = draw_streams.position_stride
+    texcoord_stride = draw_streams.texcoord_stride
+    pos_size = len(pos_data)
+    tc_size = len(tc_data) if tc_data else 0
     uv_offset = draw_streams.uv_offset
-    uv_format = draw_streams.uv_format
-    uv_size = struct.calcsize(uv_format)
+    position_unpack = struct.Struct("<fff").unpack_from
+    uv_struct = struct.Struct(draw_streams.uv_format)
+    uv_unpack = uv_struct.unpack_from
+    uv_size = uv_struct.size
+    isfinite = math.isfinite
     decoded_vertices = {}
     missing = object()
     referenced = set(raw) if vertex_union is not None else None
@@ -132,31 +150,31 @@ def _prepare_draw_vertices(
         cached = decoded_vertices.get(index, missing)
         if cached is not missing:
             return cached
-        pos_offset = index * draw_streams.position_stride + POSITION_OFFSET
+        pos_offset = index * position_stride + POSITION_OFFSET
         if pos_offset < 0:
             decoded_vertices[index] = None
             return None
-        if pos_offset + 12 > len(pos_data):
+        if pos_offset + 12 > pos_size:
             if not zero_out_of_bounds:
                 decoded_vertices[index] = None
                 return None
             x = y = z = 0.
         else:
-            x, y, z = struct.unpack_from("<fff", pos_data, pos_offset)
-        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+            x, y, z = position_unpack(pos_data, pos_offset)
+        if not (isfinite(x) and isfinite(y) and isfinite(z)):
             decoded_vertices[index] = None
             return None
         u = v = None
         if tc_data:
-            tc_offset = index * draw_streams.texcoord_stride + uv_offset
-            if tc_offset < 0 or tc_offset + uv_size > len(tc_data):
+            tc_offset = index * texcoord_stride + uv_offset
+            if tc_offset < 0 or tc_offset + uv_size > tc_size:
                 if referenced is None or index in referenced:
                     decoded_vertices[index] = None
                     return None
                 u, v = 0., 1.
             else:
-                u, v = struct.unpack_from(uv_format, tc_data, tc_offset)
-            if not (math.isfinite(u) and math.isfinite(v)):
+                u, v = uv_unpack(tc_data, tc_offset)
+            if not (isfinite(u) and isfinite(v)):
                 decoded_vertices[index] = None
                 return None
         decoded = (x, y, z, u, v)
@@ -167,15 +185,14 @@ def _prepare_draw_vertices(
     append_valid = valid_raw.append
     reverse_winding = geometry_convention.reverse_winding
     decode = decode_vertex
-    for triangle_start in range(0, len(raw) - 2, 3):
-        a = raw[triangle_start]
-        b = raw[triangle_start + 1]
-        c = raw[triangle_start + 2]
-        if decode(a) is None:
+    cached = decoded_vertices.get
+    indices = iter(raw)
+    for a, b, c in zip(indices, indices, indices):
+        if cached(a) is None and decode(a) is None:
             continue
-        if decode(b) is None:
+        if cached(b) is None and decode(b) is None:
             continue
-        if decode(c) is None:
+        if cached(c) is None and decode(c) is None:
             continue
         append_valid(a)
         if reverse_winding:
@@ -189,7 +206,9 @@ def _prepare_draw_vertices(
     raw = valid_raw
 
     used = sorted(set(raw) if vertex_union is None else vertex_union)
-    if any(decode_vertex(vertex) is None for vertex in used):
+    # Ordinary draws already validated every retained vertex in the loop above.
+    if vertex_union is not None and any(
+            decode_vertex(vertex) is None for vertex in used):
         return None
     return PreparedDrawVertices(
         raw_indices=raw, used_vertices=used,
@@ -203,9 +222,9 @@ def _prepare_draw_vertices(
 class _ShapeBuffer:
     shape: dict
     target_data: bytes | dict
-    target_bytes: bytearray
     sparse: bool
     low_data: bytes | None = None
+    target_bytes: bytearray | None = None
     low_bytes: bytearray | None = None
 
 
@@ -254,9 +273,9 @@ def _decode_sparse_shape(shape, *, buffers, mod_dir, sparse_shape_cache,
     return sparse
 
 
-def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path, used,
+def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path,
                          buffers, sparse_shape_cache, source=None):
-    """Load and prepare dense or sparse shape targets for one draw."""
+    """Load shape inputs; each packer owns its output allocation."""
     shape_buffers = []
     for shape in shape_sliders or []:
         resolve = source.resolve_resource if source is not None \
@@ -274,29 +293,43 @@ def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path, used,
                 sparse_shape_cache=sparse_shape_cache, source=source)
             if sparse is None:
                 continue
-            shape_buffers.append(_ShapeBuffer(
-                shape, sparse,
-                bytearray(len(used) * 12), True))
+            shape_buffers.append(_ShapeBuffer(shape, sparse, True))
         else:
             target_path = resolve(shape["target_file"])
             if not target_path or not exists(target_path):
                 continue
             target_data = buffers.raw(target_path)
             low_data = None
-            low_bytes = None
             if shape.get("low_file"):
                 low_path = resolve(shape["low_file"])
                 if not low_path or not exists(low_path):
                     continue
                 low_data = buffers.raw(low_path)
-                low_bytes = bytearray(len(used) * 12)
             shape_buffers.append(_ShapeBuffer(
-                shape, target_data, bytearray(len(used) * 12), False,
-                low_data, low_bytes))
+                shape, target_data, False, low_data))
     return shape_buffers
 
 
 def pack_draw_geometry(
+    draw: DrawCall, group, *, mod_dir, default_streams, default_index_size,
+    buffers: BufferStore, geometry_convention: GeometryConvention,
+    sparse_shape_cache, source=None, prepared=None,
+):
+    """Pack ordinary static draws in batches, retaining the conservative path."""
+    options = dict(
+        mod_dir=mod_dir, default_streams=default_streams,
+        default_index_size=default_index_size, buffers=buffers,
+        geometry_convention=geometry_convention,
+        sparse_shape_cache=sparse_shape_cache, source=source)
+    if prepared is None:
+        from .batch_packing import try_pack_draw_geometry
+        packed = try_pack_draw_geometry(draw, group, **options)
+        if packed is not None:
+            return packed
+    return _pack_draw_geometry_python(draw, group, prepared=prepared, **options)
+
+
+def _pack_draw_geometry_python(
     draw: DrawCall,
     group,
     *,
@@ -346,16 +379,30 @@ def pack_draw_geometry(
                 zero_out_of_bounds=prepared.zero_out_of_bounds)
 
     shape_buffers = _build_shape_buffers(
-        group.get("shape_sliders"), mod_dir, prepared.position_path, used,
+        group.get("shape_sliders"), mod_dir, prepared.position_path,
         buffers, sparse_shape_cache, source=source)
+    for item in shape_buffers:
+        item.target_bytes = bytearray(len(used) * 12)
+        if item.low_data is not None:
+            item.low_bytes = bytearray(len(used) * 12)
     uv_bytes = bytearray(len(used) * 8) if tc_data else None
     bounds_min = [math.inf, math.inf, math.inf]
     bounds_max = [-math.inf, -math.inf, -math.inf]
     position_struct = struct.Struct("<fff")
     uv_struct = struct.Struct("<ff")
+    position_pack = position_struct.pack_into
+    position_unpack = position_struct.unpack_from
+    uv_pack = uv_struct.pack_into
+    decoded_vertices = prepared.decoded_vertices
+    # Shape layouts and buffer sizes stay fixed while packing this draw.
+    shape_inputs = [
+        (item, 0 if item.sparse else item.shape["stride"],
+         len(item.target_data), len(item.low_data) if item.low_data is not None else 0)
+        for item in shape_buffers]
     for output_index, vertex_index in enumerate(used):
-        x, y, z, u, v = prepared.decoded_vertices[vertex_index]
-        position_struct.pack_into(pos_bytes, output_index * 12, x, y, z)
+        position_offset = output_index * 12
+        x, y, z, u, v = decoded_vertices[vertex_index]
+        position_pack(pos_bytes, position_offset, x, y, z)
         if x < bounds_min[0]:
             bounds_min[0] = x
         if y < bounds_min[1]:
@@ -368,31 +415,30 @@ def pack_draw_geometry(
             bounds_max[1] = y
         if z > bounds_max[2]:
             bounds_max[2] = z
-        for item in shape_buffers:
-            shape = item.shape
+        for item, shape_stride, target_size, low_size in shape_inputs:
             if item.sparse:
                 dx, dy, dz = item.target_data.get(vertex_index, (0., 0., 0.))
                 tx, ty, tz = x + dx, y + dy, z + dz
             else:
-                target_offset = vertex_index * shape["stride"] + POSITION_OFFSET
-                if target_offset + 12 <= len(item.target_data):
-                    tx, ty, tz = struct.unpack_from(
-                        "<fff", item.target_data, target_offset)
+                target_offset = vertex_index * shape_stride + POSITION_OFFSET
+                if target_offset + 12 <= target_size:
+                    tx, ty, tz = position_unpack(
+                        item.target_data, target_offset)
                 else:
                     tx, ty, tz = x, y, z
-            position_struct.pack_into(
-                item.target_bytes, output_index * 12, tx, ty, tz)
+            position_pack(
+                item.target_bytes, position_offset, tx, ty, tz)
             if item.low_data is not None:
-                low_offset = vertex_index * shape["stride"] + POSITION_OFFSET
-                if low_offset + 12 <= len(item.low_data):
-                    lx, ly, lz = struct.unpack_from(
-                        "<fff", item.low_data, low_offset)
+                low_offset = vertex_index * shape_stride + POSITION_OFFSET
+                if low_offset + 12 <= low_size:
+                    lx, ly, lz = position_unpack(
+                        item.low_data, low_offset)
                 else:
                     lx, ly, lz = x, y, z
-                position_struct.pack_into(
-                    item.low_bytes, output_index * 12, lx, ly, lz)
+                position_pack(
+                    item.low_bytes, position_offset, lx, ly, lz)
         if tc_data:
-            uv_struct.pack_into(
+            uv_pack(
                 uv_bytes, output_index * 8, u, 1.0 - v)  # flip V for Three.js
 
     idx_bytes = bytearray(len(raw) * 4)

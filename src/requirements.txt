@@ -1,3 +1,5 @@
 pywebview==6.2.1
 Pillow==12.3.0
 mcp==1.29.0
+numpy==2.2.6; python_version < "3.12"
+numpy==2.5.2; python_version >= "3.12"

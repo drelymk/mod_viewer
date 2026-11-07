@@ -11,8 +11,15 @@ from core.geometry.conventions import geometry_convention_for
 from core.ini.parser import (build_draw_groups, extract_resources,
                              merge_sections)
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
+from core.geometry import vertex_attributes
 from core.geometry.vertex_attributes import (VertexAttributeSource, decode_normal,
                                     decode_normals, decode_snorm8)
+
+
+@pytest.fixture(autouse=True, params=[False, True], ids=["scalar", "batch"])
+def _normal_decoder(request, monkeypatch):
+    if request.param:
+        monkeypatch.setattr(vertex_attributes, "_MIN_BATCH_NORMALS", 0)
 
 
 def _write(path, name, data):

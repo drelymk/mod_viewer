@@ -1,7 +1,7 @@
 """Per-draw geometry validation, compaction, and packing regressions."""
 
 import struct
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -19,6 +19,26 @@ def _unpack_f32(data):
 
 def _unpack_indices(data):
     return struct.unpack(f"<{len(data) // 4}I", data)
+
+
+def _track_position_structs(offsets):
+    make_struct = struct.Struct
+
+    def create(format_string):
+        decoder = make_struct(format_string)
+        if format_string != "<fff":
+            return decoder
+        tracked = Mock(wraps=decoder)
+        tracked.size = decoder.size
+
+        def unpack(data, offset=0):
+            offsets.append(offset)
+            return decoder.unpack_from(data, offset)
+
+        tracked.unpack_from.side_effect = unpack
+        return tracked
+
+    return create
 
 
 def _pack_fixture(tmp_path, indices, positions, *, uvs=None, base=0,
@@ -133,15 +153,10 @@ def test_invalid_vertex_decode_is_cached_across_triangles(tmp_path):
         (float("nan"), 0., 0.), (1., 1., 0.),
     ]
     position_unpack_offsets = []
-    original_unpack_from = struct.unpack_from
-
-    def track_position_unpack(format_string, data, offset=0):
-        if format_string == "<fff":
-            position_unpack_offsets.append(offset)
-        return original_unpack_from(format_string, data, offset)
 
     with patch.object(
-            packing.struct, "unpack_from", side_effect=track_position_unpack):
+            packing.struct, "Struct",
+            side_effect=_track_position_structs(position_unpack_offsets)):
         packed = _pack_fixture(
             tmp_path, (0, 3, 4, 1, 3, 2), positions)
 
@@ -247,20 +262,15 @@ def test_shared_vertices_preserve_prepared_identity_and_decode_once(tmp_path):
     prepared_results = []
     unpack_offsets = []
     original_prepare = packing._prepare_draw_vertices
-    original_unpack = struct.unpack_from
 
     def capture_prepare(*args, **kwargs):
         prepared = original_prepare(*args, **kwargs)
         prepared_results.append(prepared)
         return prepared
 
-    def capture_unpack(format_string, data, offset=0):
-        if format_string == "<fff":
-            unpack_offsets.append(offset)
-        return original_unpack(format_string, data, offset)
-
     with patch.object(packing, "_prepare_draw_vertices", capture_prepare), \
-            patch.object(packing.struct, "unpack_from", capture_unpack):
+            patch.object(packing.struct, "Struct",
+                         side_effect=_track_position_structs(unpack_offsets)):
         packed = _pack_fixture(
             tmp_path, (5, 2, 4, 4, 2, 5),
             [(float(i), 0., 0.) for i in range(6)], reverse_winding=True)

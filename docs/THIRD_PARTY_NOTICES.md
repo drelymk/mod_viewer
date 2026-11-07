@@ -1,5 +1,15 @@
 # Third-party notices
 
+## NumPy
+
+- Package: `numpy`
+- Versions: 2.2.6 on Python 3.10/3.11; 2.5.2 on Python 3.12+
+- Source: https://numpy.org/
+- License: BSD-3-Clause; the installed distribution's license and bundled
+  component notices are included in its packaged distribution metadata.
+
+The geometry packer uses NumPy for bounded static vertex and index conversion.
+
 ## Three.js
 
 - Package: `three`

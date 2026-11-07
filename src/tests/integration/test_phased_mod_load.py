@@ -10,6 +10,7 @@ from app.bridge.api import ModViewerAPI
 from app.mods import loader
 from app.session import edit
 from core.geometry import mesh_builder
+from core.geometry import batch_packing
 from core.geometry.transport import GeometryBlob
 from tests.support.animations import compute_mod, joined_baked_mod
 from tests.support.model_data import basic_model_ini, triangle_geometry
@@ -38,8 +39,11 @@ def _write_model(root, *, duplicate=False):
 
 @pytest.mark.parametrize("distinct_materials", [False, True])
 @pytest.mark.parametrize("archive", [False, True])
+@pytest.mark.parametrize("batch", [False, True])
 def test_geometry_precedes_assets_and_final_draws_reuse_one_packing(
-        tmp_path, monkeypatch, distinct_materials, archive):
+        tmp_path, monkeypatch, distinct_materials, archive, batch):
+    if batch:
+        monkeypatch.setattr(batch_packing, "_MIN_BATCH_INDICES", 0)
     _write_model(tmp_path, duplicate=True)
     for index in range(2):
         Image.new("RGB", (4, 4), (index * 200, 50, 100)).save(

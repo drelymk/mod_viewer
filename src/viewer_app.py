@@ -4,7 +4,7 @@
 Native window app: pick any 3DMigoto mod folder and preview all meshes in 3D.
 Mesh data is built in-memory (no OBJ/MTL/PNG files written to disk).
 
-Install:  pip install pywebview Pillow
+Install:  pip install -r requirements.txt
 Run:      python viewer_app.py
 
 This module is only the entry point. The application lives in the `app`
