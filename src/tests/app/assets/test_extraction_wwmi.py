@@ -59,8 +59,9 @@ def test_attribute_skinning_round_trip_preserves_ranges_weights_and_texture_iden
     assert not (asset / "11111111/hash.json").exists()
     assert all(item["metadata"] == "11111111/Metadata.json" for item in json.loads(
         Path(report.report_path).read_text())["outputs"])
-    assert entry["component_name"] == "ObjectA Component001"
-    assert second["component_name"] == "ObjectA Component002"
+    assert entry["component_name"] == "ObjectA001"
+    assert second["component_name"] == "ObjectA002"
+    assert "classification" not in entry and "classification" not in second
     assert metadata["vb0_hash"] == "11111111" and entry["ib_hash"] == "55555555"
     assert [entry["index_offset"], second["index_offset"]] == [0, 3]
     assert all((asset / "11111111" / f"Component {i}.{kind}").is_file()
@@ -156,7 +157,8 @@ def test_native_texture_names_preserve_membership_collisions_roles_and_encoding(
         assert part.textures[role].role == role
 
 
-def test_multiple_object_folders_are_self_contained_and_remain_one_asset(tmp_path):
+@pytest.mark.parametrize("custom_names", [False, True])
+def test_multiple_object_folders_are_self_contained_and_remain_one_asset(tmp_path, custom_names):
     dump = make_attribute_capture(tmp_path)
     Image.new("RGB", (16, 16), (80, 120, 160)).save(dump / "000001-ps-t0=66666666.png")
     for path in list(dump.iterdir()):
@@ -169,17 +171,25 @@ def test_multiple_object_folders_are_self_contained_and_remain_one_asset(tmp_pat
         "resource=0x10 hash=11111111", "resource=0x70 hash=88888888"))
     analysis = analyze(dump)
     assert len(analysis.components) == 2
-    package = extract(analysis, Selection("Asset_001", renames={
+    renames = {
         c.id: "ObjectA" if c.streams["position"]["hash"] == "11111111" else "ObjectB"
-        for c in analysis.components}))
+        for c in analysis.components} if custom_names else None
+    package = extract(analysis, Selection("Asset_001", renames=renames))
     report = export(package, tmp_path / "exports")
     asset = Path(report.output)
     assert report.components == report.parts == 4
     assert not list(asset.glob("*.*"))
-    for folder in ("11111111", "88888888"):
+    expected_names, expected_components = [], []
+    for ordinal, folder in enumerate(("11111111", "88888888"), 1):
         assert len(list((asset / folder).glob("Component *.vb"))) == 2
         document = json.loads((asset / folder / "Metadata.json").read_text())
         assert len(document["components"]) == 2
+        prefix = ("ObjectA" if ordinal == 1 else "ObjectB") if custom_names else "Component"
+        names = [f"{prefix}{i:03d}" for i in (ordinal * 2 - 1, ordinal * 2)]
+        assert [c["component_name"] for c in document["components"]] == names
+        assert all("classification" not in c for c in document["components"])
+        expected_names.extend(names)
+        expected_components.extend(names)
         relative = document["components"][0]["texture_hashes"][0][0][3]
         assert Path(relative).parent == Path(".")
         assert (asset / folder / relative).is_file()
@@ -193,6 +203,11 @@ def test_multiple_object_folders_are_self_contained_and_remain_one_asset(tmp_pat
     assert {g["hash"] for g in record["geometry"]} == {"11111111", "88888888"}
     loaded = loader.load_asset("WWMI", str(asset.parent), record, geometry=GeometryBlob())
     assert len(loaded.parts) == 4 and len({p.component_name for p in loaded.parts}) == 4
+    assert [p.component_name for p in loaded.parts] == expected_components
+    assert [p.label for p in loaded.parts] == expected_names
+    assert len(set(expected_names)) == 4
+    assert {m["component"] for m in loaded.payload["meshes"].values()} == set(expected_components)
+    assert [m["display_name"] for m in loaded.payload["meshes"].values()] == expected_names
     assert len({t.path for p in loaded.parts for t in p.texture_candidates}) == 2
     # A copied object can load without the parent or its sibling's files.
     detached_root = tmp_path / "detached"

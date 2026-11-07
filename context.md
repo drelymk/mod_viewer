@@ -386,11 +386,19 @@ of documentation, comments and tests; use portable fixtures instead.
   and cumulative decoded-work budgets, checked before mapping or geometry allocation.
   Stream-output inputs support 40-byte position/normal/tangent records and
   declared 24-byte position/normal records with matching blend/UV counts.
-  Blend discovery uses the validated position stride; never fabricate tangents
-  or apply the 40-byte expression adapter to a different position layout.
+  Blend discovery uses the validated position stride. Among candidates passing
+  its byte-ratio check, prefer a unique stream declaring BLENDINDICES in its own
+  input slot; retain legacy size-only discovery when none declares it. Multiple
+  declared candidates remain ambiguous.
+  Never fabricate tangents or apply the 40-byte expression adapter to a different
+  position layout.
   Direct unskinned meshes use declared position/normal and UV streams with
   matching complete payloads. Valid UV draw-subset counts do not split otherwise
   identical source/layout identities; malformed headers remain rejected.
+  Extraction requires a supported primary TEXCOORD0 with at least two channels
+  across the assembled streams. Secondary TEXCOORD channels cannot substitute
+  for UV0; a primary in the position stream remains valid. Missing textures
+  alone do not reject geometry.
   Nonfinite secondary TEXCOORD channels are omitted whole with diagnostics,
   retaining primary UVs declared in the current or a previously decoded stream
   and all other valid channels. Never fabricate replacement
@@ -403,7 +411,11 @@ of documentation, comments and tests; use portable fixtures instead.
   Draw-subset header counts do not split complete ATTRIBUTE resources. Ignore
   shader-only deformation streams rather than interpreting unknown compute data.
   Export each ATTRIBUTE draw range as a separate component inside its source
-  object's folder. Native WWMI components store only referenced vertices with
+  object's folder. Each WWMI mesh has its own component; component_name and
+  mesh label are the same globally numbered Component001, Component002, etc.
+  Do not restart numbering per object or add A/B part classifications. Explicit
+  internal names replace the Component prefix while retaining unique numbering.
+  Native WWMI components store only referenced vertices with
   local indices, retaining all channels and four/eight influences. Keep exact
   source range, base and resource identity in provenance. Object folders use the position hash;
   explicit internal object names affect component labels. Each object owns its
@@ -469,8 +481,11 @@ of documentation, comments and tests; use portable fixtures instead.
   draw in the extraction report, including slot, shader, native hash, resource
   version and payload identity. Export/picker membership retains the chosen
   pass's captured images even when roles are unknown or auxiliary; automatic
-  role inference cannot discard them. Other passes remain separate in the report
-  (optional debug assets), never mixed into the chosen pass's choices.
+  role inference cannot discard them. Other passes of the same exact geometry
+  range also supply picker candidates when the uncontaminated snapshot hash
+  matches that draw's bound resource hash. Keep their roles unclassified and
+  retain separate draw provenance; candidate membership never promotes a role.
+  Unverified other-pass snapshots remain report/debug-only resources.
   Bound-resource count is not material-pass evidence; unresolved pass ties use
   the first captured color pass rather than the largest inherited binding set.
   GIMI diffuse recognition requires capture evidence, a color pass, bound texture
@@ -613,9 +628,13 @@ of documentation, comments and tests; use portable fixtures instead.
   constant-buffer slot, character offset or infer placement from eye geometry.
   Validate the object/inverse blocks and replay every written native SO vertex
   from source positions, weights and the palette before using its matrices.
-  SO allocation tails are capacity, not additional written vertices. Capture
-  exact bound resource versions, snapshot hashes and replay evidence in the
-  report; preserve dedup dependencies and reject changed evidence on extraction.
+  SO allocation tails are capacity, not additional written vertices, and need
+  not end on a vertex-stride boundary. Material families with consistent verified
+  head-local placement do not require eye-hole topology; retain their companion
+  parts even when anchor choice is ambiguous. Eye topology remains the fallback
+  when placement is unavailable. Capture exact bound resource versions, snapshot
+  hashes and replay evidence in the report; preserve dedup dependencies and reject
+  changed evidence on extraction.
   Only native candidates contributing placement matches supply native evidence
   dependencies; unrelated captures must not invalidate proven face placement.
   Validate shared placement sources once per extraction, with no cross-request

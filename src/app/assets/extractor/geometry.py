@@ -203,6 +203,10 @@ def decode_component(inv, component, context=None):
         scalars = sum(len(_storage_format(e.format)[0].format) - 1 for e in elements)
         expected_bytes += (size // stride) * (128 + 80 * len(elements) + 32 * scalars)
         prepared[role] = layout, size
+    if not any(e.semantic == "TEXCOORD" and e.index == 0
+               and len(_storage_format(e.format)[0].format) - 1 >= 2
+               for layout, _ in prepared.values() for e in layout[1]):
+        raise Unsupported("Missing supported primary UV0 (TEXCOORD0) layout")
     for part in component.parts:
         if min(part.first, part.count, part.index_offset) < 0:
             raise Unsupported("Negative index range")

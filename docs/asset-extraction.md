@@ -39,11 +39,17 @@ direct position/normal/UV streams. Stream-output inputs support the existing
 40-byte position/normal/tangent layout and a declared 24-byte position/normal
 layout with matching blend and UV payloads; missing tangents are not fabricated.
 Expression reversal remains limited to its recognized 40-byte layout.
+When UV and blend buffers have the same supported stride and vertex count,
+an explicit BLENDINDICES declaration in the buffer's own input slot identifies
+the blend stream. Ambiguous declarations and invalid blend payloads remain rejected.
 It also accepts split skinned `ATTRIBUTE`
 layouts with declared float positions, packed tangent/normals, half-float UVs
 and four or eight blend influences. All streams must have matching complete
 binary payloads; draw-subset header counts do not discard the remaining vertices.
 Direct meshes retain captured coordinates without fabricated blend data.
+Extracted meshes require a supported primary UV0 with at least two channels;
+secondary UV channels alone do not qualify. UV0 may come from the position stream.
+Missing textures alone do not prevent extraction of otherwise supported geometry.
 Compute-only skinning and unfamiliar layouts may
 still need support. Unsupported captures fail without replacing existing files. Partial
 extractions still save the identified asset components. Counts and skipped resource
@@ -55,7 +61,10 @@ The dump-field description identifies the FrameAnalysis folder to select.
 All captured images from the chosen draw pass remain available without
 requiring automatic role recognition. Geometry deduplication preserves every
 pass's draw, slot, shader, resource version and payload identity in the report.
-Other passes are kept separate from the chosen pass's texture choices. If no
+Other passes of the same geometry range also supply selectable textures when
+their uncontaminated snapshot hashes match their captured resource bindings.
+These candidates retain their draw provenance and do not acquire automatic roles.
+Unverified other-pass snapshots remain in the report and optional debug assets. If no
 material signature resolves the choice, the first captured color pass wins;
 the number of bound textures does not establish material relevance.
 Recognized ZZMI material signatures retain their
@@ -81,8 +90,9 @@ larger inherited resource sets; confirmed roles still take priority over pixels.
 GIMI exports preserve unclassified textures as selectable candidates, including
 when a diffuse is recognized. Unknown roles never become automatic material
 bindings. Auxiliary inputs from the chosen pass remain candidates without
-automatic roles. Other passes remain in the report; debug exports can include
-their original payloads under `assets/`. Unsupported image formats may be
+automatic roles. Verified bindings from other draws of the same range are also
+selectable; remaining other-pass resources stay in the report, with original
+payloads available under `assets/` in debug exports. Unsupported image formats may be
 retained in the export without being displayable by the texture picker.
 RGB pixel inspection resizes independently of alpha so near-zero data alpha does
 not distort the analyzed colors. Export preserves the original texture bytes.
@@ -98,7 +108,11 @@ loading applies the viewer's existing WWMI convention once. Source buffers and c
 positions remain unchanged. Shader-only expression/deformation streams are not
 reconstructed. Unknown texture roles remain selectable candidates.
 Each split WWMI draw range becomes its own component within its source object
-folder. Each native binary component retains only its referenced vertices,
+folder. Each mesh has its own component with matching names: `Component001`,
+`Component002`, and so on, without A/B suffixes. Numbering spans the asset rather
+than restarting in each object folder. Internal custom names replace the
+`Component` prefix while retaining the unique numbering.
+Each native binary component retains only its referenced vertices,
 preserving all vertex channels and four/eight influences with local indices.
 Each object folder is named by its native position hash, matching the native
 WWMI multi-object layout, and contains its own component metadata, geometry and
@@ -152,19 +166,23 @@ are not used to establish it.
 
 There is no special `Face/` output folder. Facial geometry follows the same
 hash-folder and texture-ownership rules as body, hair and weapon geometry.
-GIMI face recognition requires a unique connected face surface with two comparable
-open eye boundaries inside its enclosing contour, plus shared diffuse/light
-payloads on related geometry. Legacy split eye rings can instead use a bilateral
-native Eyes reference and matching eye-loop fit.
+GIMI face recognition accepts shared diffuse/light payloads with consistent
+verified captured head-local placement, without requiring a particular eye-hole
+layout. This evidence also retains companion parts when anchor choice is ambiguous.
+Without that placement proof, recognition requires a connected face surface with
+two comparable open eye boundaries inside its enclosing contour. Legacy split
+eye rings can instead use a bilateral native Eyes reference and matching eye-loop fit.
 Additional recognized maps, such as NormalMap, and unclassified texture candidates
 do not prevent grouping; duplicate passes still require matching recognized maps.
 Small additional internal openings do not prevent recognition when their diagonal
 is at most half the smaller eye opening's diagonal. Their geometry remains intact.
-When several supported facial anchors compete, extraction retains one best-effort
-face, preferring greater connected-surface coverage and fewer small openings, with
-a stable content/resource tie break. Competing candidates and unproven attachments
-stay excluded. The report records this ambiguity and the result is marked partial;
-captured-matrix placement must still pass its existing checks.
+When several supported facial anchors compete, extraction selects one best-effort
+anchor, preferring greater connected-surface coverage and fewer small openings,
+with a stable content/resource tie break. Companion parts in its material family
+remain included only when the entire family has consistent verified placement.
+Other candidates and unproven attachments stay excluded. The report records this
+ambiguity and the result is marked partial; captured-matrix placement must still
+pass its existing checks.
 Related nearby direct meshes receive facial labels independently of placement.
 Equivalent captured facial passes are excluded by default while their
 provenance remains in the report; differing UVs or ambiguous references stay separate.
