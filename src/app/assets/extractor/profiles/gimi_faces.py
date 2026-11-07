@@ -248,7 +248,7 @@ def _separate_overlay(mesh):
 
 
 def classify_faces(meshes, context, *, resolve_placement=None):
-    """Recognize an open-eye face, retaining native-eye proof for legacy layouts."""
+    """Recognize material families using captured placement or eye topology."""
     references = [m for m in meshes.values() if m.component.status == "included"
                   and m.component.provenance.get("geometry_kind") != "direct" and _eye_reference(m)]
     families = {}
@@ -283,6 +283,15 @@ def classify_faces(meshes, context, *, resolve_placement=None):
                     evidence="Eye-loop fit to a bilateral native Eyes mesh"), signature))
             if len(anchors) == 1:
                 proven.append(candidates[-1])
+    if not candidates and resolve_placement is not None:
+        for material, groups in families.items():
+            members = [mesh.component for equivalent in groups.values() for mesh in equivalent]
+            if resolve_placement(members)["status"] != "proven":
+                continue
+            signature, equivalent = max(groups.items(), key=lambda item: (
+                sum(part.count for part in item[1][0].component.parts), item[0]))
+            candidates.append((material, groups, equivalent[0], dict(
+                evidence="Consistent captured head-local placement across the material family"), signature))
     if len(proven) != 1:
         proven = candidates
     if not proven:
@@ -300,20 +309,23 @@ def classify_faces(meshes, context, *, resolve_placement=None):
         candidate[3].get("extra_boundary_count", 0),
         candidate[4])) if fallback else proven[0]
     _material_key, groups, anchor, proof, _signature_key = selected
-    eye_separation = proof["eye_separation"]
-    if len(references) == 1 and solve(
+    eye_separation = proof.get("eye_separation")
+    members = [mesh.component for equivalent in groups.values() for mesh in equivalent]
+    captured_family = (resolve_placement is not None
+                       and resolve_placement(members)["status"] == "proven")
+    if eye_separation is not None and len(references) == 1 and solve(
         _alignment_mesh(references[0]), _alignment_mesh(anchor), refine=False
     ) is not None:
         references[0].component.provenance["suggested_name"] = "Eyes"
     names, overlays = {}, []
     for equivalent in groups.values():
         primary = equivalent[0]
-        if fallback and primary is not anchor:
+        if fallback and primary is not anchor and not captured_family:
             continue
-        if not _near_anchor(primary, anchor, eye_separation):
+        if not captured_family and not _near_anchor(primary, anchor, eye_separation):
             continue
         loops = _boundary_components(_alignment_mesh(primary))
-        kind = "FaceEye" if primary is anchor else "FaceEyebrow" if len(loops) == 2 and _eye_reference(primary) else "Face"
+        kind = "FaceEye" if primary is anchor and eye_separation is not None else "FaceEyebrow" if len(loops) == 2 and _eye_reference(primary) else "Face"
         names[kind] = names.get(kind, 0) + 1
         name = kind if names[kind] == 1 else ("FacePart" if kind == "Face" else kind) + str(names[kind])
         for ordinal, mesh in enumerate(equivalent):
@@ -325,8 +337,8 @@ def classify_faces(meshes, context, *, resolve_placement=None):
             if fallback:
                 provenance["gimi_face_selection"] = dict(status="best_effort", candidates=len(proven))
                 mesh.component.diagnostics.append(
-                    "Ambiguous facial candidates: retained one best-effort face using validated eye topology "
-                    "and matching diffuse/light payloads; competing candidates remain excluded.")
+                    "Ambiguous facial candidates: selected a best-effort anchor with matching diffuse/light "
+                    "payloads; companion parts require consistent captured placement.")
             if ordinal:
                 provenance["duplicate_capture_pass"] = primary.component.id
                 mesh.component.diagnostics.append("Equivalent captured facial geometry and material payloads; alternate pass excluded by default.")

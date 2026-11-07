@@ -6,14 +6,14 @@ import hashlib
 from ..core import Unsupported
 
 
-def split_components(mesh):
+def split_components(mesh, names):
     """Expose source draw ranges independently without decoding their shared vertices again."""
     c = mesh.component
-    for ordinal, (part, indices) in enumerate(zip(c.parts, mesh.indices), 1):
+    for name, part, indices in zip(names, c.parts, mesh.indices):
         identity = (c.id, part.first, part.count, part.base_vertex, part.index_offset, part.sha256)
         points = [mesh.vertices[i + part.base_vertex][0] for i in set(indices)]
         child = replace(c, id=hashlib.sha256(repr(identity).encode()).hexdigest()[:12],
-                        name=f"{c.name} Component{ordinal:03d}", parts=[part],
+                        name=name, parts=[part],
                         triangle_count=len(indices) // 3,
                         bounds=[[min(p[a] for p in points) for a in range(3)],
                                 [max(p[a] for p in points) for a in range(3)]],

@@ -240,7 +240,7 @@ def test_texture_lookup_retains_log_only_snapshots_and_dynamic_alternates(tmp_pa
 
 
 @pytest.mark.parametrize("asset_type", ["GIMI", "ZZMI", "WWMI"])
-def test_draw_texture_membership_survives_failed_inference_without_mixing_passes(tmp_path, monkeypatch, asset_type):
+def test_draw_texture_candidates_use_verified_bindings_without_inventing_roles(tmp_path, monkeypatch, asset_type):
     dump = make_capture(tmp_path)
     log = dump / "log.txt"
     text = log.read_text().replace("ZZMIv1", asset_type + "v1")
@@ -249,10 +249,12 @@ def test_draw_texture_membership_survives_failed_inference_without_mixing_passes
         bindings = []
         for slot in range(count):
             identity = f"{int(call) * 64 + slot:08x}"
-            name = f"{call}-ps-t{slot}={identity}.png"
+            contaminated = call == "000003" and slot == 18
+            name = f"{call}-ps-t{slot}=" + ("!S!=" if contaminated else "") + identity + ".png"
             Image.new("RGBA", (4 if slot == 3 else 16, 4 if slot == 3 else 16),
                       (slot * 10, int(call) * 20, 100, 255)).save(dump / name)
-            bindings.append(f"       {slot}: resource=0x{int(call) * 64 + slot:x}0 hash={identity}\n")
+            bound_hash = "eeeeeeee" if call == "000003" and slot == 19 else identity
+            bindings.append(f"       {slot}: resource=0x{int(call) * 64 + slot:x}0 hash={bound_hash}\n")
             expected.add((call, slot, identity))
         shader = ("c" if call == "000002" else "d") * 16
         setup = (f"{call} PSSetShader(pPixelShader:0x90) hash={shader}\n"
@@ -272,13 +274,17 @@ def test_draw_texture_membership_survives_failed_inference_without_mixing_passes
     assert len(chosen) == 9 and all(t["draw"] == "000002" for t in chosen)
     assert all(t["role"].startswith("TextureSlot") for t in part.textures)
     assert next(t for t in chosen if t["slot"] == 3)["auxiliary"]
+    candidates = [t for t in part.textures if t["captured_pass"] or t["binding_verified"]]
+    assert len(candidates) == 27
+    assert all(t["binding_verified"] == (not t["contaminated"] and t["resource"]["hash"] == t["hash"])
+               for t in part.textures)
     report = export(extract(analysis, Selection("Sample")), tmp_path / "exports", options=ExportOptions(asset_type=asset_type))
     asset = Path(report.output)
     marker = "Metadata.json" if asset_type == "WWMI" else "hash.json"
     document = json.loads((asset / "11111111" / marker).read_text())
     rows = document["components"][0]["texture_hashes"][0]
-    assert len(rows) == report.texture_files == 9
-    assert {item[2] for item in rows} == {t["hash"] for t in chosen}
+    assert len(rows) == report.texture_files == 27
+    assert {item[2] for item in rows} == {t["hash"] for t in candidates}
     details = json.loads(Path(report.report_path).read_text())
     recorded = details["analysis"]["components"][0]["parts"][0]["textures"]
     assert {(t["draw"], t["slot"], t["hash"]) for t in recorded} == expected
@@ -286,9 +292,9 @@ def test_draw_texture_membership_survives_failed_inference_without_mixing_passes
     record, = index.build_index(asset_type, str(asset.parent))["assets"]
     loaded, = loader.load_asset_parts(asset_type, str(asset.parent), record).parts
     assert not loaded.textures
-    assert len(loaded.texture_candidates) == 9
-    assert {digest(Path(t.path)) for t in loaded.texture_candidates} == {t["sha256"] for t in chosen}
-    assert {t["hash"] for t in details["outputs"][0]["textures"]} == {t["hash"] for t in chosen}
+    assert len(loaded.texture_candidates) == 27
+    assert {digest(Path(t.path)) for t in loaded.texture_candidates} == {t["sha256"] for t in candidates}
+    assert {t["hash"] for t in details["outputs"][0]["textures"]} == {t["hash"] for t in candidates}
 
 
 @pytest.mark.parametrize("role,declared,first,trim,expected", [
@@ -382,10 +388,58 @@ def test_short_skinning_positions_require_complete_declared_layout(tmp_path, cas
     assert any("Unrecognized morph position layout" in note for note in preserved.component.diagnostics)
 
 
+@pytest.mark.parametrize("stride", [16, 32])
+@pytest.mark.parametrize("case", ["declared", "unlabelled", "wrong_slot", "ambiguous", "invalid_weights"])
+def test_skinning_blend_declarations_resolve_equal_stride_uv_streams(tmp_path, stride, case):
+    dump = make_capture(tmp_path)
+    uv = next(dump.glob("000001-vb1=*.txt"))
+    blend = next(dump.glob("000001-vb2=*.txt"))
+    uv_fields = [("COLOR", 0, "R8G8B8A8_UNORM", 0),
+                 ("TEXCOORD", 0, "R16G16_FLOAT", 4)]
+    uv_fields.extend(("TEXCOORD", i + 1, "R32G32_FLOAT", 8 + i * 8)
+                     for i in range((stride - 8) // 8))
+    influences = stride // 8
+    fmt = "R32G32" + ("B32A32" if stride == 32 else "")
+    blend_fields = [("BLENDWEIGHTS", 0, fmt + "_FLOAT", 0),
+                    ("BLENDINDICES", 0, fmt + "_UINT", stride // 2)]
+    if case == "wrong_slot":
+        text = header(stride, 1, uv_fields + blend_fields)
+        start = text.index("SemanticName: BLENDWEIGHTS")
+        uv.write_text(text[:start] + text[start:].replace("InputSlot: 1", "InputSlot: 7"))
+    elif case == "ambiguous":
+        uv.write_text(header(stride, 1, uv_fields + blend_fields))
+    else:
+        uv.write_text(header(stride, 1, uv_fields))
+    uv.with_suffix(".buf").write_bytes((struct.pack("<4B2e", 255, 128, 0, 255, 0.25, 0.5)
+                                       + struct.pack("<" + "f" * ((stride - 8) // 4),
+                                                     *([0.125] * ((stride - 8) // 4)))) * 4)
+    blend.write_text(header(stride, 2, [] if case in {"unlabelled", "wrong_slot"} else blend_fields))
+    weights = [2.0 if case == "invalid_weights" else 1.0] + [0.0] * (influences - 1)
+    blend.with_suffix(".buf").write_bytes(struct.pack(
+        "<" + "f" * influences + "I" * influences, *weights, *([3] * influences)) * 4)
+    analysis = analyze(dump)
+    component, = analysis.components
+    if case != "declared":
+        assert not component.default_included
+        expected = "blend weights" if case == "invalid_weights" else "Ambiguous or missing"
+        assert expected in " ".join([component.reason, *component.diagnostics])
+        return
+    assert component.streams["blend"]["slot"] == 2
+    mesh, = extract(analysis, Selection("DeclaredStreams")).meshes
+    assert mesh.indices == [[0, 1, 2]] and len(mesh.vertices) == 4
+    assert [e.semantic for e in mesh.elements].count("BLENDINDICES") == 1
+    report = export(extract(analysis, Selection("DeclaredStreams")), tmp_path / "exports")
+    root = Path(report.output).parent
+    record, = index.build_index("ZZMI", str(root))["assets"]
+    loaded, = loader.load_asset_parts("ZZMI", str(root), record).parts
+    assert loaded.index_count == 3 and loaded.uvs
+
+
 @pytest.mark.parametrize("case,channel,value", [
     ("valid", None, 0), ("secondary", 1, float("nan")), ("secondary", 1, float("inf")),
     ("secondary", 3, float("nan")), ("primary", 0, float("nan")), ("primary", 0, float("inf")),
-    ("duplicate", 1, float("nan")), ("missing_primary", 1, float("nan")),
+    ("duplicate", 1, float("nan")), ("missing_primary", None, 0),
+    ("missing_primary", 1, float("nan")), ("invalid_primary", None, 0),
 ])
 def test_secondary_uv_recovery_preserves_primary_geometry_through_export(
         tmp_path, case, channel, value):
@@ -397,6 +451,8 @@ def test_secondary_uv_recovery_preserves_primary_geometry_through_export(
         fields.append(("TEXCOORD", 1, "R32G32_FLOAT", 32))
     elif case == "missing_primary":
         fields = [field for field in fields if field[:2] != ("TEXCOORD", 0)]
+    elif case == "invalid_primary":
+        fields[1] = ("TEXCOORD", 0, "R32_FLOAT", 16)
     uv_header.write_text(header(48, 1, fields))
     payload = bytearray(b"".join(struct.pack(
         "<12f", 1, 0.5, 0.25, 1, i / 4, 0.25, 0.125, 0.375, 0.5, 0.625, 0.75, 0.875)
@@ -407,9 +463,10 @@ def test_secondary_uv_recovery_preserves_primary_geometry_through_export(
     original = {p.name: digest(p) for p in dump.iterdir()}
     analysis = analyze(dump)
     component, = analysis.components
-    if case in ("primary", "duplicate", "missing_primary"):
+    if case in ("primary", "duplicate", "missing_primary", "invalid_primary"):
         assert component.status == "unsupported"
-        reason = "Conflicting vertex semantic channels" if case == "duplicate" else "Nonfinite texcoord"
+        reason = ("Missing supported primary UV0" if case in ("missing_primary", "invalid_primary") else
+                  "Conflicting vertex semantic channels" if case == "duplicate" else "Nonfinite texcoord")
         assert any(reason in message for message in component.diagnostics)
         assert {p.name: digest(p) for p in dump.iterdir()} == original
         return
@@ -827,8 +884,10 @@ def test_gimi_layered_eye_diffuse_round_trip_precedes_inherited_primary_material
     part, = loaded.parts
     assert set(part.textures) == {"diffuse"}
     assert digest(Path(part.textures["diffuse"].path)) == diffuse["sha256"]
-    # The repeated constant is captured in two slots but owns one image file.
-    assert len(part.texture_candidates) == 8
+    # The repeated constant owns one file; the other draw's verified bindings
+    # remain unclassified picker candidates without replacing the iris diffuse.
+    assert len(part.texture_candidates) == 8 + len(inherited)
+    assert all(t.role is None for t in part.texture_candidates)
 
 
 @pytest.mark.parametrize("evidence", ["slot_only", "other_snapshot", "invalid_alias", "wrong_extension", "unlogged_file"])

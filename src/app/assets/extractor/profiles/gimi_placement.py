@@ -116,7 +116,7 @@ class _Capture:
                 return None
             data = self.read(name, sources)
             # Allocation tails are capacity, not additional written vertices.
-            if (len(data) < count * stride or len(data) % stride
+            if (len(data) < count * stride
                     or int(header.get("first vertex", 0)) != 0
                     or not 0 <= int(header.get("vertex count", -1)) <= len(data) // stride):
                 return None

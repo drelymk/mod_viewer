@@ -195,6 +195,46 @@ def test_face_placement_uses_later_available_native_output(tmp_path, monkeypatch
     assert not extract(analysis, Selection("AvailableOutput")).partial
 
 
+@pytest.mark.parametrize("case", ["valid", "missing", "bad_inverse", "bad_palette", "short_output", "corrupt_output", "missing_material"])
+def test_captured_family_without_eye_topology(tmp_path, monkeypatch, case):
+    meshes = list(_family().values())[:-1]
+    meshes[0] = _mesh(1, ((0, 2, 3),), native=True)
+    meshes[1] = _mesh(2, ((0, 0, -0.75), (0, 0, 0.75)))
+    dump, material = make_face_capture(tmp_path, meshes, case)
+    output = dump / "000002-vb0=33333333.buf"
+    if output.exists():
+        payload = output.read_bytes()
+        if case == "short_output":
+            payload = payload[:len(meshes[0].vertices) * 24 - 1]
+        elif case == "corrupt_output":
+            payload = struct.pack("<f", 100) + payload[4:]
+        else:
+            payload += b"padding"
+        output.write_bytes(payload)
+    if case == "missing_material":
+        material.pop()
+    monkeypatch.setattr(discovery, "collect", lambda *_: copy.deepcopy(material))
+    analysis = discovery.analyze(dump)
+    family = [c for c in analysis.components if c.provenance.get("gimi_face_family")]
+    if case != "valid":
+        assert not family
+        assert all(not c.default_included for c in analysis.components
+                   if c.provenance.get("geometry_kind") == "direct")
+        return
+    assert len(family) == 3 and all(c.default_included for c in family)
+    assert {c.provenance["gimi_face_placement"]["status"] for c in family} == {"proven"}
+    monkeypatch.setattr(hash_asset, "_solve_face_alignment", _no_fit)
+    package = extract(analysis, Selection("CapturedFamily"))
+    assert len(package.meshes) == 4 and not package.partial
+    report, loaded = _export_and_load(package, tmp_path / "exports")
+    assert not report.partial and not loaded.warnings
+    for mesh in meshes[1:]:
+        exported = next(m for m in package.meshes if m.component.ib == mesh.component.ib)
+        part = next(p for p in loaded.parts if p.component_name == exported.component.name)
+        expected = _points((-v[0][2], 2 - v[0][0], 3 + v[0][1]) for v in mesh.vertices)
+        assert _points(struct.iter_unpack("<3f", part.positions)) == expected
+
+
 @pytest.mark.parametrize("case", ["valid", "unrelated_native"])
 def test_face_dependencies_validate_once_per_extraction_and_detect_later_changes(tmp_path, monkeypatch, case):
     dump, _originals = _capture(tmp_path, monkeypatch, native_reference=False, case=case)
@@ -367,16 +407,18 @@ def test_ambiguous_face_fallback_survives_analysis_export_and_reload(tmp_path, m
     assert len(replayed) == 1
     selected = [c for c in analysis.components if c.provenance.get("gimi_face_selection")]
     expected_mesh = meshes[2 if placement_case == "preferred_unplaced" else 1]
-    assert len(selected) == 1 and selected[0].ib == expected_mesh.component.ib
+    assert len(selected) == (3 if placement_case == "valid" else 1)
+    anchor = next(c for c in selected if c.ib == expected_mesh.component.ib)
     placed = placement_case != "all_unplaced"
-    assert selected[0].provenance["gimi_face_placement"]["status"] == ("proven" if placed else "unresolved")
-    assert all(not c.default_included for c in analysis.components
-               if c.provenance.get("geometry_kind") == "direct" and c is not selected[0])
+    assert anchor.provenance["gimi_face_placement"]["status"] == ("proven" if placed else "unresolved")
+    assert all(c.default_included == (c in selected) for c in analysis.components
+               if c.provenance.get("geometry_kind") == "direct")
     analysis.save(tmp_path / "analysis.json")
     restored = Analysis.read(tmp_path / "analysis.json")
     package = extract(restored, Selection("FallbackAsset"))
-    assert package.partial and package.skipped == 0 and package.unproven_candidates == 2
-    assert len(package.meshes) == 2
+    assert package.partial and package.skipped == 0
+    assert package.unproven_candidates == (0 if placement_case == "valid" else 2)
+    assert len(package.meshes) == (4 if placement_case == "valid" else 2)
     report, loaded = _export_and_load(package, tmp_path / "exports")
     assert report.partial
     assert {w["reason"] for w in loaded.warnings} == (set() if placed else {"captured_face_placement_unavailable"})
@@ -385,7 +427,7 @@ def test_ambiguous_face_fallback_survives_analysis_export_and_reload(tmp_path, m
                         3 + expected_mesh.vertices[i][0][1]) if placed else expected_mesh.vertices[i][0]
                        for i in expected_mesh.indices[0])
     assert _points(struct.iter_unpack("<3f", face.positions)) == expected
-    assert any("best-effort face" in note for note in report.diagnostics)
+    assert any("best-effort anchor" in note for note in report.diagnostics)
 
 
 @pytest.mark.parametrize("difference", ["uv", "material", "resource", "coverage", "unique_family"])

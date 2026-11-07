@@ -115,6 +115,12 @@ class PayloadFiles:
             self.by_content[identity] = path
 
 
+def _texture_candidate(texture):
+    """A verified binding proves picker membership, independently of material role."""
+    return (texture.get("captured_pass", not texture.get("auxiliary"))
+            or texture.get("binding_verified", False))
+
+
 def _texture_plan(meshes, name, options, *, wwmi=False, folders=None):
     """Keep importer role/hash schema intact while sharing unambiguous payloads."""
     folders = _component_folders(meshes) if folders is None else folders
@@ -123,7 +129,7 @@ def _texture_plan(meshes, name, options, *, wwmi=False, folders=None):
         c = mesh.component
         for i, part in enumerate(c.parts):
             for t in part.textures:
-                selected = t.get("captured_pass", not t.get("auxiliary"))
+                selected = _texture_candidate(t)
                 if not selected and not options.debug_assets:
                     omitted.append(dict(component=c.id, part=i, file=t["file"], role=t["role"],
                                         hash=t["hash"], sha256=t["sha256"], reason=t.get("role_note", "Not a supported viewer material binding")))
@@ -208,11 +214,14 @@ def extract(analysis, selection=None, context=None):
         import copy
         c = copy.deepcopy(c)
         attribute_skinning = c.provenance.get("geometry_kind") == "attribute_skinning"
-        default_name = "Object_" + c.streams["position"]["hash"] if attribute_skinning else c.name
-        c.name = safe_name((selection.renames or {}).get(c.id, c.provenance.get("suggested_name", default_name)))
-        if c.name.casefold() in used_names:
-            raise ValueError("Component names must be unique")
-        used_names.add(c.name.casefold())
+        requested_name = (selection.renames or {}).get(c.id, c.provenance.get("suggested_name"))
+        c.name = safe_name(requested_name if requested_name is not None else c.name)
+        if requested_name is not None:
+            c.provenance["requested_component_name"] = c.name
+        if not attribute_skinning:
+            if c.name.casefold() in used_names:
+                raise ValueError("Component names must be unique")
+            used_names.add(c.name.casefold())
         # Detect a changed capture rather than silently exporting stale analysis.
         for source in c.streams.values():
             expected = source.get("sha256")
@@ -226,7 +235,9 @@ def extract(analysis, selection=None, context=None):
         apply_placement(mesh, inv, ctx, validated_sources=validated_placement_sources)
         if attribute_skinning:
             from .profiles.wwmi import split_components
-            for child in split_components(mesh):
+            prefix = c.name if requested_name is not None else "Component"
+            names = [f"{prefix}{len(meshes) + i + 1:03d}" for i in range(len(c.parts))]
+            for child in split_components(mesh, names):
                 if child.component.name.casefold() in used_names:
                     raise ValueError("Component names must be unique")
                 used_names.add(child.component.name.casefold())
@@ -358,7 +369,9 @@ def export(package, output, context=None, *, options=None):
                     ordinal = len(metadata.setdefault(folder, []))
                     native_files, vertex_count = write_component(mesh_directory, ordinal, mesh, part, indices, ctx)
                     vbname, ibname = (prefix_folder + native_files[kind] for kind in ("vb", "ib"))
-                    native = dict(component_name=c.name, classification=label, index_offset=part.first,
+                    prefix = c.provenance.get("requested_component_name", "Component")
+                    component_name = f"{prefix}{part_count + 1:03d}"
+                    native = dict(component_name=component_name, index_offset=part.first,
                                   index_count=part.count, vertex_count=vertex_count, ib_hash=c.ib)
                     metadata[folder].append(native)
                     wwmi_objects.setdefault(folder, dict(vb0_hash=c.streams["position"]["hash"],
@@ -398,7 +411,7 @@ def export(package, output, context=None, *, options=None):
                         raise Unsupported("Texture changed since analysis; analyze again")
                     texname = texture_plan[key]
                     payloads.texture(source, texname, identity)
-                    if texture.get("captured_pass", not texture.get("auxiliary")):
+                    if _texture_candidate(texture):
                         texmeta.append([texture["role"], source.suffix, texture["hash"],
                                         os.path.relpath(stage / texname, mesh_directory).replace(os.sep, "/")])
                     mappings.append(dict(output=texname, **texture))

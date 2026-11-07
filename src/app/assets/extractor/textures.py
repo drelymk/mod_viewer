@@ -57,6 +57,8 @@ def _texture(inv, draw, slot, identity, name):
                   contaminated="!" in name, role_confidence="unknown", **_image_record(inv, name))
     if identity and (entry := FILE.match(name)) and not entry[3]:
         record["hash_source"] = "logged_dedup"
+    record["binding_verified"] = bool(identity and not record["contaminated"]
+                                      and (record["resource"] or {}).get("hash") == identity)
     return record
 
 

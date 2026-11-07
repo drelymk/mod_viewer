@@ -142,15 +142,19 @@ def analyze(dump, context=None):
                 # Identify blend streams by validated byte ratio across posing paths.
                 psize = inv.path(p).stat().st_size
                 position_stride, _, _, _ = stream_layout(inv, p, 0, "position")
-                options = []
+                options, declared_options = [], []
                 for slot, r in pvb.items():
                     if slot == 0:
                         continue
                     f = inv.find(producer.id, "vb" + str(slot), r)
-                    h, _ = inv.header(f.replace(".buf", ".txt"))
+                    h, fields = inv.header(f.replace(".buf", ".txt"))
                     stride = int(h.get("stride", 0))
                     if stride in (4, 16, 32) and inv.path(f).stat().st_size * position_stride == psize * stride:
                         options.append((slot, r, f))
+                        if any(e.get("SemanticName") == "BLENDINDICES"
+                               and e.get("InputSlot") == str(slot) for e in fields):
+                            declared_options.append((slot, r, f))
+                options = declared_options or options
                 if len(options) != 1:
                     raise Unsupported("Ambiguous or missing pre-skinning blend stream")
                 blend_slot, blend, b = options[0]
