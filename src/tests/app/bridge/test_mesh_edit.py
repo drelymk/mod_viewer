@@ -476,6 +476,59 @@ def test_shared_auto_apply_export_reload_and_subsequent_local_edits(
                         after.geometry, after.meshes[label][field])
 
 
+@pytest.mark.parametrize("guarded", [False, True])
+@pytest.mark.parametrize("binding", ["null", "NuLl"])
+def test_shared_auto_migrates_with_disabled_null_component(tmp_path, guarded, binding):
+    from core.geometry.mesh_builder import build_mesh_result
+
+    def transform(text):
+        text = text.replace("ib = ResourceIndices2", f"ib = {binding}")
+        return (_guard_auto_sections(text, ((r"if $\shared\variant == 3",),))
+                if guarded else text)
+
+    ini = _auto_fixture(tmp_path, index_size=4, transform=transform)
+    original_ini = ini.read_bytes()
+    original_buffers = {number: (tmp_path / f"indices{number}.ib").read_bytes()
+                        for number in range(3)}
+    disabled_lines = [line.raw for line in edit_session.peek(
+        str(tmp_path), str(ini)).section("TextureOverrideFamilyC").lines]
+    parsed, _draws = mesh_edit.resolved_draws(_auto_context(ini))
+    before = build_mesh_result(parsed.groups, str(tmp_path))
+    assert {group["name"] for group in parsed.groups} == {"FamilyA", "FamilyB"}
+
+    for suffix in "AB":
+        context = _auto_context(ini)
+        assert mesh_edit.apply_component_mesh_changes(
+            context, _auto_request(context, suffix)) == {
+                "ok": True, "component": f"Family{suffix}"}
+        staged = edit_session.peek(str(tmp_path), str(ini))
+        assert [line.raw for line in staged.section(
+            "TextureOverrideFamilyC").lines] == disabled_lines
+        if suffix == "A":
+            assert ini.read_bytes() == original_ini
+            assert all((tmp_path / f"indices{number}.ib").read_bytes() == original
+                       for number, original in original_buffers.items())
+            assert sum(line.text == "drawindexed = auto" for line in staged.lines) == 1
+            parsed, _draws = mesh_edit.resolved_draws(_auto_context(ini))
+            after = build_mesh_result(parsed.groups, str(tmp_path))
+            for field in ("pos", "idx", "uv"):
+                assert geometry_values(before.geometry, before.meshes["FamilyB-1"][field]) == (
+                    geometry_values(after.geometry, after.meshes["FamilyB-1"][field]))
+        exported = edit_session.export(str(tmp_path))
+        assert exported["saved"] == ["model.ini"]
+        assert exported["buffers_saved"] == [str(tmp_path / f"indices{'AB'.index(suffix)}.ib")]
+        assert not exported["failed"] and not exported["buffers_failed"]
+        edit_session.discard(str(tmp_path))
+        edit_session.load_documents(str(tmp_path), [str(ini)])
+
+    for number, original in original_buffers.items():
+        expected = original[12:] + original[:12] if number < 2 else original
+        assert (tmp_path / f"indices{number}.ib").read_bytes() == expected
+    parsed, draws = mesh_edit.resolved_draws(_auto_context(ini))
+    assert len(draws) == 4
+    assert {group["name"] for group in parsed.groups} == {"FamilyA", "FamilyB"}
+
+
 def _guard_auto_sections(text, guard):
     from core.ini.document import IniDocument
 

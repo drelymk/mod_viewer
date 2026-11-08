@@ -134,8 +134,11 @@ def _auto_families(section_info):
         if len(owners) != 1:
             continue
         _name, owner = owners[0]
+        # A literal null IB disables a component and produces no draw group.
+        # Keep unresolved resource bindings as members so migration fails closed.
         members = [(label, info) for label, info in family
-                   if info is not owner and info["ib"]]
+                   if info is not owner and info["ib"]
+                   and info["ib"].casefold() != "null"]
         if (len(owner["auto_sources"]) != 1
                 or len(owner["auto_guards"]) != 1 or not members
                 or owner["auto_sources"][0]["occurrence"]["path"]):

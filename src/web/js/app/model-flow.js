@@ -309,7 +309,11 @@ export async function displayMeshPayload(
       modPath: viewerState.currentModPath,
       onChange: onToggleChange,
     });
-    buildMenuPanel(controls.menu);
+    buildMenuPanel(controls.menu, {
+      modPath: assetMode ? null : viewerState.currentModPath,
+      readOnly: viewerState.currentSource?.readOnly,
+      onChange: onToggleChange,
+    });
     buildPresentPanel(controls.present, {
       modPath: viewerState.currentModPath,
       onChange: onPresentChange,

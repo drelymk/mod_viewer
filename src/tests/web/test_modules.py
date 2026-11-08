@@ -2991,3 +2991,67 @@ def test_sparse_compute_overlay_retains_rest_geometry_and_independent_pass_state
     assert result['frozen'] == result['independent']
     assert result['normals'] == [0,0,1] * 3
     assert result['baseline'] == [0,0,0,1,0,0,0,1,0]
+
+
+def test_menu_header_delete_stages_cleanup_and_keeps_shape_sliders(module_page):
+    module_page.route('**/js/mesh/visibility.js', lambda route: route.fulfill(
+        content_type='text/javascript', body="""
+export {getControlValue as getToggleValue, setControlValue as setToggleValue}
+  from '../editing/control-state.js';
+export {syncViews as refreshAll} from '../scene/view-sync.js';
+"""))
+    module_page.route('**/js/ui/dialogs.js', lambda route: route.fulfill(
+        content_type='text/javascript', body="""
+export const confirmDialog = async () => window.deferConfirmation
+  ? new Promise(resolve => { window.answerConfirmation = resolve; }) : window.confirmAnswer;
+export const alertDialog = async message => window.menuErrors.push(message);
+"""))
+    module_page.evaluate("""async () => {
+      const html = new DOMParser().parseFromString(await (await fetch('/')).text(), 'text/html');
+      const panel = html.querySelector('#menu-panel');
+      document.body.replaceChildren(panel);
+      const {buildMenuPanel} = await import('./js/panels/menu-panel.js');
+      const shape = {kind:'shape_slider',name:'Amount',var:'Amount',min:0,max:1,step:0.1,default:0.5};
+      const menu = {mode:{name:'Mode',var:'Mode',values:['0','1'],default:'0',slot:1}, shape};
+      window.menuCalls = []; window.menuErrors = []; window.menuChanges = [];
+      window.confirmAnswer = false;
+      window.pywebview = {api:{delete_menu_toggles: async path => {
+        window.menuCalls.push(path); return window.menuResult || {ok:true,pending:true};
+      }}};
+      const context = {modPath:'fixture-mod', onChange:async change => {
+        window.menuChanges.push(change); buildMenuPanel({shape}, context);
+      }};
+      window.menuDeleteFixture = {build:buildMenuPanel, menu, context};
+      buildMenuPanel(menu, context);
+    }""")
+    button = module_page.locator('#menu-delete-btn')
+    assert button.is_visible()
+    assert module_page.locator('#menu-panel > .panel-hdr > #menu-delete-btn').count() == 1
+    assert button.get_attribute('aria-label') == 'Delete menu toggles'
+    button.click()
+    module_page.wait_for_function("!document.querySelector('#menu-delete-btn').disabled")
+    assert module_page.evaluate('window.menuCalls') == []
+    module_page.evaluate("window.confirmAnswer = true; window.menuResult = {error:'fixture rejection'}")
+    button.click()
+    module_page.wait_for_function('window.menuErrors.length === 1')
+    assert module_page.locator('.menu-item').count() == 2
+    assert module_page.evaluate('window.menuChanges') == []
+    module_page.evaluate('window.menuResult = null')
+    button.click()
+    module_page.wait_for_function("document.querySelector('#menu-delete-btn').hidden")
+    assert module_page.locator('.menu-slider').count() == 1
+    assert module_page.evaluate('window.menuChanges') == [{'type': 'delete'}]
+    module_page.evaluate("""() => {
+      const {build,menu,context} = window.menuDeleteFixture;
+      window.deferConfirmation = true; build(menu, context);
+    }""")
+    button.click()
+    module_page.wait_for_function("typeof window.answerConfirmation === 'function'")
+    module_page.evaluate("""() => {
+      const {build,menu} = window.menuDeleteFixture;
+      build(menu, {modPath:'other-mod', readOnly:true});
+      window.answerConfirmation(true);
+    }""")
+    module_page.wait_for_function("!document.querySelector('#menu-delete-btn').disabled")
+    assert not button.is_visible()
+    assert module_page.evaluate('window.menuCalls') == ['fixture-mod', 'fixture-mod']

@@ -1,4 +1,4 @@
-// Read-only preview of in-game menu slots that drive meshes without [Key...] bindings.
+// In-game menu controls with staged removal of their authored INI menu.
 
 import { refreshAll, setToggleValue, getToggleValue } from '../mesh/visibility.js';
 import { registerViewSync, syncView } from '../scene/view-sync.js';
@@ -167,7 +167,32 @@ window.addEventListener(LANGUAGE_CHANGED, refreshMenuValues);
  * Build the panel from the structured controls.menu model. Hidden entirely when the
  * mod has no clickable menu, which is the common case.
  */
-export function buildMenuPanel(menu) {
+export function buildMenuPanel(menu, ctx = {}) {
+  const deleteGeneration = imageGeneration + 1;
+  const deleteButton = document.getElementById('menu-delete-btn');
+  if (deleteButton) {
+    deleteButton.hidden =
+      !ctx.modPath || ctx.readOnly || !Object.values(menu || {}).some((info) => info.kind !== 'shape_slider');
+    deleteButton.disabled = false;
+    deleteButton.onclick = async (event) => {
+      event.stopPropagation();
+      if (deleteButton.disabled) return;
+      deleteButton.disabled = true;
+      const { alertDialog, confirmDialog } = await import('../ui/dialogs.js');
+      try {
+        if (deleteGeneration !== imageGeneration) return;
+        if (!(await confirmDialog(t('menu.deleteConfirm'))) || deleteGeneration !== imageGeneration) return;
+        const result = await window.pywebview.api.delete_menu_toggles(ctx.modPath);
+        if (deleteGeneration !== imageGeneration) return;
+        if (result.error) return await alertDialog(t('menu.deleteError', { detail: result.error }));
+        if (deleteGeneration === imageGeneration) await ctx.onChange?.({ type: 'delete' });
+      } catch (error) {
+        await alertDialog(t('menu.deleteError', { detail: error.message || String(error) }));
+      } finally {
+        if (deleteGeneration === imageGeneration) deleteButton.disabled = false;
+      }
+    };
+  }
   const list = document.getElementById('menu-list');
   const panel = document.getElementById('menu-panel');
   imageObserver?.disconnect();

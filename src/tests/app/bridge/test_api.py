@@ -29,6 +29,7 @@ EXPECTED_API_METHODS = {
     "delete_rig_pose_preset",
     "clear_humanoid_control_rig",
     "delete_toggle",
+    "delete_menu_toggles",
     "discard_changes",
     "edit_asset_folder",
     "edit_mod_folder",
@@ -372,3 +373,16 @@ def test_texture_save_progress_event_includes_request_id_and_is_best_effort():
     api._window = BrokenWindow()
     assert api.save_texture_color(
         "mod", "diffuse::component01.dds", [], [], "request-8") == {"status": "ok"}
+
+
+def test_menu_delete_requires_native_authorized_mod(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
+    api = ModViewerAPI()
+    calls = []
+    monkeypatch.setattr("app.bridge.api.toggle_api.delete_menu_toggles", lambda folder: calls.append(folder) or {"ok": True})
+    with pytest.raises(PermissionError):
+        api.delete_menu_toggles(str(tmp_path))
+    assert calls == []
+    authorized = api._access.remember_mod_picker_selection(str(tmp_path))
+    assert api.delete_menu_toggles(str(tmp_path)) == {"ok": True}
+    assert calls == [authorized]
