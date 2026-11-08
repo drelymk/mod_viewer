@@ -242,37 +242,216 @@ def test_delete_removes_section_and_constant_and_rewrites_gates():
     assert (report["gates_rewritten"] == 3), (f"all three gates rewritten ({report})")
     assert (report["always_false_gates"] == []), ("no gate was negated to permanently false")
     assert (report["unsafe_gates"] == []), ("no unsafe gates reported")
+    assert [line.text for line in d.section("TextureOverrideComponent01").lines] == [
+        "hash = abc123", "drawindexed = 100,0,0", "drawindexed = 200,0,0",
+        "drawindexed = 300,0,0",
+    ]
+    assert d.structure_errors() == []
 
 
-def test_delete_multi_var_section_shared_var_untouched():
+
+@pytest.mark.parametrize("branch_keyword", ["elif", "else if", "else"])
+def test_delete_flattens_all_branches_without_duplicate_draws(branch_keyword):
+    body = f"""hash = abc123
+drawindexed = 12,0,0
+if $swapvar == 0
+    drawindexed = 12, 0, 0 ; repeated outside
+    drawindexed = 24,12,0
+{branch_keyword} $swapvar == 1
+    drawindexed = 24,12,0
+    drawindexed = 36,36,0
+else
+    drawindexed = 48,72,0
+endif
+drawindexed = 48,72,0
+"""
+    d = doc(BASIC.split("hash =", 1)[0] + body)
+    report = te.delete_toggle(d, "KeySwap")
+    assert report["unsafe_gates"] == []
+    assert report["always_true_gates"] == []
+    assert [line.text for line in d.section("TextureOverrideComponent01").lines] == [
+        "hash = abc123", "drawindexed = 12,0,0", "drawindexed = 24,12,0",
+        "drawindexed = 36,36,0", "drawindexed = 48,72,0",
+    ]
+    assert not d.structure_errors()
+    assert not d.syntax_errors()
+
+
+@pytest.mark.parametrize("source, expected", [
+    ("if !$SWAPVAR\n    drawindexed = 12,0,0\nelse\n    drawindexed = 24,12,0\nendif",
+     "drawindexed = 12,0,0\ndrawindexed = 24,12,0"),
+    ("if $swapvar == 0 && $live == 1\n    drawindexed = 12,0,0\n"
+     "elif $swapvar == 1 && $other == 1\n    drawindexed = 24,12,0\n"
+     "else\n    drawindexed = 36,36,0\nendif",
+     "if $live == 1\n    drawindexed = 12,0,0\nendif\n"
+     "if $other == 1\n    drawindexed = 24,12,0\nendif\n"
+     "drawindexed = 36,36,0"),
+    ("if $live == 1\n    drawindexed = 12,0,0\n"
+     "elif $swapvar == 1\n    drawindexed = 24,12,0\n"
+     "else\n    drawindexed = 36,36,0\nendif",
+     "if $live == 1\n    drawindexed = 12,0,0\nendif\n"
+     "if !($live == 1)\n    drawindexed = 24,12,0\nendif\n"
+     "if !($live == 1)\n    drawindexed = 36,36,0\nendif"),
+    ("if $live == 1\n    if $swapvar == 0\n        drawindexed = 12,0,0\n"
+     "    else\n        drawindexed = 24,12,0\n    endif\nendif",
+     "if $live == 1\n    drawindexed = 12,0,0\n    drawindexed = 24,12,0\nendif"),
+    ("if $swapvar == 0\n    if $live == 1\n        drawindexed = 12,0,0\n"
+     "    else\n        drawindexed = 24,12,0\n    endif\nelse\n"
+     "    drawindexed = 36,36,0\nendif",
+     "if $live == 1\n    drawindexed = 12,0,0\nelse\n    drawindexed = 24,12,0\nendif\n"
+     "drawindexed = 36,36,0"),
+    ("if $swapvar == 0\n    if $live == 1\n        drawindexed = 12,0,0\n"
+     "        drawindexed = 12,0,0\n    endif\nendif",
+     "if $live == 1\n    drawindexed = 12,0,0\n    drawindexed = 12,0,0\nendif"),
+    ("if $swapvar == 0 && $live == 1\n    run = CustomShaderFixture\nendif\n"
+     "if $swapvar == 1 && $other == 1\n    $other = 0\n    drawindexed = 12,0,0\nendif",
+     "if $live == 1\n    run = CustomShaderFixture\nendif\n"
+     "if $other == 1\n    $other = 0\n    drawindexed = 12,0,0\nendif"),
+    ("if $swapvar == 0\n    if $swapvar != 1\n        drawindexed = 12,0,0\n"
+     "    else\n        drawindexed = 24,12,0\n    endif\nendif",
+     "drawindexed = 12,0,0\ndrawindexed = 24,12,0"),
+])
+def test_delete_keeps_surviving_conditions_and_nested_bodies(source, expected):
+    d = doc(BASIC.split("hash =", 1)[0] + source + "\n")
+    report = te.delete_toggle(d, "KeySwap")
+    assert report["unsafe_gates"] == []
+    assert "\n".join(line.raw for line in d.section("TextureOverrideComponent01").lines) == expected
+    assert not d.structure_errors()
+    assert not d.syntax_errors()
+
+
+def test_delete_preserves_resource_state_scopes_and_lossless_lines():
+    header = BASIC.split("hash =", 1)[0]
+    body = ("ib = ResourceFirst\r\n"
+            "if $swapvar == 0 ; gate comment\n"
+            "\tdrawindexed = 12,0,0\r\n"
+            "else\r\n"
+            "\tib = ResourceSecond\n"
+            "\tdrawindexed = 12,0,0\r\n"
+            "endif ; closing comment\n"
+            "if $live == 1\r\n\tdrawindexed = 12,0,0\nendif\r\n"
+            "[TextureOverrideComponent02]\n"
+            "drawindexed = 12,0,0")
+    d = doc("\ufeff" + header + body)
+    report = te.delete_toggle(d, "KeySwap")
+    assert report["unsafe_gates"] == []
+    expected = ("ib = ResourceFirst\r\n; gate comment\n"
+                "drawindexed = 12,0,0\r\nib = ResourceSecond\n"
+                "drawindexed = 12,0,0\r\n; closing comment\n"
+                "if $live == 1\r\n\tdrawindexed = 12,0,0\nendif\r\n\n"
+                "[TextureOverrideComponent02]\n"
+                "drawindexed = 12,0,0")
+    assert d.to_string().startswith("\ufeff")
+    assert d.to_string().endswith(expected)
+    assert not d.structure_errors()
+
+
+def test_delete_removes_complete_tuple_from_other_keys():
     d = doc("""[Constants]
 global persist $swapvar = 0
 global persist $othervar = 0
+global persist $variant = 0
+global persist $retained = 0
 
 [KeyMulti]
 key = 1
 type = cycle
 $swapvar = 0,1
+$variant = 0,1
 $othervar = 0,1
 
 [KeyOther]
 key = 2
 type = cycle
 $othervar = 0,1
+$retained = 0,1
 
 [TextureOverrideComponent01]
 hash = abc
-if $swapvar == 0 && $othervar == 0
+if $swapvar == 0 && $variant == 1 && $othervar == 0 && $retained == 1
 drawindexed = 100,0,0
 endif
 """)
     report = te.delete_toggle(d, "KeyMulti")
-    assert (report["vars_removed"] == ["swapvar"]), (f"only swapvar removed, othervar still driven by KeyOther "
-          f"({report['vars_removed']})")
-    assert (te._constant_line(d, "othervar") is not None), ("othervar's Constants line survives")
-    assert (d.section("KeyOther") is not None), ("KeyOther section untouched")
+    assert report["vars_removed"] == ["swapvar", "variant", "othervar"]
+    assert report["sections_removed"] == ["KeyMulti"]
+    for variable in report["vars_removed"]:
+        assert "$" + variable not in d.to_string()
+    assert te.cycle_vars(d.section("KeyOther")) == {"retained": ["0", "1"]}
+    assert te._constant_line(d, "retained") is not None
     gate = next(line for line in d.lines if line.kind in (IF, ELIF))
-    assert (gate.text == "if $othervar == 0"), (f"gate keeps the surviving var and drops the dead one ({gate.text})")
+    assert gate.text == "if $retained == 1"
+
+
+
+def test_delete_removes_assignments_and_key_conditions_case_insensitively():
+    d = doc(BASIC + """[Constants]
+global persist $SWAPVAR = 1
+[Present]
+post $SwapVar = 0
+[KeyUtility]
+condition = $SWAPVAR == 0 && $live == 1
+key = 2
+[KeyUtilityOther]
+condition = !$SwapVar
+key = 3
+[TextureOverrideComponent02]
+drawindexed = 12,0,0
+if $SWAPVAR == 0
+    $SwapVar = 1
+    drawindexed = 12,0,0
+endif
+""")
+    report = te.delete_toggle(d, "keyswap")
+    assert report["vars_removed"] == ["swapvar"]
+    assert "swapvar" not in d.to_string().casefold()
+    assert [line.text for line in d.section("KeyUtility").lines if line.text] == [
+        "condition = $live == 1", "key = 2",
+    ]
+    assert [line.text for line in d.section("KeyUtilityOther").lines if line.text] == ["key = 3"]
+    assert [line.text for line in d.section("TextureOverrideComponent02").lines] == [
+        "drawindexed = 12,0,0",
+    ]
+
+
+@pytest.mark.parametrize("other_key", ["KeyModViewerPresent", "KeyShared"])
+def test_delete_cleans_all_writers_and_removes_empty_cycle_keys(other_key):
+    d = doc(BASIC + f"""[Constants]
+global $swapvar_suffix = 2
+[Present]
+post $SWAPVAR = 0
+if $SwapVar == 1
+    run = CommandListHelper
+endif
+[CommandListHelper]
+local $swapvar
+pre $SWAPVAR = 2
+[KeyReader]
+condition = $swapvar == 0
+key = 3
+run = CommandListHelper
+[{other_key}]
+key = 2
+type = cycle
+$SwapVar = 0,1,2
+[{other_key}]
+key = 4
+type = cycle
+$SWAPVAR = 1,2,0
+""")
+    report = te.delete_toggle(d, "KeySwap")
+    assert report["vars_removed"] == ["swapvar"]
+    assert report["sections_removed"] == ["KeySwap", other_key, other_key, "CommandListHelper", "Constants", "Present"]
+    assert "$swapvar" not in d.to_string().lower().replace("$swapvar_suffix", "")
+    assert d.section(other_key) is None
+    assert te._constant_line(d, "swapvar") is None
+    assert any(line.text == "global $swapvar_suffix = 2" for line in d.lines)
+    assert d.section("Present") is None
+    assert d.section("CommandListHelper") is None
+    assert [line.text for line in d.section("KeyReader").lines if line.text] == ["key = 3"]
+    assert all(line.kind not in (IF, ELIF) for line in d.lines)
+    assert not d.structure_errors()
+
 
 
 def test_delete_namespaced_var_untouched():
@@ -284,6 +463,12 @@ key = 1
 type = cycle
 $swapvar = 0,1
 
+[KeyShared]
+key = 2
+type = cycle
+$SWAPVAR = 0,1
+$\Master\swapvar = 0,1
+
 [TextureOverrideComponent01]
 hash = abc
 if $\Master\swapvar == 0 && $swapvar == 0
@@ -292,6 +477,9 @@ endif
 """)
     te.delete_toggle(d, "KeySwap")
     gate = next(line for line in d.lines if line.kind in (IF, ELIF))
+    assert te.cycle_vars(d.section("KeyShared"), include_read_only=True) == {
+        r"\Master\swapvar": ["0", "1"],
+    }
     assert (gate.text == r"if $\Master\swapvar == 0"), (f"the namespaced var survives, only the local var's clause is "
           f"eliminated ({gate.text})")
 
@@ -300,30 +488,18 @@ endif
 
 
 
-def test_delete_reports_unsafe_gate():
-    """A stray extra endif makes the section's nesting ambiguous; delete_toggle
-    must not guess, and must report it instead of guessing."""
-    d = doc("""[Constants]
-global persist $swapvar = 0
-
-[KeySwap]
-key = 1
-type = cycle
-$swapvar = 0,1
-
-[TextureOverrideComponent01]
-hash = abc
-if $swapvar == 0
-drawindexed = 100,0,0
-endif
-endif
-""")
-    assert (d.structure_errors() != []), ("fixture really is structurally ambiguous")
+@pytest.mark.parametrize("body", [
+    "if $swapvar == 0\ndrawindexed = 12,0,0\nendif\nendif\n",
+    "if $swapvar ? 0\ndrawindexed = 12,0,0\nendif\n",
+    "if $swapvar == 0 && $live == 1\n$live = 0\ndrawindexed = 12,0,0\nelse\ndrawindexed = 24,12,0\nendif\n",
+    "if $swapvar == 0 && $live == 1\nrun = CommandListHelper\ndrawindexed = 12,0,0\nelse\ndrawindexed = 24,12,0\nendif\n",
+])
+def test_delete_reports_unsafe_gate(body):
+    d = doc(BASIC.split("hash =", 1)[0] + body)
     report = te.delete_toggle(d, "KeySwap")
-    assert (len(report["unsafe_gates"]) == 1), (f"the ambiguous gate is reported as unsafe, not rewritten ({report})")
-    assert (report["gates_rewritten"] == 0), ("the unsafe gate was not counted as rewritten")
-    gate = next(line for line in d.lines if line.kind == IF)
-    assert ("swapvar" in gate.text), ("the unsafe gate is left completely untouched")
+    assert len(report["unsafe_gates"]) == 1
+    assert report["gates_rewritten"] == 0
+    assert "\n".join(line.raw for line in d.section("TextureOverrideComponent01").lines) + "\n" == body
 
 
 
@@ -340,3 +516,47 @@ def _line_parses(line):
         return True
     except ic.ConditionError:
         return False
+
+
+@pytest.mark.parametrize("newline, final_newline", [("\n", True), ("\r\n", True), ("\n", False), ("\r\n", False)])
+def test_delete_preserves_existing_empty_headers_and_restores_separators(newline, final_newline):
+    source = [
+        "[Constants]", "global persist $swapvar = 0",
+        "[KeySwap]", "key = 1", "type = cycle", "$swapvar = 0,1",
+        "[CommandListEmptied]", "if $swapvar == 0", "    $swapvar = 1", "endif", "; kept note",
+        "[CommandListCaller]", "post run = CommandListEmptied",
+        "[CommandListOnlyGate]", "if $swapvar == 0", "endif",
+        "[CommandListEmptyConditional]", "if $unrelated", "endif",
+        "[ResourceEmpty]", "[CommandListEmpty]", "; existing placeholder",
+        "[CommandListDuplicate]", "[CommandListDuplicate]", "$swapvar = 1",
+        "[CommandListKeep]", "run = CommandListEmpty", "run = CommandListDuplicate",
+        "[TextureOverridePart]", "if $swapvar == 0", "drawindexed = 12,0,0", "endif",
+    ]
+    d = doc("\ufeff" + newline.join(source) + (newline if final_newline else ""))
+    report = te.delete_toggle(d, "KeySwap")
+    expected = [
+        "; kept note", "[CommandListEmptyConditional]", "if $unrelated", "endif", "",
+        "[ResourceEmpty]", "", "[CommandListEmpty]", "; existing placeholder", "",
+        "[CommandListDuplicate]", "", "[CommandListKeep]", "run = CommandListEmpty",
+        "run = CommandListDuplicate", "", "[TextureOverridePart]", "drawindexed = 12,0,0",
+    ]
+    assert d.to_bytes() == ("\ufeff" + newline.join(expected) + (newline if final_newline else "")).encode("utf-8")
+    assert set(report["sections_removed"]) == {
+        "KeySwap", "Constants", "CommandListEmptied", "CommandListCaller", "CommandListDuplicate", "CommandListOnlyGate",
+    }
+    assert not d.structure_errors()
+
+
+def test_delete_preserves_ambiguous_newly_empty_header():
+    d = doc(BASIC.split("[TextureOverrideComponent01]", 1)[0] + """[CommandListAmbiguous]
+if $swapvar == 0
+    $swapvar = 1
+endif
+endif
+""")
+    report = te.delete_toggle(d, "KeySwap")
+    assert len(report["unsafe_gates"]) == 1
+    assert d.section("CommandListAmbiguous") is not None
+    assert "CommandListAmbiguous" not in report["sections_removed"]
+    assert any(issue["reason"] == "endif_without_if" for issue in d.structure_errors())
+    assert "$swapvar = 1" not in d.to_string()

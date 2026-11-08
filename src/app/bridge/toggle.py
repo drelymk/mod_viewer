@@ -12,7 +12,8 @@ from core.mod_source import mod_source_for_path
 from core.ini.health import _normalized_key_chord as _binding_identity
 from core.editing import record as record_editor
 from core.editing import toggle as te
-from app.mods.analysis import build_mod_ini_snapshot
+from core.editing import menu as menu_editor
+from app.mods.analysis import build_mod_ini_snapshot, analyze_mod_inis
 from app.mods import loader as mod_loader
 from app.session import edit as edit_session
 
@@ -198,8 +199,48 @@ def edit_toggle(mod_dir, ini_rel, section_name, changes=None):
 
 
 def delete_toggle(mod_dir, ini_rel, section_name):
+    def on_commit(path, result):
+        for removed in result["sections_removed"]:
+            edit_session.mark_removed(mod_dir, path, removed)
     return _run(mod_dir, ini_rel, lambda doc: te.delete_toggle(doc, section_name),
-                on_commit=lambda path, result: edit_session.mark_removed(mod_dir, path, section_name))
+                on_commit=on_commit)
+
+
+def delete_menu_toggles(mod_dir):
+    """Stage mod-wide clickable-menu removal as one atomic INI edit."""
+    try:
+        source = edit_session.source_for(mod_dir) or mod_source_for_path(mod_dir)
+        if source.read_only:
+            raise te.ToggleEditError("Menu deletion is unavailable for compressed mods")
+        paths = edit_session.document_paths(mod_dir) or discover_ini_paths(mod_dir, source=source)
+        reports = []
+        with edit_session.transaction(mod_dir, paths) as transaction:
+            documents = {path: transaction.document(path) for path in paths}
+            snapshot = build_mod_ini_snapshot(paths, mod_dir, documents, source=source,
+                                              require_documents=True)
+            analysis = analyze_mod_inis(snapshot)
+            controllers = {path: set() for path in paths}
+            targets = {path: set() for path in paths}
+            for entry in analysis.menu.values():
+                if entry.get("edit_source_var"):
+                    controllers[entry["ini_path"]].add(entry["edit_source_var"])
+                    targets[entry["edit_target_ini"]].add(entry["edit_target_var"])
+            for path, doc in documents.items():
+                before = doc.to_string()
+                report = menu_editor.delete_menu(doc, controllers=controllers[path], variables=targets[path])
+                report["changed"] = doc.to_string() != before
+                reports.append((path, report))
+        for path, report in reports:
+            for section in report["sections_removed"]:
+                edit_session.mark_removed(mod_dir, path, section)
+        return {"ok": True, "pending": True, "result": {
+            "controls_removed": sum(report["controls_removed"] for _, report in reports),
+            "files": sum(report["changed"] for _, report in reports),
+        }}
+    except te.ToggleEditError as error:
+        return _toggle_error(error)
+    except Exception:
+        return _unexpected_error()
 
 
 # -- export / discard -------------------------------------------------------

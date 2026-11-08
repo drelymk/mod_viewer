@@ -1,16 +1,20 @@
 """Create, edit, and delete cycle toggles in an in-memory ``IniDocument``.
 
-Callers own transaction and export; gate rewrites preserve branch structure.
+Callers own transaction and export; deletion opens every affected branch.
 """
 
 import re
 
 from ..ini import condition as ic
-from ..ini.document import IF, ELIF, ELSE, ENDIF, ASSIGN, BLANK
+from .cleanup import DeletionCleanup
+from ..ini.document import (IniDocument, IF, ELIF, ELSE, ENDIF, ASSIGN, BLANK,
+                           COMMENT, DRAW)
 
 _VAR_ASSIGN_RE = re.compile(r"^\$(\w+)\s*=\s*(.+)$")
 _ALL_VAR_ASSIGN_RE = re.compile(r"^\$([\\\w]+)\s*=\s*(.+)$")
 _CONST_VAR_RE = re.compile(r"^(?:global\s+)?(?:persist\s+)?\$(\w+)\s*=\s*([^,]+)$", re.I)
+_VARIABLE_WRITE_RE = re.compile(
+    r"^(?:(?:global|local|persist|pre|post)\s+)*\$([\\\w]+)(?:\s*=.*)?$", re.I)
 _COND_LINE_RE = re.compile(r"^(if|else\s+if|elif)\s+(.*)$", re.I)
 
 # The two on-screen-detection variable names real WWMI/GIMI mods use to gate
@@ -78,7 +82,9 @@ def list_cycle_toggles(doc):
 def _var_declared_elsewhere(doc, var, exclude_section):
     """True if some other cycle Key section in this document still drives `var`."""
     for name, cvars in list_cycle_toggles(doc):
-        if name != exclude_section and var in cvars:
+        if exclude_section is not None and name.lower() == exclude_section.lower():
+            continue
+        if any(candidate.lower() == var.lower() for candidate in cvars):
             return True
     return False
 
@@ -378,88 +384,243 @@ def _rebuild_condition_line(line, keyword, new_expr):
     return f"{indent}{keyword} {new_expr}{comment}"
 
 
+def _join_conditions(parts, *, either=False):
+    identity, absorbing = (ic.FALSE, ic.TRUE) if either else (ic.TRUE, ic.FALSE)
+    if absorbing in parts:
+        return absorbing
+    kept = [part for part in parts if part is not identity]
+    if not kept:
+        return identity
+    if len(kept) == 1:
+        return kept[0]
+    return (ic.Or if either else ic.And)(kept)
+
+
+def _open_deleted_conditions(node, dead, negated=False):
+    """Remove deleted predicates in either polarity, including implicit else guards."""
+    if isinstance(node, ic.Paren):
+        return _open_deleted_conditions(node.inner, dead, negated)
+    if isinstance(node, ic.Not):
+        return _open_deleted_conditions(node.operand, dead, not negated)
+    if isinstance(node, (ic.And, ic.Or)):
+        return _join_conditions(
+            [_open_deleted_conditions(part, dead, negated) for part in node.parts],
+            either=isinstance(node, ic.Or) != negated)
+    if any(name.lower() in dead for name in node.variables()):
+        return ic.TRUE
+    return ic.Not(ic.Paren(node)) if negated else node
+
+
 def _strip_vars_from_gates(doc, dead_vars):
-    """Simplify gates that reference deleted vars without changing branch structure.
+    """Open affected chains in place; never copy their draw instructions.
 
-    Refuse sections with ambiguous nesting. Collect targets once because
-    one-line rewrites preserve line numbers. The report identifies rewritten,
-    constant-result, and unsafe gates.
+    Each branch retains its surviving explicit and implicit predicates. Draws
+    newly sharing a scope are deduplicated only across other draws/comments;
+    any command or gate is a barrier because it may change execution state.
     """
-    targets = []
-    unsafe = []
-    for line in doc.lines:
-        if line.kind not in (IF, ELIF):
-            continue
-        split = _split_condition_line(line)
-        if not split or not any(ic.references(split[1], v) for v in dead_vars):
-            continue
-        sec = line.section
-        if sec is not None and not doc.is_safe_to_rewrite(sec.name):
-            unsafe.append((sec.name if sec else None, line.no + 1))
-            continue
-        targets.append(line.no)
+    dead = {var.lower() for var in dead_vars}
+    view = IniDocument.from_string(doc.to_string())
+    # Accept the shorthand `else $variable == value` when deleting its gate.
+    # Normalize only the analysis copy; unrelated source text stays untouched.
+    for line in list(view.lines):
+        match = re.match(r"^else\s+(\$.*)$", line.text, re.I)
+        if match and any(name.lower() in dead
+                         for name in re.findall(r"\$([\\\w]+)", match[1])):
+            view.replace_lines(line.no, line.no + 1,
+                               [_rebuild_condition_line(line, "elif", match[1])])
 
+    original_scopes = {}
+    scope = []
+    for line in view.lines:
+        if line.section and line.no == line.section.header_no:
+            scope = []
+        elif line.kind == IF:
+            scope.append(line.no)
+        elif line.kind in (ELIF, ELSE) and scope:
+            scope[-1] = line.no
+        elif line.kind == ENDIF and scope:
+            scope.pop()
+        elif line.kind == DRAW:
+            original_scopes[line.no] = tuple(scope)
+
+    edits = {}
+    unindent = {}
+    promoted = set()
     changed = 0
-    always_false = []
-    always_true = []
-    for no in targets:
-        target = doc.lines[no]   # re-fetch: _reindex() replaces Line objects on every splice
-        keyword, expr = _split_condition_line(target)
-        node = ic.parse(expr)   # already proven parseable by references() above
-        reduced = ic.eliminate(node, dead_vars)
-        if reduced is ic.TRUE:
-            new_expr = "1"
-        elif reduced is ic.FALSE:
-            # A real, expected outcome (not just a defensive fallback) — see
-            # ic.eliminate()'s docstring: a negated dead-var clause such as
-            # `!$v` inverts to permanently false, retiring this branch for
-            # good in favour of whichever sibling now always wins instead.
-            new_expr = "0"
-        else:
-            new_expr = ic.render(reduced)
+    unsafe = []
+    bad_sections = {problem.get("section", "").lower()
+                    for problem in view.structure_errors() + view.syntax_errors()
+                    if problem.get("section")}
+    for sec in view.sections:
+        targets = []
+        nodes = {}
+        for line in sec.lines:
+            split = _split_condition_line(line)
+            if not split:
+                continue
+            names = re.findall(r"\$([\\\w]+)", split[1])
+            if any(name.lower() in dead for name in names):
+                targets.append(line.no)
+            try:
+                nodes[line.no] = ic.parse(split[1])
+            except ic.ConditionError:
+                pass
+        if not targets:
+            continue
+        if sec.name.lower() in bad_sections:
+            unsafe.extend((sec.name, no + 1) for no in targets)
+            continue
 
-        doc.replace_lines(target.no, target.no + 1,
-                          [_rebuild_condition_line(target, keyword, new_expr)])
+        stack = []
+        chains = []
+        for line in sec.lines:
+            if line.kind == IF:
+                stack.append([line])
+            elif line.kind in (ELIF, ELSE):
+                stack[-1].append(line)
+            elif line.kind == ENDIF:
+                chains.append((stack.pop(), line))
+        for branches, closing in chains:
+            affected = [branch.no for branch in branches if branch.no in targets]
+            if not affected:
+                continue
+            if any(branch.kind != ELSE and branch.no not in nodes for branch in branches):
+                unsafe.extend((sec.name, no + 1) for no in affected)
+                continue
+            # Independent surviving guards must not observe writes made by an
+            # earlier branch. Refuse that ambiguity instead of changing its order.
+            live = {name.lower() for branch in branches
+                    for name in (nodes[branch.no].variables() if branch.no in nodes else ())
+                    if name.lower() not in dead}
+            writes = {match[1].lower() for line in sec.lines
+                      if branches[0].no < line.no < closing.no
+                      and (match := re.match(r"^(?:pre\s+|post\s+)?\$([\\\w]+)\s*=", line.text, re.I))}
+            has_calls = any(re.match(r"^(?:(?:pre|post)\s+)?run\s*=", line.text, re.I)
+                            for line in view.lines[branches[0].no + 1:closing.no])
+            has_surviving_guards = any(_open_deleted_conditions(nodes[branch.no], dead) is not ic.TRUE
+                                      for branch in branches if branch.no in nodes)
+            if len(branches) > 1 and ((live & writes) or (has_calls and has_surviving_guards)):
+                unsafe.extend((sec.name, no + 1) for no in affected)
+                continue
+            changed += len(affected)
+            previous = []
+            close_previous = False
+            for index, branch in enumerate(branches):
+                own = nodes.get(branch.no)
+                parts = [_open_deleted_conditions(node, dead, True) for node in previous]
+                if own is not None:
+                    parts.append(_open_deleted_conditions(own, dead))
+                    previous.append(own)
+                guard = _join_conditions(parts)
+                prefix = branch.raw[:len(branch.raw) - len(branch.raw.lstrip())]
+                replacement = [prefix + "endif"] if close_previous else []
+                close_previous = guard is not ic.TRUE
+                if close_previous:
+                    replacement.append(_rebuild_condition_line(
+                        doc.lines[branch.no], "if", ic.render(guard)))
+                elif ";" in branch.raw:
+                    replacement.append(prefix + branch.raw[branch.raw.index(";"):])
+                edits[branch.no] = replacement
+                end = branches[index + 1].no if index + 1 < len(branches) else closing.no
+                body = view.lines[branch.no + 1:end]
+                promoted.update(line.no for line in body if line.kind == DRAW)
+                if guard is ic.TRUE:
+                    first = next((line for line in body if line.kind not in (BLANK, COMMENT)), None)
+                    indent = first.raw[:len(first.raw) - len(first.raw.lstrip())] if first else ""
+                    if indent.startswith(prefix) and len(indent) > len(prefix):
+                        for line in body:
+                            if line.raw.startswith(indent):
+                                unindent[line.no] = unindent.get(line.no, 0) + len(indent) - len(prefix)
+            edits[closing.no] = [closing.raw] if close_previous else []
+            if not close_previous and ";" in closing.raw:
+                edits[closing.no] = [closing.raw[:len(closing.raw) - len(closing.raw.lstrip())]
+                                     + closing.raw[closing.raw.index(";"):]]
+
+    for line in doc.lines:
+        assignment = _VARIABLE_WRITE_RE.fullmatch(line.text)
+        if assignment and assignment[1].lower() in dead:
+            edits[line.no] = []
+        condition = re.match(r"^condition\s*=\s*(.+)$", line.text, re.I)
+        if not condition:
+            continue
+        try:
+            node = ic.parse(condition[1])
+        except ic.ConditionError:
+            continue
+        if not any(name.lower() in dead for name in node.variables()):
+            continue
+        reduced = _open_deleted_conditions(node, dead)
+        edits[line.no] = ([] if reduced is ic.TRUE else
+                          [_rebuild_condition_line(line, "condition =", ic.render(reduced))])
         changed += 1
-        if new_expr == "0":
-            always_false.append((target.section.name if target.section else None,
-                                 target.no + 1))
-        elif new_expr == "1":
-            always_true.append((target.section.name if target.section else None,
-                                target.no + 1))
 
-    return {"rewritten": changed, "always_false": always_false,
-            "always_true": always_true, "unsafe": unsafe}
+    # Preserve each surviving line's own terminator by applying single-line
+    # splices bottom-up, including indentation changes inside flattened blocks.
+    for no, count in unindent.items():
+        texts = edits.get(no, [doc.lines[no].raw])
+        edits[no] = [text[min(count, len(text) - len(text.lstrip())):] for text in texts]
+    planned = [(line.no, text) for line in doc.lines
+               for text in edits.get(line.no, [line.raw])]
+    result = IniDocument.from_string("\n".join(text for _, text in planned))
+    seen = {}
+    for line, (origin, _) in zip(result.lines, planned):
+        if line.kind == DRAW and re.match(r"^drawindexed\s*=", line.text, re.I):
+            key = re.sub(r"\s+", "", line.text).lower()
+            duplicate = (key in seen
+                         and (origin in promoted or seen[key] in promoted)
+                         and original_scopes[origin] != original_scopes[seen[key]])
+            if duplicate:
+                edits[origin] = []
+            else:
+                seen[key] = origin
+        elif line.kind not in (DRAW, BLANK, COMMENT):
+            seen.clear()
+    for no in sorted(edits, reverse=True):
+        doc.replace_lines(no, no + 1, edits[no])
+    return {"rewritten": changed, "always_false": [], "always_true": [], "unsafe": unsafe}
+
+
+def remove_variables(doc, variables):
+    """Remove plain variables and open their gates throughout one staged INI."""
+    cleanup = DeletionCleanup(doc)
+    variables = list(dict.fromkeys(variables))
+    if any(ic.is_namespaced(var) for var in variables):
+        raise ToggleEditError("cross-file variables cannot be removed here")
+    dead = {var.lower() for var in variables}
+    dependent_ordinals = {
+        index for index, other in enumerate(doc.sections)
+        if other.name.lower().startswith("key")
+        and any(var.lower() in dead for var in cycle_vars(other))
+    }
+    report = _strip_vars_from_gates(doc, variables) if variables else \
+        {"rewritten": 0, "always_false": [], "always_true": [], "unsafe": []}
+    removed_sections = []
+    metadata = {"key", "back", "type", "condition"}
+    for index, other in reversed(list(enumerate(doc.sections))):
+        if index not in dependent_ordinals or cycle_vars(other, include_read_only=True):
+            continue
+        if all(line.kind in (BLANK, COMMENT) or
+               (line.kind == ASSIGN and line.text.partition("=")[0].strip().lower() in metadata)
+               for line in other.lines):
+            removed_sections.append(other.name)
+            doc.delete_lines(other.start, other.end)
+    removed_sections.extend(cleanup.finish(doc))
+    return {"vars_removed": variables, "sections_removed": removed_sections,
+            "gates_rewritten": report["rewritten"],
+            "always_false_gates": report["always_false"],
+            "always_true_gates": report["always_true"],
+            "unsafe_gates": report["unsafe"]}
 
 
 def delete_toggle(doc, section_name):
-    """Remove a toggle, unused local variable declarations, and references in gates.
-
-    Namespaced vars and vars used by another Key section remain untouched.
-    The report flags gates that became constant or could not be rewritten
-    safely because their section has ambiguous nesting.
-    """
+    """Remove a cycle section and all of its local variables from this INI."""
+    cleanup = DeletionCleanup(doc)
     sec = find_cycle_section(doc, section_name)
-    my_vars = [v for v in cycle_vars(sec) if not ic.is_namespaced(v)]
-
+    variables = list(cycle_vars(sec))
+    name = sec.name
     doc.delete_lines(sec.start, sec.end)
-
-    # Decide up front which vars are truly orphaned (some multi-var sections
-    # share a var with another Key section, per the corpus survey), then fold
-    # them all away in one pass — a condition naming two dead vars from the
-    # same deleted section then only needs a single rewrite, not one per var.
-    vars_removed = [v for v in my_vars
-                    if not _var_declared_elsewhere(doc, v, exclude_section=section_name)]
-    gate_report = _strip_vars_from_gates(doc, vars_removed) if vars_removed else \
-        {"rewritten": 0, "always_false": [], "always_true": [], "unsafe": []}
-
-    for var in vars_removed:
-        line = _constant_line(doc, var)
-        if line is not None:
-            doc.delete_lines(line.no, line.no + 1)
-
-    return {"section": section_name, "vars_removed": vars_removed,
-            "gates_rewritten": gate_report["rewritten"],
-            "always_false_gates": gate_report["always_false"],
-            "always_true_gates": gate_report["always_true"],
-            "unsafe_gates": gate_report["unsafe"]}
+    report = remove_variables(doc, variables)
+    report["section"] = section_name
+    report["sections_removed"].insert(0, name)
+    report["sections_removed"].extend(cleanup.finish(doc))
+    return report

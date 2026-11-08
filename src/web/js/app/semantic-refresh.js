@@ -50,7 +50,11 @@ function applyControlSemanticResult(result, path, callbacks, change = {}) {
     modPath: path,
     onChange: callbacks.onToggleChange,
   });
-  buildMenuPanel(controls.menu);
+  buildMenuPanel(controls.menu, {
+    modPath: path,
+    readOnly: viewerState.currentSource?.readOnly,
+    onChange: callbacks.onToggleChange,
+  });
   const presentContext = {
     modPath: path,
     onChange: callbacks.onPresentChange,

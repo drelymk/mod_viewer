@@ -101,6 +101,20 @@ of documentation, comments and tests; use portable fixtures instead.
   one variable. Resolve duplicate tuples to their last cycle position.
   `[KeyModViewerPresent]` is one aligned mod-wide cycle with atomic fan-out;
   incomplete/misaligned state stays visible but unapplied.
+- Deleting a toggle removes its local variables throughout that INI, including
+  declarations, resets and assignments in other cycle keys or PRESENT captures.
+  Other keys retain their remaining variable tuples; remove keys left with only
+  binding metadata. Open all affected branches, retaining unrelated predicates
+  and source order. Deduplicate newly co-scoped draws only without intervening
+  commands or gates that could change their state.
+- MENU TOGGLE deletion stages one atomic mod-wide INI transaction. Rediscover
+  clickable controls from the current documents; remove their variables, exclusive
+  UI helpers and image references, flatten model gates, and preserve shape sliders
+  and shared consumers. Never remove image files or write the INIs before Export.
+- Deletion removes headers emptied by that edit, including no-op calls to helpers
+  it empties, while preserving pre-existing empty resource/helper placeholders.
+  Keep comments and surviving line endings, and leave at least one blank line
+  between surviving sections.
 - Record regenerates only provably safe single-variable if/elif chains. Refuse
   ambiguous or partially observed cases, independently reparse the result and
   roll back failed verification. Toggle controls use assignable `.onclick` so
@@ -194,6 +208,9 @@ of documentation, comments and tests; use portable fixtures instead.
   prepared animations, sparse shapes, unsupported layouts and malformed data.
   Read through the same ModSource/BufferStore and shared resource resolver;
   never weld by position or let array views outlive their load-owned bytes.
+- Geometry initializes OpenBLAS with one worker before its lazy NumPy imports.
+  The batch decoders use array operations rather than BLAS; keep unused BLAS
+  worker stacks from inflating the process's memory commitment.
 - Preserve authored normals; reconstruct only as fallback and never weld solely
   for smoothing. Normalize winding independently of authored normal direction.
   All normal consumers share `decode_normals`; large supported inputs use bounded

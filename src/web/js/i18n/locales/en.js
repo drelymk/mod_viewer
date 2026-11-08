@@ -93,6 +93,10 @@ export default {
   'panels.orientation': 'Orientation',
   'panels.present': 'Present',
   'panels.keyToggle': 'Key Toggle',
+  'menu.delete': 'Delete menu toggles',
+  'menu.deleteConfirm':
+    'Delete all clickable menu controls and their menu image references? Shape sliders are kept. Changes stay in memory until Export.',
+  'menu.deleteError': 'Could not delete menu toggles:\n\n{detail}',
   'panels.menuToggle': 'Menu Toggle',
   'panels.nothingSelected': 'Nothing selected',
   'panels.selectToInspect': 'Select a component or mesh to inspect its properties.',

@@ -132,6 +132,62 @@ def wirable_mod(api_root):
     yield root, ini_path
 
 
+def test_delete_toggle_flattens_staged_branches_and_exports_once(toggle_mod):
+    root, path = toggle_mod
+    with open(path, encoding="utf-8") as handle:
+        original = handle.read()
+    renamed = toggle_api.edit_toggle(root, "mod.ini", "KeyUpper", {"new_name": "Renamed"})
+    assert renamed["ok"]
+    assert edit_session.peek(root, path).section("KeyRenamed") is not None
+    with edit_session.transaction(root, [path]) as transaction:
+        staged = transaction.document(path)
+        staged.insert_lines(len(staged.lines), [
+            "[Constants]", "global persist $Retained = 0",
+            "[KeyModViewerPresent]", "key = p", "type = cycle",
+            "$Upper = 0,1,1", "$Retained = 0,1,0",
+            "[KeyAlias]", "key = 2", "type = cycle", "$upper = 0,1",
+        ])
+    edit_session.mark_added(root, path, "KeyAlias")
+
+    deleted = toggle_api.delete_toggle(root, "mod.ini", "KeyRenamed")
+    assert deleted["ok"] and deleted["pending"]
+    assert deleted["result"]["vars_removed"] == ["Upper"]
+    pending = edit_session.peek(root, path)
+    assert pending.section("KeyRenamed") is None
+    assert pending.section("KeyAlias") is None
+    assert edit_session.new_sections_for(root) == {}
+    assert "$upper" not in pending.to_string().lower()
+    from core.editing import present as present_editor
+    present = present_editor.details(pending)
+    assert present["vars"] == {"Retained": ["0", "1", "0"]}
+    assert present["count"] == 3
+    assert [line.text for line in pending.section("TextureOverrideComponent01").lines
+            if line.text] == ["drawindexed = 100,0,0", "drawindexed = 200,0,0"]
+    from core.ini.sections import sections_from_document
+    from core.ini.parser import _scan_sections_for_draws
+
+    sections = _scan_sections_for_draws(sections_from_document(pending))
+    draws = sections["TextureOverrideComponent01"]["draws"]
+    assert len(draws) == 2
+    assert all(record_editor._dnf_satisfied(draw.conditions, {}) for draw in draws)
+    with open(path, encoding="utf-8") as handle:
+        assert handle.read() == original
+    assert not glob.glob(path + "_*.BAK")
+
+    expected = pending.to_bytes()
+    exported = toggle_api.export_changes(root)
+    assert exported["saved"] == ["mod.ini"] and not exported["failed"]
+    assert not toggle_api.has_pending_changes(root)
+    with open(path, "rb") as handle:
+        assert handle.read() == expected
+    backups = glob.glob(path + "_*.BAK")
+    assert len(backups) == 1
+    with open(backups[0], encoding="utf-8") as handle:
+        assert handle.read() == original
+    assert toggle_api.export_changes(root)["saved"] == []
+    assert glob.glob(path + "_*.BAK") == backups
+
+
 def test_get_record_positions_uses_complete_cycle_but_reports_writable_vars(toggle_mod):
     tmp, _ini_path = toggle_mod
     ini_rel = "mod.ini"

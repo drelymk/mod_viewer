@@ -314,6 +314,9 @@ class ModViewerAPI:
         return toggle_api.delete_toggle(
             self._access.mod_folder(folder_path), ini_rel, section_name)
 
+    def delete_menu_toggles(self, folder_path):
+        return toggle_api.delete_menu_toggles(self._access.mod_folder(folder_path))
+
     # -- PRESENT preset cycle ----------------------------------------------
 
     def add_present(self, folder_path, key_combo, back_combo, snapshots):

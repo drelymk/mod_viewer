@@ -167,6 +167,11 @@ def viewer(edge_browser, frontend_url):
             delete_toggle: call('toggleDelete', (path, ini, section) => {
               delete state.controls[path].toggles[section]; return stage(path);
             }),
+            delete_menu_toggles: call('menuDelete', (path) => {
+              state.controls[path].menu = Object.fromEntries(Object.entries(state.controls[path].menu || {})
+                .filter(([, info]) => info.kind === 'shape_slider'));
+              return stage(path);
+            }),
             get_record_positions: call('recordPositions', {positions: 2, vars: ['input01']}),
             record_toggle: call('record', stage),
             get_control_state: call('controls', semantics),
