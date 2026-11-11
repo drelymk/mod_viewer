@@ -97,6 +97,72 @@ def test_archive_picker_routes_to_read_only_preview(viewer, extension):
     assert page.locator('#export-menu-btn').is_disabled()
 
 
+def test_import_menu_uses_native_picker_and_keeps_export_disabled_across_reload(viewer):
+    payload = model_payload()
+    payload['metadata']['import'] = {'export_supported': False}
+    page = viewer({'fixture-01': payload}, pending={'fixture-01': True})
+    page.locator('#open-menu-btn').click()
+    page.locator('#import-mod-choice').click()
+    page.wait_for_function('window.__bridge.calls.some(call => call.name === "pick") && !document.querySelector("#open-btn").disabled')
+    assert bridge_calls(page, 'import') == []
+    page.evaluate('window.__bridge.nextPath = "fixture-01"')
+    page.locator('#open-disabled-mod').check()
+    page.locator('#open-menu-btn').click()
+    page.locator('#import-mod-choice').click()
+    wait_loaded(page)
+    assert bridge_calls(page, 'import') == [['fixture-01', True]]
+    assert bridge_calls(page, 'load') == []
+    assert page.evaluate('window.modViewer.getCurrentSource().imported')
+    assert page.locator('#mod-path').inner_text() == 'fixture-01 (Imported)'
+    assert page.locator('#export-btn').is_disabled()
+    assert page.locator('#export-menu-btn').is_disabled()
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    assert page.evaluate('window.modViewer.getCurrentSource().imported')
+    assert page.locator('#export-btn').is_disabled()
+    assert bridge_calls(page, 'export') == []
+
+
+def test_imported_meshes_stay_directly_under_their_component(viewer):
+    payload = controlled_payload(3)
+    for index, entry in enumerate(payload['meshes'].values()):
+        entry['identity']['component'] = 'component-01'
+        entry['component'] = 'component-01'
+        entry['conditions'] = ([[{'var': 'input01', 'value': str(index), 'negate': False}]]
+                               if index < 2 else [])
+    payload['metadata']['import'] = {'export_supported': False}
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    page.wait_for_function('window.modViewer.activeMeshes.length === 3 && !document.querySelector("#loading").classList.contains("show") && !document.querySelector("#open-btn").disabled')
+    assert page.locator('#mesh-list .group-hdr').count() == 1
+    assert page.locator('#mesh-list .group-name').inner_text() == 'component-01'
+    assert page.locator('#mesh-list > .group-items > .draw-item-wrap').count() == 3
+    assert page.locator('.draw-item:visible').count() == 3
+    page.locator('.draw-item .mesh-name').first.click()
+    assert page.evaluate("""async () => {
+      const {getSelectedMeshes} = await import('./js/scene/selection.js');
+      return getSelectedMeshes().map(mesh => mesh.userData.semanticKey);
+    }""") == ['mesh-00']
+    page.locator('.component-visibility-btn').click()
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.userData.manualVisible === true)')
+    page.locator('.component-visibility-btn').click()
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.userData.manualVisible === false)')
+    page.locator('.component-visibility-btn').click()
+    page.evaluate("""async () => {
+      const {setToggleValue,refreshAll} = await import('./js/mesh/visibility.js');
+      setToggleValue('input01','1'); refreshAll();
+    }""")
+    page.locator('.draw-item .mesh-name').nth(1).click()
+    assert page.evaluate("""async () => {
+      const {getSelectedMeshes} = await import('./js/scene/selection.js');
+      return getSelectedMeshes().map(mesh => mesh.userData.semanticKey);
+    }""") == ['mesh-01']
+    assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [False, True, True]
+    assert page.locator('#mesh-list > .group-items > .draw-item-wrap').count() == 3
+    assert page.locator('#export-btn').is_disabled()
+    assert bridge_calls(page, 'export') == []
+
+
 @pytest.mark.parametrize('startup', [
     {'path': 'fixture-01', 'disabled_ini': True},
     {'error': 'fixture failure'},

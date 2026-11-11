@@ -107,7 +107,11 @@ def _apply_auxiliary_map_state(draw, authored, resolve_file):
             for texture_hash in item.get("texture_hashes", ())))
         if hashes:
             draw.texture_hashes[channel] = hashes
-        if len(resolved) > 1 or (resolved and (resolved[0]["conditions"] or resolved[0]["file"] is None)):
+        fixed_at_draw = (len(resolved) == 1 and resolved[0]["file"] is not None
+                         and _condition_difference(draw.conditions, resolved[0]["conditions"]) is None)
+        if fixed_at_draw:
+            draw.set_texture_default(channel, resolved[0]["file"])
+        elif resolved:
             draw.set_texture_variants(channel, resolved)
 
 

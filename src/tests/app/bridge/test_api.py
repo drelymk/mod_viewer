@@ -61,6 +61,7 @@ EXPECTED_API_METHODS = {
     "load_asset",
     "load_missing_asset_parts",
     "load_mod",
+    "import_mod",
     "open_mod_folder",
     "open_asset_folder",
     "pick_asset_texture_file",
@@ -268,18 +269,30 @@ def test_missing_asset_parts_preserves_unauthorized_folder_error(
     }
 
 
-def test_load_mod_forwards_disabled_ini_flag(monkeypatch):
+@pytest.mark.parametrize("action", ["load_mod", "import_mod"])
+def test_load_mod_forwards_disabled_ini_flag(monkeypatch, action):
     api = ModViewerAPI()
     calls = []
     monkeypatch.setattr(api._asset_preview, "clear_fill", lambda: None)
     monkeypatch.setattr(
-        api._mod_preview, "load_mod",
+        api._mod_preview, action,
         lambda path, disabled_ini=False: calls.append((path, disabled_ini))
         or {"ok": True},
     )
 
-    assert api.load_mod("mod", True) == {"ok": True}
+    assert getattr(api, action)("mod", True) == {"ok": True}
     assert calls == [("mod", True)]
+
+
+def test_import_rejects_browser_invented_folder_before_reading(monkeypatch, tmp_path):
+    api = ModViewerAPI()
+    api._access._authorized_roots.clear()
+    api._access._authorized_folders.clear()
+    monkeypatch.setattr("app.bridge.mod_preview.plan_import", lambda *_: pytest.fail(
+        "an unauthorized path reached import planning"))
+    result = api.import_mod(str(tmp_path))
+    assert "native folder picker" in result["error"]
+    assert edit_session.import_summary_for(str(tmp_path)) is None
 
 
 def test_load_asset_clears_loaded_mod_state_before_transition(monkeypatch):

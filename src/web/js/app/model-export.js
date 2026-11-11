@@ -26,6 +26,7 @@ export function syncModelExportAvailability() {
     !viewerState.modTransitionInFlight &&
     viewerState.currentSource?.kind === 'mod' &&
     !viewerState.currentSource.readOnly &&
+    !viewerState.currentSource.imported &&
     activeMeshes.length > 0;
   const choice = $('export-glb-choice');
   const trigger = $('export-menu-btn');

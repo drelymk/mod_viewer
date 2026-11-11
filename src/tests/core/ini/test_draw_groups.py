@@ -651,11 +651,9 @@ filename = component01-light-map.dds
         (3, "component01-position.buf"),
         (3, "component01-position-alt.buf")]
     assert draws[0].texture_default("diffuse") == "component01-diffuse.dds"
-    assert draws[0].texture_default("light_map") is None
-    assert draws[0].texture_rules("light_map") == [{
-        "conditions": [[{"var": "mode", "value": "1", "negate": False}]],
-        "file": "component01-light-map.dds",
-    }]
+    assert draws[0].texture_default("light_map") == "component01-light-map.dds"
+    assert draws[0].texture_rules("light_map") == []
+    assert draws[1].texture_default("light_map") is None
     assert (draws[0].geometry_match.hash,
             draws[0].geometry_match.first_index,
             draws[0].geometry_match.index_count) == ("0123abcd", 9, 3)

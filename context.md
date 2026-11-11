@@ -59,6 +59,33 @@ of documentation, comments and tests; use portable fixtures instead.
 
 ## Lossless staged editing
 
+- Import Mod is an explicit, session-only consolidation of compatible static
+  GIMI variant families. Keep positions, UVs, colors, weights and tangent
+  handedness byte-exact. Canonicalize only finite, near-unit normal/tangent
+  vector export noise within 0.000001 of a fixed representative; never chain
+  tolerance matches or cross normal-decoder fallback boundaries. Bound approximate
+  comparisons and fall back to exact sharing when that work budget is exhausted.
+  Retain each variant's guards and material state.
+  Converted INIs and buffers belong to the shared edit session and survive
+  reloads. Never write source files during import. Block mod Export for imported
+  sessions until converted-buffer export is implemented.
+  Use canonical resource roles and ordered binding implication to align streams,
+  including shared/unconditional streams and reordered variant selectors. Keep
+  disabled components disabled, update only proven Blend processing draws, and
+  retain helper-bearing selector chains unchanged. Open only pure, disjoint
+  equality selectors; layouts must be compatible across the imported family.
+  Partition mixed outfits into complete loose parts using the zero-tolerance
+  Separate by Loose Parts connectivity contract. Group disconnected triangles
+  together while preserving each part's original triangle order, winding and
+  multiplicity. Compare complete parts instead of contiguous draw fragments.
+  Share ranges only when the consolidated complete records match; a position-only
+  navigation match never establishes render equivalence or authorizes welding.
+  MESHES lists imported meshes directly under their Component; loose parts are
+  an internal deduplication detail, without additional numbered Part groups.
+  Emit ranges directly in their Component, without per-part helper identities.
+  Keep whole draws when splitting would change geometric-normal reconstruction
+  or exceed the import's triangle-work and total draw budgets.
+
 - `core.ini.parser` is read-only analysis. All INI edits use `IniDocument` and
   the shared `app.session.edit` session. Preserve BOM, mixed line terminators
   and absent final newline byte-for-byte on untouched round trips.
