@@ -6,6 +6,26 @@ import struct
 import pytest
 
 from tests.support.dds_data import uncompressed_dds
+from core.geometry.loose_parts import find_loose_part_groups
+
+
+def test_import_partition_matches_separate_by_loose_parts(module_page):
+    points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (3, 0, 0), (4, 0, 0),
+              (3, 1, 0), (0, 0, 0), (1, 1, 0), (0, 1, 0)]
+    triangles = [(0, 1, 2), (3, 4, 5), (6, 7, 8), (0, 2, 1)]
+    expected = find_loose_part_groups(triangles, points)
+    assert expected == [[0, 2, 3], [1]]
+    actual = module_page.evaluate('''async ({points,triangles}) => {
+      const T = await import('three/webgpu');
+      const {findLoosePartGroups} = await import('./js/mesh/loose-parts.js');
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position', new T.Float32BufferAttribute(points.flat(),3));
+      geometry.setIndex(triangles.flat());
+      const groups = findLoosePartGroups(new T.Mesh(geometry), {tolerance:0});
+      geometry.dispose();
+      return groups.map(group => group.triangles);
+    }''', dict(points=points, triangles=triangles))
+    assert actual == expected
 
 
 @pytest.mark.parametrize('dxgi_format,bgra,alpha,format_id', [

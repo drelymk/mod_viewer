@@ -130,6 +130,7 @@ def viewer(edge_browser, frontend_url):
             }),
             consume_startup_request: call('startup', () => {const request = state.startup; state.startup = null; return request;}),
             load_mod: call('load', load),
+            import_mod: call('import', load),
             select_archive_mod: call('archivePick', () => {
               const path = state.nextPath || null; state.nextPath = null; return path;
             }),

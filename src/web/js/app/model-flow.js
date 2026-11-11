@@ -59,6 +59,10 @@ function syncSourceLabelLanguage() {
       name: sourceName(path),
     });
     element.title = path;
+  } else if (source.kind === 'mod') {
+    element.textContent = source.imported
+      ? t('model.importedMod', { name: sourceName(source.path) })
+      : sourceName(source.path);
   }
 }
 
@@ -92,16 +96,19 @@ export async function refreshPendingState(path = viewerState.currentModPath, gua
   const unapplied = hasUnappliedMeshChanges();
   const edited = pending || unapplied;
   $('pending-indicator').classList.toggle('show', edited);
-  const blocked = unapplied || (pending && hasUnwiredToggle());
+  const imported = viewerState.currentSource?.imported === true;
+  const blocked = imported || unapplied || (pending && hasUnwiredToggle());
   const readOnlySource = viewerState.currentSource?.kind === 'mod' && viewerState.currentSource?.readOnly === true;
   $('export-btn').disabled = readOnlySource || !pending || blocked;
-  $('export-btn').title = unapplied
-    ? t('errors.exportBlocked', { detail: t('mesh.unappliedChangesDetail') })
-    : readOnlySource
-      ? t('errors.exportBlocked', { detail: t('model.exportCompressedDetail') })
-      : blocked
-        ? t('errors.exportBlocked', { detail: t('model.unwiredToggleDetail') })
-        : '';
+  $('export-btn').title = imported
+    ? t('model.importExportUnavailable')
+    : unapplied
+      ? t('errors.exportBlocked', { detail: t('mesh.unappliedChangesDetail') })
+      : readOnlySource
+        ? t('errors.exportBlocked', { detail: t('model.exportCompressedDetail') })
+        : blocked
+          ? t('errors.exportBlocked', { detail: t('model.unwiredToggleDetail') })
+          : '';
   window.dispatchEvent(new CustomEvent('mod-viewer-pending-state-changed'));
 }
 
@@ -242,6 +249,7 @@ export async function displayMeshPayload(
       ...viewerState.currentSource,
       readOnly: sourceReadOnly,
       sourceKind: payload.metadata?.source_kind || 'directory',
+      imported: payload.metadata?.import?.export_supported === false,
     };
   }
   viewerState.assetFill.available = !assetMode && Number(payload.asset_resolution?.configured_roots || 0) > 0;
@@ -348,7 +356,7 @@ export async function displayMeshPayload(
   showLoading(false);
 }
 
-async function loadModAt(path, disabledIni, handlers = {}) {
+async function loadModAt(path, disabledIni, handlers = {}, importing = false) {
   const preserveViewerPose = samePath(viewerState.displayedModPath, path);
   beginModLoad(path, t('status.loadingModel'), {
     preserveModelOrientation: preserveViewerPose,
@@ -358,9 +366,11 @@ async function loadModAt(path, disabledIni, handlers = {}) {
   let data;
   try {
     data = await measureAsyncLoadStage('bridge_load_mod', () =>
-      disabledIni === undefined
-        ? window.pywebview.api.load_mod(path)
-        : window.pywebview.api.load_mod(path, disabledIni),
+      importing
+        ? window.pywebview.api.import_mod(path, disabledIni === true)
+        : disabledIni === undefined
+          ? window.pywebview.api.load_mod(path)
+          : window.pywebview.api.load_mod(path, disabledIni),
     );
   } catch (error) {
     finishLoadBenchmark({ success: false, error: error?.message || String(error) });
@@ -392,7 +402,9 @@ async function loadModAt(path, disabledIni, handlers = {}) {
 
   // Lead with the folder name; the full path is long and rarely the useful part.
   const folderName = path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1);
-  $('mod-path').textContent = folderName;
+  $('mod-path').textContent = viewerState.currentSource?.imported
+    ? t('model.importedMod', { name: folderName })
+    : folderName;
   $('mod-path').title = path;
   viewerState.displayedModPath = path;
   viewerState.displayedSource = { ...viewerState.currentSource };
@@ -463,7 +475,7 @@ async function loadAssetAt(path, entry = {}, handlers = {}) {
   return true;
 }
 
-async function performModSwitch(path, handlers = {}) {
+async function performModSwitch(path, handlers = {}, importing = false) {
   if (assetTextureExportState().pending && !(await confirmDialog(t('confirm.unsavedAssetTextures')))) return false;
   // Switching to a different folder while the current one has staged,
   // not-yet-exported edits would silently strand them in memory, so ask first.
@@ -479,7 +491,7 @@ async function performModSwitch(path, handlers = {}) {
   }
 
   const disabledIni = $('open-disabled-mod')?.checked === true;
-  return await loadModAt(path, disabledIni, handlers);
+  return await loadModAt(path, disabledIni, handlers, importing);
 }
 
 async function confirmLeaveCurrentModIfDirty() {
@@ -538,12 +550,12 @@ export async function switchMod(path, handlers = {}) {
   });
 }
 
-async function openModFromPicker(picker, handlers = {}) {
+async function openModFromPicker(picker, handlers = {}, importing = false) {
   return await runModTransition(async () => {
     try {
       const path = await picker();
       if (!path) return false;
-      return await performModSwitch(path, handlers);
+      return await performModSwitch(path, handlers, importing);
     } catch (error) {
       showLoading(false);
       await alertDialog(t('errors.unexpected', { detail: error }));
@@ -554,6 +566,10 @@ async function openModFromPicker(picker, handlers = {}) {
 
 export async function openMod(handlers = {}) {
   return await openModFromPicker(() => window.pywebview.api.select_folder(), handlers);
+}
+
+export async function importMod(handlers = {}) {
+  return await openModFromPicker(() => window.pywebview.api.select_folder(), handlers, true);
 }
 
 export async function openArchiveMod(handlers = {}) {

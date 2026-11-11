@@ -38,6 +38,7 @@ import {
   displayMeshPayload as displayMeshPayloadFlow,
   exportChanges as exportChangesFlow,
   openMod as openModFlow,
+  importMod as importModFlow,
   openArchiveMod as openArchiveModFlow,
   refreshPendingState,
   reloadCurrentMod as reloadCurrentModFlow,
@@ -214,7 +215,8 @@ function initOpenModMenu() {
     const choice = event.target.closest('[data-open-source]');
     if (!choice) return;
     close();
-    if (choice.dataset.openSource === 'archive') void openArchiveMod();
+    if (choice.dataset.openSource === 'import') void importModFlow(modelHandlers());
+    else if (choice.dataset.openSource === 'archive') void openArchiveMod();
     else void openMod();
   });
   document.addEventListener('click', (event) => {

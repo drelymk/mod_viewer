@@ -18,7 +18,7 @@ from core.mod_source import mod_source_for_path
 class _Session:
     __slots__ = ("mod_dir", "source", "docs", "baselines", "dirty", "new_sections",
                  "present_names_baseline", "present_names", "revision",
-                 "diagnostics_cache", "ib_edits")
+                 "diagnostics_cache", "ib_edits", "import_buffers", "import_summary")
 
     def __init__(self, mod_dir, source=None):
         self.mod_dir = mod_dir
@@ -33,6 +33,8 @@ class _Session:
         self.revision = 0
         self.diagnostics_cache = None
         self.ib_edits = {}
+        self.import_buffers = {}
+        self.import_summary = None
 
 
 _session = None
@@ -59,6 +61,8 @@ class _EditTransaction:
         self._metadata_sidecar_exists = False
         self._metadata_mutated = False
         self._ib_edits = _clone_ib_edits(self.sess.ib_edits)
+        self._import_buffers = dict(self.sess.import_buffers)
+        self._import_summary = deepcopy(self.sess.import_summary)
 
         requested = list(paths or [])
         missing = [path for path in requested
@@ -142,6 +146,19 @@ class _EditTransaction:
         if self.present_metadata:
             self._metadata_mutated = True
 
+    def stage_import(self, buffers, summary):
+        """Own converted bytes for this session without creating export writes."""
+        self.sess.import_buffers = dict(buffers)
+        self.sess.import_summary = deepcopy(summary)
+
+    def replace_document(self, path, candidate):
+        """Install a detached lossless document as part of this transaction."""
+        key = _key(self.mod_dir, path, source=self.sess.source)
+        if key not in self.entries or candidate.path != path:
+            raise ValueError("Replacement document is outside this transaction.")
+        self.entries[key]["doc"] = candidate
+        self.sess.docs[key] = candidate
+
     def _commit(self):
         try:
             for key, entry in self.entries.items():
@@ -172,6 +189,8 @@ class _EditTransaction:
             else:
                 self.sess.new_sections.pop(key, None)
         self.sess.ib_edits = _clone_ib_edits(self._ib_edits)
+        self.sess.import_buffers = self._import_buffers
+        self.sess.import_summary = self._import_summary
         if self.present_metadata:
             self.sess.present_names_baseline = _copy_metadata_state(
                 self._present_baseline)
@@ -276,6 +295,7 @@ def has_pending(mod_dir):
     """True if mod_dir has at least one staged, not-yet-exported edit."""
     return (_same_mod(mod_dir)
             and (bool(_session.dirty)
+                 or _session.import_summary is not None
                  or bool(_session.ib_edits)
                  or _session.present_names_baseline is not _NO_METADATA_BASELINE))
 
@@ -418,8 +438,14 @@ def ib_overrides_for(mod_dir):
     """Return staged physical buffer bytes for the normal load path."""
     if not _same_mod(mod_dir):
         return {}
-    return {record["path"]: bytes(record["candidate"])
-            for record in _session.ib_edits.values()}
+    return {**_session.import_buffers,
+            **{record["path"]: bytes(record["candidate"])
+               for record in _session.ib_edits.values()}}
+
+
+def import_summary_for(mod_dir):
+    """Return public conversion statistics for an imported session."""
+    return deepcopy(_session.import_summary) if _same_mod(mod_dir) else None
 
 
 def ib_edits_for(mod_dir):
@@ -485,6 +511,9 @@ def export(mod_dir):
     """
     if not _same_mod(mod_dir):
         return {"saved": [], "failed": []}
+    if _session.import_summary is not None:
+        return {"error": "Export for imported mods is not supported yet.",
+                "saved": [], "failed": []}
     had_buffers = bool(_session.ib_edits)
     if _session.source.read_only:
         result = {

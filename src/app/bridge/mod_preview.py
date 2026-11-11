@@ -26,6 +26,7 @@ from app.assets import folders as asset_folders
 from app.mods import loader as mod_loader
 from app.bridge import mesh_edit
 from app.mods import metadata
+from app.mods.importer import ModImportError, plan_import
 from app.runtime import server
 from app.session import edit as edit_session
 
@@ -153,6 +154,25 @@ class ModPreview:
             return None
         return url
 
+    def import_mod(self, folder_path, disabled_ini=False):
+        """Consolidate an authorized folder into one atomic in-memory session."""
+        try:
+            folder_path, _pending, context = self.authoritative_context(
+                folder_path, disabled_ini=disabled_ini, defer_assets=True)
+            if edit_session.import_summary_for(folder_path) is not None:
+                return self.load_mod(folder_path, disabled_ini)
+            plan = plan_import(context)
+            with edit_session.transaction(folder_path, plan.documents) as edit:
+                for path, candidate in plan.documents.items():
+                    edit.replace_document(path, candidate)
+                edit.stage_import(plan.buffers, plan.summary)
+                result = self.load_mod(folder_path, disabled_ini)
+                if result.get("error"):
+                    raise ModImportError(result["error"])
+            return result
+        except (ValueError, ModSourceError, OSError) as error:
+            return {"error": str(error)}
+
     def load_mod(self, folder_path, disabled_ini=False):
         self.clear_loaded_model()
         try:
@@ -187,6 +207,9 @@ class ModPreview:
                 return result
 
             saved_metadata = context.metadata
+            import_summary = edit_session.import_summary_for(folder_path)
+            if import_summary is not None:
+                result.setdefault("metadata", {})["import"] = import_summary
             result.setdefault("metadata", {})["mesh_names"] = \
                 metadata.hydrate_mesh_names(result, saved_metadata)
             result["metadata"]["mesh_color_adjustments"] = \
