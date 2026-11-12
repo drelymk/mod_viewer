@@ -9,7 +9,7 @@ inspect textures and skin weights, pose the model, and stage INI or mesh edits.
 It supports Zenless Zone Zero (ZZMI), Genshin Impact (GIMI), and Wuthering Waves
 (WWMI) mods, with conservative support for Honkai: Star Rail (SRMI) mods.
 
-![3DMigoto Mod Viewer](https://github.com/drelymk/mod_viewer/blob/main/media/3DMigoto%20Mod%20Viewer.jpg)
+![3DMigoto Mod Viewer](https://github.com/drelymk/mod_viewer/blob/main/media/3DMigoto%20Mod%20Viewer.gif)
 
 ## What the app can do
 
