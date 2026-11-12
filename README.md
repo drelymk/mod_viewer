@@ -297,6 +297,20 @@ control rig when usable skin weights and geometry are available. These are
 viewer posing tools; they do not recover the game's original named skeleton or
 write poses into the mod's buffers.
 
+An original Asset can additionally provide a validated `Rig.json`. For supported
+WWMI skin streams with a verified Blend fingerprint, the viewer uses that file's
+named game skeleton, hierarchy, pivots and rest axes. Explicit humanoid mappings
+also give IK exact limb pivots and lengths, with stable bending and limb roll.
+An Asset-declared merged palette lets compatible stock WWMI mods share this rig
+automatically, without registering each mod's skin-buffer fingerprint.
+Both legacy and merge-status templates are recognized. Verified shared IDs remain
+unshifted; supported proxy remaps use full vertex-group IDs after checking the
+paired forward/reverse maps.
+Missing or incompatible rig
+data retains the inferred rig. See [Asset rig sidecars](docs/asset-rig.md) for the
+format, conversion tool and binding requirements. Rig loading never changes the
+mod's weights or source files.
+
 1. Choose a `Selected Joint`, or use `Pick from model` in the `RIG` section to
    select a joint from the viewport. Drag the rotation gizmo to pose it.
    `Reset Joint` clears that joint's manual rotation; `Reset Pose` clears the
@@ -319,6 +333,16 @@ Rig posing and weight-driven physics can work together. Geometry-changing shape
 controls rebuild the affected rig, and Rig/Physics temporarily takes control
 of affected geometry from animation playback. Inferred joints and connections
 can differ from the authored skeleton, so some poses may stretch unexpectedly.
+
+Original WWMI Assets with captured weights also support temporary Weight/Rig
+inspection and posing. Open the Asset, then `Weight/Rig`. When its verified rig
+has an `Animation` library, choose a clip in the new `ANIMATION` section. Use
+Play/Pause or the time slider to inspect it; `Stop / Rest pose` restores the
+original geometry. Compatible mods use that same Asset library automatically.
+Animation suspends Weight physics, and manual posing stops playback. These clips
+contain skeletal transforms; game events, facial curves and cloth simulation
+are not replayed. See [Asset animation format](docs/asset-rig.md#direct-asset-weights-and-animation)
+for conversion and installation.
 
 ### 8. Adjust a mesh color and save it to a texture
 
@@ -387,6 +411,29 @@ whole group from the preview. Click `Export` to disable its owning folder with a
 disabled folders are skipped on future loads. Switching models before Export
 discards the pending removal. Individual mesh separation and merging remain
 unavailable for Assets.
+
+#### Extract a game rig and animations
+
+For an indexed WWMI Asset, open its `…` menu or right-click it and choose
+`Extract Rig/Animation`. Browse to the Wuthering Waves installation folder
+(or its `Paks` folder), check the prefilled character name, and click `OK`.
+Set the folder once under `Settings` > `Game directory` (GIMI, ZZMI and WWMI
+rows, each with `Select folder`); the saved WWMI folder is prefilled here.
+Choose a folder: a character's mesh, skeleton and secondary animations can span
+several archives.
+
+The first run downloads a pinned, checksum-verified extraction tool. The viewer
+verifies the matching mesh against the Asset's captured positions, UVs and
+weights before saving `Rig.json`, `Animation`, and `RigExtraction.json` inside
+the Asset. It imports compatible skeletal clips from the character's game
+folder and includes verified companion cloth/hair layers. Existing compatible
+clips and original exports are preserved. Progress and cancellation are shown
+in the dialog; a failed extraction preserves the previous sidecars.
+
+The current Asset reloads after a successful save. Open `Weight/Rig` to inspect
+the rig and select an animation. This action currently supports WuWa/WWMI;
+other games and runtime cloth collision simulation are outside its scope.
+See [game extraction details](docs/asset-rig.md#game-folder-extraction).
 
 #### Extract or update an Asset
 

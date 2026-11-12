@@ -15,6 +15,10 @@ from app.assets import loader as asset_loader
 from app.assets import paths as asset_paths
 from app.assets import texture_assignments
 from app.assets import sections as asset_sections
+from app.assets.animations import AnimationSessions
+from app.assets.skinning import decode_captured_skinning
+from app.assets.rig import resolve_game_rig
+from app.assets.resolver import AssetComponentBinding
 from app.assets.composition import plan_missing_asset_parts
 from app.assets.loader.models import build_asset_fill_payload
 from app.runtime import server
@@ -31,12 +35,22 @@ class AssetPreview:
         self._preview_lock = RLock()
         self._preview_generation = 0
         self._texture_session = None
+        self._weight_session = None
+        self._weight_geometry_urls = set()
+        self._animations = AnimationSessions()
 
     def clear_preview(self):
         with self._preview_lock:
             self._preview_generation += 1
             self._texture_session = None
-            return self._preview_generation
+            self._weight_session = None
+            urls = self._weight_geometry_urls
+            self._weight_geometry_urls = set()
+            generation = self._preview_generation
+        for url in urls:
+            server.release_geometry(url)
+        self._animations.clear()
+        return generation
 
     def clear_fill(self, folder_path=None):
         """Release session-only Asset-fill resources before a model change."""
@@ -127,6 +141,11 @@ class AssetPreview:
                     server.publish_payload_geometry(payload, geometry)
                     publication.commit()
                     parts = getattr(loaded, "parts", ())
+                    weight_token = uuid.uuid4().hex
+                    self._weight_session = dict(token=weight_token, folder=selected, root=entry["path"],
+                        asset=record["path"], parts=tuple(parts), generation=generation)
+                    if parts:
+                        payload["metadata"]["asset"]["rig_session"] = weight_token
                     if parts and revision is not None:
                         token = uuid.uuid4().hex
                         self._texture_session = dict(
@@ -151,6 +170,54 @@ class AssetPreview:
         except Exception:
             traceback.print_exc()
             return {"error": "Could not load Asset. See the application log for details."}
+
+    def get_skinning_preview(self, token):
+        from app.bridge.mod_preview import ModPreview
+
+        try:
+            with self._preview_lock:
+                session = self._weight_session
+                if not session or token != session["token"]:
+                    raise ValueError("The Asset preview is no longer active.")
+            def is_current():
+                return self._weight_session is session and self._preview_generation == session["generation"]
+            meshes, rigs, cache, pieces, offset = {}, {}, {}, [], 0
+            for part in session["parts"]:
+                if not part.skinning:
+                    continue
+                if not is_current():
+                    raise ValueError("The Asset preview is no longer active.")
+                source, decoded = decode_captured_skinning(session["root"], part.skinning)
+                entry, data = ModPreview._skin_entry(decoded, source, offset)
+                binding = AssetComponentBinding(status="exact", range_status="exact", asset_type="WWMI",
+                    root=session["root"], asset=session["asset"], metadata=part.metadata_path,
+                    geometry_hash=part.geometry_hash, component_ordinal=part.component_ordinal,
+                    first_index=part.first_index, index_count=part.index_count)
+                rig = resolve_game_rig(binding, source, decoded.bone_ids,
+                    {os.path.normcase(session["root"])}, cache, captured_palette=True)
+                if rig:
+                    if rig["id"] not in rigs:
+                        rigs[rig["id"]] = {"id": rig["id"], "bones": rig["bones"],
+                            "humanoid_controls": rig["humanoid_controls"],
+                            **self._animations.catalog(session["root"], session["asset"], rig, is_current)}
+                    entry.update(game_rig_id=rig["id"], game_bone_map=rig["bone_map"])
+                meshes[part.key] = entry
+                pieces.append(data)
+                offset += len(data)
+            if not pieces:
+                return {"status": "ok", "meshes": {}, "saved_bones": [], "game_rigs": {}}
+            with self._preview_lock:
+                if not is_current():
+                    raise ValueError("The Asset preview is no longer active.")
+                url = server.publish_geometry(b"".join(pieces), replace=False)
+                self._weight_geometry_urls.add(url)
+            return {"status": "ok", "format_version": 1, "meshes": meshes, "game_rigs": rigs,
+                    "saved_bones": [], "data": {"url": url, "length": offset}}
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            return {"status": "error", "error": str(error), "meshes": {}}
+
+    def get_animation(self, token, clip_id):
+        return self._animations.load(token, clip_id)
 
     def pick_asset_texture_file(self, window, folder_path, texture_role=None):
         """Register a chosen Asset texture using the facade-owned window."""

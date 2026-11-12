@@ -4,6 +4,11 @@
 import { weightRigApi } from '../weight-rig/weight-rig-core.js';
 const {
   activateWeightRig,
+  getRigAnimationState,
+  selectRigAnimation,
+  setRigAnimationPlaying,
+  stopRigAnimation,
+  seekRigAnimation,
   beginWeightModelPicking,
   cancelWeightModelPicking,
   clearSelectedBones,
@@ -96,7 +101,7 @@ function addText(parent, className, value = '', translationKey = null) {
 function addSection(parent, title) {
   const section = document.createElement('section');
   section.className = 'weight-rig-section';
-  const key = title === 'WEIGHT' ? 'weightRig.weight' : 'weightRig.rig';
+  const key = { WEIGHT: 'weightRig.weight', RIG: 'weightRig.rig', ANIMATION: 'weightRig.animation' }[title];
   addText(section, 'weight-rig-section-title', '', key);
   parent.appendChild(section);
   return section;
@@ -618,6 +623,76 @@ function buildRigSection(parent) {
   ui.setRoot = setRoot;
 }
 
+function buildAnimationSection(parent) {
+  const section = addSection(parent, 'ANIMATION');
+  const select = document.createElement('select');
+  select.className = 'rig-preset-select rig-animation-select';
+  select.setAttribute('aria-label', t('weightRig.animation'));
+  select.addEventListener('change', () => selectRigAnimation(select.value));
+  section.appendChild(select);
+  const actions = document.createElement('div');
+  actions.className = 'rig-actions';
+  const play = document.createElement('button');
+  play.className = 'ui-button rig-animation-play';
+  play.type = 'button';
+  play.addEventListener('click', () => setRigAnimationPlaying(!getRigAnimationState().playing));
+  actions.appendChild(play);
+  const stop = document.createElement('button');
+  stop.className = 'ui-button rig-animation-stop';
+  stop.type = 'button';
+  stop.dataset.i18n = 'weightRig.animationStop';
+  stop.textContent = t('weightRig.animationStop');
+  stop.addEventListener('click', stopRigAnimation);
+  actions.appendChild(stop);
+  section.appendChild(actions);
+  const range = document.createElement('input');
+  range.type = 'range';
+  range.min = '0';
+  range.step = '0.001';
+  range.className = 'rig-animation-time';
+  range.setAttribute('aria-label', t('weightRig.animationTime'));
+  range.addEventListener('input', () => {
+    const time = range.value;
+    setRigAnimationPlaying(false);
+    seekRigAnimation(time);
+  });
+  section.appendChild(range);
+  const status = addText(section, 'weight-rig-status');
+  Object.assign(ui, {
+    animationSelect: select,
+    animationPlay: play,
+    animationStop: stop,
+    animationTime: range,
+    animationStatus: status,
+  });
+}
+
+function syncAnimation(state = getRigAnimationState()) {
+  if (!ui?.animationSelect) return;
+  // Ticks rerun this at 30 Hz; the clip list only changes with the rig or locale.
+  if (ui.animationClips !== state.clips || ui.animationLocale !== getLocale()) {
+    ui.animationClips = state.clips;
+    ui.animationLocale = getLocale();
+    ui.animationSelect.replaceChildren(new Option(t('weightRig.animationRest'), ''));
+    state.clips.forEach((clip) => ui.animationSelect.add(new Option(clip.name, clip.id)));
+  }
+  ui.animationSelect.value = state.selected || '';
+  ui.animationSelect.disabled = !state.clips.length;
+  ui.animationPlay.textContent = t(state.playing ? 'animation.pause' : 'animation.play');
+  ui.animationPlay.disabled = !state.duration || state.loading;
+  ui.animationStop.disabled = !state.selected;
+  ui.animationTime.disabled = !state.duration || state.loading;
+  ui.animationTime.max = String(state.duration || 1);
+  ui.animationTime.value = String(state.time);
+  ui.animationStatus.textContent =
+    state.error ||
+    (state.loading
+      ? t('weightRig.animationLoading')
+      : state.clips.length
+        ? `${state.time.toFixed(2)} / ${state.duration.toFixed(2)} s`
+        : t('weightRig.animationEmpty'));
+}
+
 function buildPanel() {
   panel.replaceChildren();
   ui = {};
@@ -631,6 +706,8 @@ function buildPanel() {
   panel.appendChild(header);
   buildWeightSection(panel);
   buildRigSection(panel);
+  buildAnimationSection(panel);
+  syncAnimation();
 }
 
 function formatAffectedVertices(value) {
@@ -783,7 +860,7 @@ function syncWeightControls(state = latestWeightState || getModelWeightState()) 
   ui.weightPick.setAttribute('aria-pressed', String(!!state.picking));
   ui.weightPick.disabled = !state.loaded || !available;
   ui.clearSelection.disabled = !state.selectedBoneCount;
-  ui.saveSelection.disabled = !state.selectedBoneCount || state.savingSelection;
+  ui.saveSelection.disabled = state.canPersist === false || !state.selectedBoneCount || state.savingSelection;
   ui.loadSelection.disabled = !state.savedBones?.length;
   ui.allBones.classList.toggle('active', state.pickerViewMode !== 'picked');
   ui.allBones.setAttribute('aria-pressed', String(state.pickerViewMode !== 'picked'));
@@ -816,10 +893,10 @@ function syncHumanoidEditControls(state) {
   ui.editStatus.hidden = !editing;
   ui.editRig.hidden = editing;
   ui.resetRig.hidden = editing;
-  ui.editRig.disabled = !state?.loaded || editing;
+  ui.editRig.disabled = state?.canPersist === false || !state?.loaded || editing;
   ui.resetRig.disabled = !edit.hasSavedOverrides || edit.saving;
   ui.cancelEdit.disabled = edit.saving;
-  ui.saveEdit.disabled = edit.saving || !state?.loaded;
+  ui.saveEdit.disabled = state?.canPersist === false || edit.saving || !state?.loaded;
   const controlCount = Object.keys(edit.controls || {}).length;
   const controlTotal = HUMANOID_CONTROL_KEYS.length;
   ui.editCount.textContent = editing
@@ -864,7 +941,7 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
     joints.forEach((item) => {
       const option = document.createElement('option');
       option.value = String(item.jointId);
-      option.textContent = t('weightRig.joint', { id: item.jointId });
+      option.textContent = item.name || t('weightRig.joint', { id: item.jointId });
       ui.joint.appendChild(option);
     });
     ui.joint.dataset.optionKey = optionKey;
@@ -872,8 +949,9 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   if (ui.joint.options[0]) {
     ui.joint.options[0].textContent = t('weightRig.selectJoint');
   }
+  const names = new Map(joints.map((joint) => [String(joint.jointId), joint.name]));
   [...ui.joint.options].slice(1).forEach((option) => {
-    option.textContent = t('weightRig.joint', { id: option.value });
+    option.textContent = names.get(option.value) || t('weightRig.joint', { id: option.value });
   });
   ui.joint.value = selected ? String(selected.jointId) : '';
   const editing = state?.humanoidRigEdit?.editing === true;
@@ -1022,7 +1100,7 @@ function syncPresetControls(state) {
   const current = selectedPreset(state, ui.preset.value);
   const hasPreset = !!current;
   ui.preset.disabled = !state?.loaded || !presets.length || !!presetState.loading;
-  ui.savePreset.disabled = !state?.loaded;
+  ui.savePreset.disabled = state?.canPersist === false || !state?.loaded;
   ui.renamePreset.disabled = !hasPreset;
   ui.deletePreset.disabled = !hasPreset;
   ui.presetStatus.textContent = presetFeedback(state);
@@ -1112,7 +1190,9 @@ export function initWeightRigPanel() {
     syncPhysicsControls(event.detail);
     syncRigOptions(latestRigState);
   });
+  window.addEventListener('mod-viewer-model-animation-changed', (event) => syncAnimation(event.detail));
   window.addEventListener('mod-viewer-model-rig-changed', (event) => {
+    syncAnimation();
     latestRigState = event.detail;
     if (!event.detail?.loading && !event.detail?.loaded) loadingPromise = null;
     syncRigOptions(event.detail);

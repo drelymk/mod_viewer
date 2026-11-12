@@ -313,6 +313,16 @@ function buildModelJointPivotByEdgeKey(rig) {
 }
 
 export function rebuildModelRestFrames(rig, forest) {
+  if (rig.authoredRestFrames && rig.authoredRestPivots) {
+    rig.jointPivotByJointId = new Map([...rig.authoredRestPivots].map(([id, point]) => [id, [...point]]));
+    rig.restFrameByJointId = new Map([...rig.authoredRestFrames].map(([id, frame]) => [id, frame.clone()]));
+    rig.restDirectionByJointId = new Map(
+      [...rig.authoredRestFrames].map(([id, frame]) => [id, new Vector3(0, 1, 0).applyQuaternion(frame).toArray()]),
+    );
+    rig.restFrameEvidenceByJointId = new Map();
+    rig.restContinuationChildByJointId = new Map();
+    return;
+  }
   const edgePivots = rig.jointPivotByEdgeKey || buildModelJointPivotByEdgeKey(rig);
   rig.jointPivotByEdgeKey = edgePivots;
   const pivots = new Map();

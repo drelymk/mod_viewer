@@ -6,6 +6,11 @@ export default {
   'settings.autoRestore': 'Restaurar automáticamente las partes del mod que faltan desde los recursos',
   'settings.autoRestoreDescription':
     'Tras cargar un mod, restaura las partes originales que faltan desde un recurso coincidente de tu biblioteca. Las partes restauradas solo se muestran en la vista previa.',
+  'settings.gameFolders': 'Directorio del juego',
+  'settings.gameFoldersHint': 'Las carpetas guardadas rellenan la carpeta del juego al extraer.',
+  'settings.selectFolder': 'Seleccionar carpeta',
+  'settings.clearFolder': 'Borrar',
+  'settings.notSet': 'Sin definir',
   'settings.hint': 'Los cambios se guardan automáticamente.',
   'asset.extractedPartial':
     'Extracción parcial: se guardaron {components} componentes y se omitieron {skipped} grupos de recursos. Pueden faltar partes. Consulta extraction_report.json para más detalles.',

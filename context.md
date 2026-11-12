@@ -805,7 +805,8 @@ of documentation, comments and tests; use portable fixtures instead.
   loading. Decode only the loaded model's retained manifest; do not rebuild geometry
   for Weight. Preserve GIMI float/u32, WWMI R8 (four/eight influences), WWMI R16
   and rigid u32 input formats with one u32/float runtime representation.
-  Bone identity is mod-relative Blend source plus resolved offset; IBs
+  Bone identity is mod-relative Blend source plus resolved offset, namespace and
+  verified layout domain; IBs
   only preserve compact vertex mapping. Selection is exact-source-scoped and
   persists without dropping unrelated metadata or filtered choices. Picking is
   distance-weighted on the exact hit mesh within 2% of model radius, with triangle
@@ -819,10 +820,121 @@ of documentation, comments and tests; use portable fixtures instead.
   exact members for evidence but keep provenance. Infer only conservative
   maximum-spanning topology from overlap/centers: Blend data provides no names,
   canonical skeleton, hierarchy, bind pose, animation or semantic labels.
+- Exact registered WWMI Asset/range bindings may provide an optional root
+  `Rig.json` (`mod-viewer-rig`, version 1, Asset coordinates). Read it only on
+  Weight/Rig access from retained skinning manifests, through Asset containment
+  rules. Validate ordered parents, finite translations, near-unit quaternions,
+  uniform reference scales (uniformly mirrored negative scales are allowed) and reference VB/IB
+  fingerprints and either an explicit Blend-content fingerprint/palette binding
+  or an Asset-declared stock WWMI merged palette with same-INI template proof.
+  Do not infer a mod's palette namespace from numeric IDs or component offsets.
+  The stock adapters recognize legacy frame-state and newer merge-status programs.
+  They verify merger inputs/outputs, publishing, native CB/Blend
+  bindings, direct or verified-helper draw ownership and every component's merge offset/count,
+  including skipped components. A contiguous layout may exceed the 256 bones its
+  RW buffers hold (each component at most 256, total at most 1024): the merger drops
+  out-of-range writes and native u8 Blend IDs only address the buffer's range. Retain this proof in the loaded manifest;
+  do not reread INIs during Weight access. Generic admission verifies every
+  referenced captured VB/IB, not just the rendered component. Palette/layout
+  admission never depends on character or mod names or the numeric ID range alone.
+  Verified shared R8 streams retain raw palette IDs without adding vg_offset;
+  that value controls matrix-copy placement and remains source provenance.
+  Namespace/domain keys distinguish them from legacy offset-decoded sources and
+  other native layouts reusing a buffer. Translate
+  saved legacy Weight IDs only for exact loaded verified sources, once, without
+  writing metadata during load. Authored preset signatures retain unambiguous
+  legacy aliases; the unchanged skeleton fingerprint preserves authored control IDs.
+  Stock remap adapters use full R16 VertexVG IDs with unchanged authored weights,
+  verifying forward/reverse maps on positive influences. Support the stock 512
+  default and explicit 512/1024 map sizes, four/eight influences and R16/R32 tables.
+  Blend and VertexVG must hold the same vertex count; the declared
+  `custom_vertex_count` may overstate it (extra remapper threads are inert) but
+  never understate it.
+  A component's proxy triple may follow unconditional pixel-texture setup, but
+  must be unconditional and precede the shared binder.
+  Exporter variants that cannot change bone-ID mapping keep the proof: any mesh
+  scale, CB copies with or without `ref`, assignment spacing, dotted/namespaced
+  resource names, pixel/flag state around the gate, bare words 3DMigoto ignores,
+  merge-only components, proxies referencing undeclared resources (null), unused
+  remaps, and same-INI neutral or draw-only command lists. Draws inside those
+  helpers inherit the proof only when called from the proven override itself.
+  Blend must stay a file-backed buffer; any other section writing vb4,
+  `vs-cb3/4`, protected resources or running merger/binder still rejects.
+  Read tables lazily through the same ModSource/BufferStore containment rules.
+  Invalid or truncated maps fail Weight explicitly instead of fabricating IDs.
+  Shared Asset palettes may have up to 1024 entries when a verified proxy program
+  projects each drawn compact palette to R8. Unproven pipelines, unsupported
+  namespaces, stale reference geometry and invalid sidecars retain inference.
+  Authored graph adoption requires every source to resolve the same skeleton.
+  Keep source IDs/weights unchanged; source-to-game-joint aliases supply exact
+  parents, pivots, rest axes and names, including unweighted ancestors. Optional
+  explicit `humanoid_controls` maps all 16 controls to distinct, hierarchy-checked
+  skeleton indices. Use their exact rest pivots and ownership boundaries; never
+  infer semantics from names. Game extraction alone may write `humanoid_controls`,
+  from exact `Bip001` biped joint names that also pass the hierarchy check; it
+  preserves existing mappings and never guesses otherwise. Retain fitted controls when semantics are absent
+  and preserve source Physics composition.
+  Saved humanoid joint-ID mappings carry the authored skeleton fingerprint.
+  Fingerprint skeleton transforms and humanoid semantics, excluding the
+  component/profile/layout admission lists so adding a verified mod preserves IDs.
+  Changing between authored/inferred skeletons discards those IDs while valid
+  semantic positions remain eligible for point rebinding.
+- Direct indexed WWMI Assets retain private captured skin layouts and compact
+  vertex IDs. Load weights lazily through Asset containment and validate captured
+  component palettes with the same Rig.json/reference hashes. Asset Weight/Rig
+  posing is temporary; never persist mod selection/preset metadata to an Asset.
+- Optional Asset `Animation/manifest.json` catalogs and clip metadata are version 1
+  sidecars bound to the normalized skeleton fingerprint. Binary clips are bounded,
+  checksummed frame-major local translation/quaternion float32 tracks in Asset
+  coordinates. Use endpoint-inclusive timing, normalized quaternion interpolation,
+  original parent hierarchy and animated-world times inverse-rest-world deltas.
+  Only exact compatible authored rigs expose the library, including matching mods.
+  Catalogs and clips use opaque loaded-session IDs, contained paths and lazy blob
+  transport; clear publications on replacement and reject stale loads. Playback
+  owns the pose and suspends Weight physics; manual posing/editing stops it.
+  Stop restores baseline geometry and model disposal cancels pending loads/frames.
+  Offline secondary-layer conversion requires an explicit authored bone mask,
+  identical skeleton/frame timing and reference-pose local additive metadata.
+  CUE4Parse bakes those layers to absolute local transforms. Copy them only into
+  unchanged reference-pose tracks; refuse existing base motion and preserve all
+  other tracks byte-exact. Never guess layer pairing or rescale incompatible clips.
+- Game-folder extraction is an explicit indexed-WWMI-Asset action. Native game
+  picker grants use opaque tokens independent of Mod/Asset folder access. Pin
+  and verify the native runtime; run it with argument arrays and hidden consoles.
+  Never publish private configuration, keys or native logs. Settings > Game
+  directory persists native-picker game folders per tool (`gameFolders` in
+  config.json); extraction only prefills the WWMI one, re-validated and re-granted
+  by the backend. The character name is tried first (a name search that cannot
+  be verified falls back to geometry). Geometry candidates are the meshes whose
+  section vertex/index counts cover the most captured components, so props in
+  other meshes do not block the body; require the unique best native
+  geometry/UV/positive-weight proof, and report unproven components, before adopting its skeleton and component palettes.
+  Leftover components (props) are adopted only from a companion mesh found by
+  the verified character folder name whose skeleton is an exact name/parent/rest
+  sub-skeleton of the body, proven uniquely by one mesh and remapped to body bones;
+  authored rigs require every source to resolve, so unproven parts disable them. Preserve compatible
+  explicit rig semantics and existing clip/user-file identities.
+  Only exact supported companion layout plus matching source skeleton, timing,
+  additive metadata and body-omitted authored track masks authorizes secondary
+  conversion; never use character names or numeric bone thresholds as proof.
+  Stage all sidecars, then revalidate registry, geometry and sidecar revisions
+  under the shared config transaction. Install Rig.json, Animation and its report
+  together with rollback and retained recovery data on rollback failure. Support
+  cancellation before installation. Keep extraction off normal load/index paths.
+  The game index (`game_extract/game_index.py`, stored as `game-wwmi-<hash>.json`
+  in the asset-index folder) only caches SkeletalMesh section shapes under
+  `Role/*` and `Prop/RoleProp`, keyed by the runtime version plus every archive's
+  name, size and mtime. It is an accelerator: native exports still prove each
+  mesh, and a missing, stale or invalid index falls back to native searches.
+  Building is explicit (Settings confirm dialog or index button) or automatic
+  when extracting without a ready index; the extraction Browse pick is saved to
+  Settings, and clearing the WWMI folder deletes its index.
 - Cross-source reconciliation is a viewer-owned graph over source rigs. Preserve
   `SourceBoneRef {sourceKey,boneId}` and `${sourceKey}#bone=${boneId}`; only
-  models whose sources all declare validated model-wide IDs (R16 Blend or active
-  VertexVG remapping) may group equal numeric IDs directly. Keep R16 IDs unchanged
+  models whose sources all declare validated model-wide IDs in one domain (R16
+  Blend, active VertexVG remapping or a verified shared WWMI layout) may group
+  equal numeric IDs directly. Different verified layouts cannot share numeric
+  identity. Keep R16 IDs unchanged
   without adding component offsets again. Otherwise
   require normalized mutual-best geometry/topology evidence through strict seeds,
   neighbour propagation and graph alignment, one member per
@@ -853,14 +965,18 @@ of documentation, comments and tests; use portable fixtures instead.
   enables Physics; empty disables it. State changes wake rather than restart the
   simulation. Reset Physics affects only motion; Reset Pose/Joint affects only
   manual state, and presets never serialize live Physics offsets.
-- `HumanoidControlRig` is the primary automatic skeleton: fixed 16 controls fitted
-  from immutable A-pose geometry/orientation, independent of non-semantic
-  `ModelJoint` topology. Edit Rig starts at rest; control overrides and presets
+- `HumanoidControlRig` is the primary automatic skeleton: fixed 16 controls from
+  explicit verified Asset semantics when available, otherwise fitted from immutable
+  A-pose geometry/orientation, independent of non-semantic `ModelJoint` topology.
+  Authored controls reserve exact joints before hierarchy inheritance; saved edits
+  take precedence. Edit Rig starts at rest; control overrides and presets
   remain separate. Binding uses ordered direct ownership, nearest normalized
   anchors and boundary-aware descendant inheritance with
   `inverse(restDriverWorld) * restJointWorld`; convert posed targets to authored-rest
   deltas before source aliasing. IK depends on accepted controls, uses virtual
-  two-bone controls and composes before manual pose/Physics. Metadata save/reset
+  two-bone controls with immutable rest lengths and a transported rest bend pole;
+  full extension must not erase the bend plane. Authored limb drivers preserve
+  rest roll across semantic-axis singularities. IK composes before manual pose/Physics. Metadata save/reset
   refreshes mappings and pose on the loaded ModelRig without reconciliation.
   Discard joint IDs saved by older builders while retaining valid semantic
   positions for normal point-to-point rebinding. Explicit mappings with malformed

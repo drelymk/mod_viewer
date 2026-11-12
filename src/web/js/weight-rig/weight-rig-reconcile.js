@@ -44,7 +44,7 @@ export {
 export { orientModelRigForest } from './weight-rig-reconcile-forest.js';
 export { CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN } from './weight-rig-reconcile-attachments.js';
 
-export const MODEL_RIG_BUILDER_VERSION = 4;
+export const MODEL_RIG_BUILDER_VERSION = 5;
 
 async function assembleModelRigReconciliation(
   sourceRigs,
@@ -172,7 +172,10 @@ export async function buildModelRigReconciliationCooperative(
   const rigs = [...sourceRigs]
     .filter((rig) => rig?.sourceKey !== undefined)
     .sort((left, right) => String(left.sourceKey).localeCompare(String(right.sourceKey)));
-  const useModelWideBoneIds = rigs.length > 0 && rigs.every((rig) => rig.boneIdsModelWide === true);
+  const useModelWideBoneIds =
+    rigs.length > 0 &&
+    rigs.every((rig) => rig.boneIdsModelWide === true) &&
+    new Set(rigs.map((rig) => rig.boneIdDomain || 'model')).size === 1;
   const stale = Symbol('stale reconciliation');
   const checkpoint = async () => {
     if (!isCurrent()) throw stale;

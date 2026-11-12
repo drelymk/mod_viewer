@@ -37,7 +37,7 @@ _HEADER_RE = re.compile(
     r"^\s*(stride|topology|format|semanticname|semanticindex|"
     r"alignedbyteoffset|byteoffset|offset)\s*[:=]\s*(.*?)\s*$", re.I)
 _ELEMENT_RE = re.compile(r"^\s*element\s*\[\s*\d+\s*\]\s*:\s*(.*)$", re.I)
-_SEMANTIC_RE = re.compile(r"\b(POSITION|NORMAL|TEXCOORD)(\d*)\b", re.I)
+_SEMANTIC_RE = re.compile(r"\b(POSITION|NORMAL|TEXCOORD|BLENDINDICES|BLENDWEIGHTS|BLENDWEIGHT)(\d*)\b", re.I)
 _FORMAT_VALUE_RE = re.compile(r"\bformat\s*[:=]\s*([A-Za-z0-9_]+)", re.I)
 _OFFSET_VALUE_RE = re.compile(
     r"(?:aligned\s*byte\s*offset|byte\s*offset|offset)\s*[:=]\s*(\d+)",

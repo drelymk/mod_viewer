@@ -13,6 +13,9 @@ import {
 import { requestRender } from '../scene/render-scheduler.js';
 import { rebuildModelRestFrames, rebuildSourceRigRestFrames } from './weight-rig-frames.js';
 import { buildModelRigReconciliationCooperative, sourceBoneKey } from './weight-rig-reconcile.js';
+import { createRigAnimation } from './rig-animation.js';
+import { buildGameRigReconciliation } from './game-rig.js';
+import { buildAuthoredHumanoidControlRig, mergeAuthoredHumanoidMappings } from './game-rig-humanoid.js';
 import {
   selectionMapFromEntries,
   selectionRecordsFromMap,
@@ -79,6 +82,11 @@ let modelWeightGeneration = 0;
 let humanoidControlRigCacheKey = '';
 let humanoidControlRigSnapshotCache = null;
 let humanoidRigEditSession = null;
+let assetRigContext = null;
+
+export function setWeightRigAssetContext(context) {
+  assetRigContext = context || null;
+}
 
 function clockNow() {
   return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
@@ -188,6 +196,7 @@ weightModelSession = createWeightModelSession({
   syncPhysicsToSelection: physicsRuntime.syncToSelection,
   serializeBoneSelection,
   eligibleSkinningMesh,
+  getAssetContext: () => assetRigContext,
   notifyChanged: () => notifyModelWeightChanged(),
   requestRender,
   getGeneration: () => modelWeightGeneration,
@@ -221,7 +230,12 @@ humanoidRigEditSession = createHumanoidRigEditSession({
   resetCurrentPoseForHumanoidRigEdit: (...args) => rigPoseRuntime?.resetForHumanoidEdit(...args) || false,
   setPhysicsSuspended: (...args) => rigPoseRuntime?.setHumanoidEditPhysicsSuspended(...args) || false,
   getKnownMeshes: () => knownMeshes,
-  resolveMappings: resolveHumanoidControlMappings,
+  resolveMappings: ({ savedOverrides, modelRig }) =>
+    mergeAuthoredHumanoidMappings(
+      modelRig?.humanoidAutomaticControlRig,
+      resolveHumanoidControlMappings({ savedOverrides, modelRig }),
+      savedOverrides,
+    ),
   persist: async (path, value) => (await bridgeReady()).save_humanoid_control_rig(path, value),
   clearPersist: async (path) => (await bridgeReady()).clear_humanoid_control_rig(path),
   cancelWeightPicking: (...args) => weightPickingSession?.cancel(...args),
@@ -279,7 +293,49 @@ function beginRigJointPicking(...args) {
   return rigModelSession?.beginJointPicking(...args) || false;
 }
 
+const rigAnimation = createRigAnimation({
+  getRig: () => modelSkinningRig?.gameRig || null,
+  loadClip: async (token, id) => {
+    const api = await bridgeReady();
+    return assetRigContext ? api.get_asset_animation(token, id) : api.get_model_animation(token, id);
+  },
+  prepare: () => {
+    humanoidRigEditSession.cancel();
+    rigPoseRuntime.resetPose({ request: false });
+  },
+  suspendPhysics: (value) => rigPoseRuntime.setHumanoidEditPhysicsSuspended(value),
+  applyPose: (transforms, { finalize = false } = {}) => {
+    if (!modelSkinningRig) return;
+    modelSkinningRig.animationTransforms = transforms;
+    rigPoseRuntime.applyPose({ dragging: !!transforms && !finalize });
+    if (finalize || !transforms) {
+      for (const source of modelSkinningRig.sourceRigs) {
+        physicsRuntime.forEachRigMesh(source, (mesh, state) =>
+          skinningRuntime.finalizeDeformationGeometry(mesh, state),
+        );
+      }
+    }
+    notifyModelRigPoseChanged(
+      null,
+      null,
+      modelSkinningRig.joints.map((joint) => joint.jointId),
+    );
+  },
+  notify: (detail) => window.dispatchEvent(new CustomEvent('mod-viewer-model-animation-changed', { detail })),
+});
+function manualPose(action) {
+  return (...args) => {
+    if (rigAnimation.snapshot().selected) rigAnimation.stop();
+    return action(...args);
+  };
+}
+
 export const weightRigApi = Object.freeze({
+  getRigAnimationState: rigAnimation.snapshot,
+  selectRigAnimation: rigAnimation.select,
+  setRigAnimationPlaying: rigAnimation.setPlaying,
+  stopRigAnimation: rigAnimation.stop,
+  seekRigAnimation: rigAnimation.seek,
   getModelWeightState: weightModelSession.getState,
   activateWeightRig: weightRigActivationSession.activate,
   setBoneSelected: weightModelSession.setBoneSelected,
@@ -303,20 +359,20 @@ export const weightRigApi = Object.freeze({
 
   finishRigJointPose: rigPoseRuntime.finishPose,
   getRigJointPoseFrame: rigPoseRuntime.getFrame,
-  resetRigJoint: rigPoseRuntime.resetJoint,
+  resetRigJoint: manualPose(rigPoseRuntime.resetJoint),
   resetRigPose,
-  setRigJointRoot: rigPoseRuntime.setRoot,
-  setRigJointRotation: rigPoseRuntime.setRotation,
+  setRigJointRoot: manualPose(rigPoseRuntime.setRoot),
+  setRigJointRotation: manualPose(rigPoseRuntime.setRotation),
   setRigPoseControlStatus: rigPoseRuntime.setStatus,
 
   setRigActiveLimbRole: rigPoseRuntime.setActiveLimbRole,
   setRigIkEnabled: rigPoseRuntime.setIkEnabled,
   selectHumanoidControl: rigPoseRuntime.selectControl,
-  solveRigIkTarget: rigPoseRuntime.solveTarget,
+  solveRigIkTarget: manualPose(rigPoseRuntime.solveTarget),
 
   getHumanoidRigEditSnapshot: humanoidRigEditSession.snapshot,
   setHumanoidRigMetadata: humanoidRigEditSession.setMetadata,
-  beginHumanoidRigEdit: humanoidRigEditSession.begin,
+  beginHumanoidRigEdit: manualPose(humanoidRigEditSession.begin),
   cancelHumanoidRigEdit: humanoidRigEditSession.cancel,
   saveHumanoidRigEdit: humanoidRigEditSession.save,
   resetHumanoidRig: humanoidRigEditSession.reset,
@@ -326,7 +382,7 @@ export const weightRigApi = Object.freeze({
   cancelHumanoidControlCarry: humanoidRigEditSession.cancelCarry,
 
   setRigMetadata: rigPresetSession.setMetadata,
-  applyRigPosePresetById: rigPresetSession.applyById,
+  applyRigPosePresetById: manualPose(rigPresetSession.applyById),
   saveRigPosePreset: rigPresetSession.save,
   renameRigPosePreset: rigPresetSession.rename,
   deleteRigPosePreset: rigPresetSession.remove,
@@ -353,6 +409,7 @@ function modelWeightSnapshot() {
   );
   const savedBones = selectionRecordsFromMap(modelWeightState.savedBonesBySource, modelWeightState.sourceDescriptors);
   return {
+    canPersist: !assetRigContext,
     loaded: modelWeightState.loaded,
     loading: modelWeightState.loading,
     generation: modelWeightGeneration,
@@ -535,6 +592,7 @@ function ikSnapshot() {
 
 function rigSnapshot() {
   return {
+    canPersist: !assetRigContext,
     loaded: modelRigState.loaded,
     loading: modelRigState.loading,
     error: modelRigState.error,
@@ -600,12 +658,13 @@ function eligibleSkinningMesh(mesh) {
   return (
     mesh?.userData?.skinningAvailable === true &&
     mesh.userData?.assetFill !== true &&
-    !!mesh.userData?.modPath &&
+    (!!mesh.userData?.modPath || !!assetRigContext) &&
     !!mesh.userData?.semanticKey
   );
 }
 
 function resetRigPose() {
+  rigAnimation.stop();
   const presetWasSelected = rigPresetSession?.clearApplicationState?.() || false;
   const changed = rigPoseRuntime?.resetPose({ request: false }) || false;
   notifyModelRigChanged();
@@ -614,6 +673,7 @@ function resetRigPose() {
 }
 
 function resetModelWeightState() {
+  rigAnimation.stop();
   weightRigActivationSession?.invalidate();
   modelWeightGeneration += 1;
   humanoidControlRigCacheKey = '';
@@ -785,15 +845,17 @@ async function buildModelSkinningRig(
   if (!(await checkpoint())) return null;
   const previousSelectedJointId = modelRigState.selectedJointId;
   const previousRootSignatures = new Set(modelRigState.explicitRootSignatures);
-  const reconciliation = await buildModelRigReconciliationCooperative(
-    sourceRigs,
-    {},
-    {
-      budget,
-      isCurrent: () => generation === null || isCurrent(),
-      timings: performance,
-    },
-  );
+  const reconciliation =
+    buildGameRigReconciliation(sourceRigs) ||
+    (await buildModelRigReconciliationCooperative(
+      sourceRigs,
+      {},
+      {
+        budget,
+        isCurrent: () => generation === null || isCurrent(),
+        timings: performance,
+      },
+    ));
   if (!reconciliation) return null;
   performance.reconciliationMs = clockNow() - startedAt;
   if (!(await checkpoint())) return null;
@@ -805,6 +867,11 @@ async function buildModelSkinningRig(
     modelReferenceRadius:
       reconciliation.modelReferenceRadius || reconciliation.reconciliation?.modelReferenceRadius || 0,
     reconciliation,
+    gameRigId: reconciliation.reconciliation?.skeletonId || null,
+    gameRig: reconciliation.gameRig || null,
+    authoredRestFrames: reconciliation.authoredRestFrames || null,
+    authoredRestPivots: reconciliation.authoredRestPivots || null,
+    authoredHumanoidControls: reconciliation.authoredHumanoidControls || null,
     joints,
     edges: reconciliation.edges || [],
     inferredForest: {
@@ -918,7 +985,7 @@ function buildPrimaryHumanoidRig(rig) {
     axes: humanoidSemanticAxes(),
     orientationState,
   });
-  rig.humanoidAutomaticControlRig = automaticRig;
+  rig.humanoidAutomaticControlRig = buildAuthoredHumanoidControlRig(automaticRig, rig) || automaticRig;
   applySavedHumanoidRig(rig, humanoidRigEditSession?.getSavedOverrides?.());
 }
 
@@ -928,12 +995,13 @@ function applySavedHumanoidRig(rig, savedOverrides = null) {
   humanoidControlRigSnapshotCache = null;
   const orientationState = getModelTransformState?.();
   const automaticRig = rig.humanoidAutomaticControlRig;
-  const controlMappings = automaticRig?.accepted
+  const savedMappings = automaticRig?.accepted
     ? resolveHumanoidControlMappings({
         savedOverrides,
         modelRig: rig,
       })
     : new Map();
+  const controlMappings = mergeAuthoredHumanoidMappings(automaticRig, savedMappings, savedOverrides);
   const controlRig = automaticRig?.accepted
     ? applyHumanoidControlRigOverrides({
         automaticRig,

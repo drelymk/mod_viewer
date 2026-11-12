@@ -155,6 +155,7 @@ export function createWeightModelSession({
   syncPhysicsToSelection,
   serializeBoneSelection,
   eligibleSkinningMesh,
+  getAssetContext = () => null,
   notifyChanged,
   requestRender,
   getGeneration,
@@ -209,7 +210,10 @@ export function createWeightModelSession({
     modelWeightState.promise = (async () => {
       const api = await bridgeReady();
       if (generation !== getGeneration()) return modelWeightSnapshot();
-      const preview = await api.get_model_skinning_preview(folderPath);
+      const assetContext = getAssetContext();
+      const preview = assetContext
+        ? await api.get_asset_skinning_preview(assetContext.token)
+        : await api.get_model_skinning_preview(folderPath);
       if (generation !== getGeneration()) return modelWeightSnapshot();
       modelWeightState.savedBonesBySource = selectionMapFromEntries(preview?.saved_bones);
       const bufferResponse = preview?.data?.url ? await fetch(preview.data.url, { cache: 'no-store' }) : null;
@@ -233,7 +237,11 @@ export function createWeightModelSession({
           continue;
         }
         try {
-          const installed = installSkinningEntry(mesh, entry, buffer);
+          const installed = installSkinningEntry(
+            mesh,
+            { ...entry, game_rig: preview?.game_rigs?.[entry.game_rig_id] || null },
+            buffer,
+          );
           modelWeightState.sourceDescriptors.set(installed.source.sourceKey, installed.source);
         } catch (error) {
           state.error = error instanceof Error ? error.message : String(error);

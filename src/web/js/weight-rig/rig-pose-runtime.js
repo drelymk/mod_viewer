@@ -11,6 +11,7 @@ import { buildSelectedWeightMask } from './weight-selection.js';
 import { activePoseJointIds, RIG_LIMB_ROLES } from './weight-runtime.js';
 import { HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES } from './humanoid-control-rig.js';
 import { buildInferredRigForest, jointPivotMap } from './weight-rig.js';
+import { getLooseParts } from '../mesh/loose-parts.js';
 
 const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
 
@@ -254,6 +255,18 @@ export function createRigPoseRuntime({
 
   function buildModelPoseTransforms() {
     const rig = getRig();
+    if (rig.animationTransforms) {
+      rig.manualPoseTransforms = new Map();
+      rig.humanoidDriverTransforms = rig.animationTransforms;
+      rig.poseTransforms = rig.animationTransforms;
+      rig.poseRotations = new Map(
+        [...rig.animationTransforms].map(([id, matrix]) => [
+          id,
+          new THREE.Quaternion().setFromRotationMatrix(matrix).normalize(),
+        ]),
+      );
+      return;
+    }
     const manualTransforms = buildForestTransformsFromLocalRotations(rig.inferredForest, rig.centerByJointId, {
       getQuaternion: (jointId) => rig.poseRotationByJointId.get(jointId) || new THREE.Quaternion(),
       jointPivotByBoneId: rig.jointPivotByJointId,
@@ -315,7 +328,11 @@ export function createRigPoseRuntime({
       const transform = modelTransform || manual;
       if (transform) {
         transforms.set(Number(boneId), transform);
-        rotations.set(Number(boneId), new THREE.Quaternion().setFromRotationMatrix(transform).normalize());
+        rotations.set(
+          Number(boneId),
+          (modelTransform && modelRig.poseRotations.get(jointId)) ||
+            new THREE.Quaternion().setFromRotationMatrix(transform).normalize(),
+        );
       }
       if (Number.isInteger(jointId) && affectedJointIds.has(jointId)) {
         affectedBoneIds.add(Number(boneId));
@@ -368,13 +385,19 @@ export function createRigPoseRuntime({
       rig.poseActiveJointKey === poseJointKey ? rig.poseAffectedJointIds : modelPoseDescendantIds(rig, posedJointIds);
     const affectedSetChanged = rig.poseActiveJointKey !== poseJointKey;
     let changed = false;
+    // Live updates (animation ticks, IK drags) deform only what is on screen;
+    // the finalizing pass below deforms every mesh, so toggling one visible
+    // afterwards still shows the current pose. Loose parts share their
+    // source's vertex buffers while the source itself draws nothing.
+    const shown = (mesh) => !dragging || mesh.visible || getLooseParts(mesh).some((part) => part.visible);
     for (const sourceRig of rig.sourceRigs || []) {
       const affectedBoneIds = syncDerivedSourcePose(sourceRig, rig, affectedJointIds);
       const transformsByBoneId = rig.sourceTransformAliases.get(sourceRig.sourceKey) || new Map();
       const rotationsByBoneId = rig.sourceRotationAliases.get(sourceRig.sourceKey) || new Map();
+      const boneKey = [...affectedBoneIds].sort((left, right) => left - right).join(',');
+      const shownMeshes = [];
       physicsRuntime.forEachRigMesh(sourceRig, (mesh, stateForMesh) => {
         const previousBoneKey = rig.poseSourceBoneIdsByMesh.get(mesh) || '';
-        const boneKey = [...affectedBoneIds].sort((left, right) => left - right).join(',');
         const activeVertices =
           !affectedSetChanged && previousBoneKey === boneKey && rig.poseActiveVerticesByMesh.has(mesh)
             ? rig.poseActiveVerticesByMesh.get(mesh)
@@ -386,6 +409,7 @@ export function createRigPoseRuntime({
         stateForMesh.poseRotations = rotationsByBoneId;
         rig.poseActiveVerticesByMesh.set(mesh, activeVertices);
         rig.poseSourceBoneIdsByMesh.set(mesh, boneKey);
+        if (shown(mesh)) shownMeshes.push([mesh, stateForMesh]);
       });
       const physicsRig = sourceRig.physicsRig;
       if (physicsRig?.physicsState) {
@@ -394,16 +418,20 @@ export function createRigPoseRuntime({
           physicsRig,
           modelPhysicsSession.getSettings(),
         );
-        changed = physicsRuntime.applySourceDeformation(physicsRig, { visibleOnly: false }) || changed;
+        changed =
+          physicsRuntime.applySourceDeformation(physicsRig, {
+            visibleOnly: false,
+            meshes: dragging ? shownMeshes.map(([mesh]) => mesh) : null,
+          }) || changed;
       } else {
-        physicsRuntime.forEachRigMesh(sourceRig, (mesh, stateForMesh) => {
+        for (const [mesh, stateForMesh] of shownMeshes) {
           changed =
             skinningRuntime.applyDeformation(mesh, stateForMesh, {
               request: false,
               invalidateShadow: false,
               skipHidden: false,
             }) || changed;
-        });
+        }
       }
     }
     rig.poseAffectedJointIds = affectedJointIds;

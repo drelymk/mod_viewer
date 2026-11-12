@@ -15,7 +15,7 @@ RIG_METADATA_VERSION = 1
 RIG_PRESET_NAME_MAX_LENGTH = 80
 RIG_SIGNATURE_MAX_LENGTH = 1024
 HUMANOID_CONTROL_RIG_VERSION = 2
-MODEL_RIG_BUILDER_VERSION = 4
+MODEL_RIG_BUILDER_VERSION = 5
 HUMANOID_CONTROL_KEYS = (
     "chest", "pelvis", "neck", "head", "leftShoulder", "leftElbow", "leftHand",
     "rightShoulder", "rightElbow", "rightHand", "leftHip", "leftKnee",
@@ -90,6 +90,14 @@ def _normalized_humanoid_control_rig(value, *, strict=False):
     controls = {}
     malformed = False
     has_builder_version = "model_rig_builder_version" in value
+    identity = value.get("model_rig_identity")
+    has_identity = "model_rig_identity" in value
+    valid_identity = (isinstance(identity, str) and len(identity) == 64
+                      and all(char in "0123456789abcdef" for char in identity))
+    if has_identity and not valid_identity:
+        if strict:
+            return None
+        malformed = True
     builder_version = value.get("model_rig_builder_version")
     if has_builder_version and (
             isinstance(builder_version, bool)
@@ -132,6 +140,8 @@ def _normalized_humanoid_control_rig(value, *, strict=False):
     if strict and malformed:
         return None
     result = {"version": HUMANOID_CONTROL_RIG_VERSION, "controls": controls}
+    if has_identity:
+        result["model_rig_identity"] = identity if valid_identity else None
     if strict and has_builder_version:
         result["model_rig_builder_version"] = builder_version
     elif has_builder_version and isinstance(builder_version, int):

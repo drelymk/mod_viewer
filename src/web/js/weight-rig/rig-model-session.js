@@ -164,6 +164,17 @@ export function createRigSourceSession({
 
   function assembleSourceSkinningRig(sourceKey, members, influenceGraph, inferredForest) {
     const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
+    const gameRigs = members.map((mesh) => states.get(mesh)?.gameRig);
+    const firstGameRig = gameRigs[0];
+    const gameRig =
+      firstGameRig &&
+      gameRigs.every(
+        (candidate) =>
+          candidate?.id === firstGameRig.id &&
+          JSON.stringify(candidate.boneMap) === JSON.stringify(firstGameRig.boneMap),
+      )
+        ? firstGameRig
+        : null;
     const jointPivotByBoneId = jointPivotMap(inferredForest, influenceGraph.relationships);
     const rig = {
       key: sourceKey,
@@ -171,6 +182,10 @@ export function createRigSourceSession({
       sourceFile: descriptor?.sourceFile || '',
       boneIdOffset: descriptor?.boneIdOffset ?? 0,
       boneIdsModelWide: descriptor?.boneIdsModelWide === true,
+      boneIdDomain: descriptor?.boneIdDomain || 'model',
+      legacySourceKey: descriptor?.legacySourceKey || null,
+      legacyBoneIdOffset: descriptor?.legacyBoneIdOffset || 0,
+      gameRig,
       meshes: new Set(members),
       influenceGraph,
       boneIds: (influenceGraph.nodes || []).map((node) => node.boneId),

@@ -587,3 +587,28 @@ def test_save_texture_color_forwards_progress_callback(monkeypatch):
         "mod", "diffuse::component01.dds", [], [], progress_callback=callback)
 
     assert captured[0][1] == {"progress_callback": callback}
+def test_verified_shared_selection_migration_is_scoped_and_idempotent():
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from app.bridge.mod_preview import ModPreview
+    from core.geometry.skinning import SkinningSource, skinning_source_descriptor
+
+    old = SkinningSource("part/stream.blend", 8, 4, "wwmi_u8_4", 7)
+    shared = replace(old, bone_id_namespace="wwmi_merged", bone_id_domain="a" * 64)
+    old_key = skinning_source_descriptor(old)["key"]
+    shared_key = skinning_source_descriptor(shared)["key"]
+    saved = [{"source": old.file, "source_key": old_key, "bone_id_offset": 7, "bone_ids": [8, 10]},
+             {"source": "other/stream.blend", "source_key": "other/stream.blend|offset=0",
+              "bone_id_offset": 0, "bone_ids": [20]}]
+    manifest = {"Mesh01": SimpleNamespace(skinning_source=shared)}
+    migrated = ModPreview._migrate_merged_weight_selection(saved, manifest)
+    assert next(row for row in migrated if row["source_key"] == shared_key)["bone_ids"] == [1, 3]
+    assert not any(row["source_key"] == old_key for row in migrated)
+    assert saved[0]["bone_ids"] == [8, 10]
+    assert saved[1] in migrated
+    assert ModPreview._migrate_merged_weight_selection(migrated, manifest) == migrated
+    manifest["Mesh02"] = SimpleNamespace(skinning_source=old)
+    both = ModPreview._migrate_merged_weight_selection(saved, manifest)
+    assert saved[0] in both
+    assert ModPreview._migrate_merged_weight_selection(both, manifest) == both

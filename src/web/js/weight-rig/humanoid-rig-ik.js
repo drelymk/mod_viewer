@@ -68,27 +68,39 @@ export function solveHumanoidControlIk({
     return { positions: null, residual: Infinity, reached: false, reason: 'limb_unavailable' };
   }
   const anchor = current[keys[0]].clone();
-  const bend = current[keys[1]].clone();
-  const end = current[keys[2]].clone();
+  const rest = controlsFor(controlRig);
+  const restAnchor = rest[keys[0]];
+  const restBend = rest[keys[1]];
+  const restEnd = rest[keys[2]];
   const targetPoint = vector(target);
-  const upperLength = anchor.distanceTo(bend);
-  const lowerLength = bend.distanceTo(end);
+  const upperLength = restAnchor.distanceTo(restBend);
+  const lowerLength = restBend.distanceTo(restEnd);
   if (upperLength <= EPSILON || lowerLength <= EPSILON || !Number.isFinite(targetPoint.lengthSq())) {
     return { positions: null, residual: Infinity, reached: false, reason: 'invalid_limb_lengths' };
   }
   const rawDirection = targetPoint.clone().sub(anchor);
   const rawDistance = rawDirection.length();
-  const direction =
-    rawDistance > EPSILON ? rawDirection.multiplyScalar(1 / rawDistance) : end.clone().sub(anchor).normalize();
+  const restDirection = restEnd.clone().sub(restAnchor);
+  if (restDirection.lengthSq() <= EPSILON) restDirection.copy(restBend).sub(restAnchor);
+  restDirection.normalize();
+  const direction = rawDistance > EPSILON ? rawDirection.multiplyScalar(1 / rawDistance) : restDirection.clone();
   const minimum = Math.abs(upperLength - lowerLength);
   const maximum = upperLength + lowerLength;
   const distance = Math.max(minimum, Math.min(maximum, rawDistance));
   const x =
-    (distance * distance + upperLength * upperLength - lowerLength * lowerLength) / Math.max(2 * distance, EPSILON);
+    distance > EPSILON
+      ? (distance * distance + upperLength * upperLength - lowerLength * lowerLength) / (2 * distance)
+      : 0;
   const height = Math.sqrt(Math.max(0, upperLength * upperLength - x * x));
   let plane = bendDirection ? projectedDirection(bendDirection, direction) : null;
-  if (!plane) plane = projectedDirection(bend.clone().sub(anchor), direction);
-  if (!plane) plane = fallbackPlane(direction, controlRig?.frame);
+  if (!plane) {
+    // Transport a rest-pose pole rather than a collapsed or previously solved
+    // elbow. Reaching full extension must not erase the preferred bend plane.
+    const restPole =
+      projectedDirection(restBend.clone().sub(restAnchor), restDirection) ||
+      fallbackPlane(restDirection, controlRig?.frame);
+    plane = restPole.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(restDirection, direction));
+  }
   if (Number(bendSign) < 0) plane.negate();
   const desiredBend = anchor.clone().addScaledVector(direction, x).addScaledVector(plane, height);
   const solvedEnd = anchor.clone().addScaledVector(direction, distance);

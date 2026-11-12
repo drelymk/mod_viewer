@@ -49,6 +49,13 @@ def deduplicate_draws(group, max_draws=0):
             merged[key] = {"draw": draw, "alts": [], "sources": []}
             order.append(key)
         entry = merged[key]
+        if (entry["draw"].skinning_source is not None or draw.skinning_source is not None) and (
+                entry["draw"].skinning_source != draw.skinning_source
+                or entry["draw"].skinning_merged_layout != draw.skinning_merged_layout):
+            entry["draw"] = replace(entry["draw"], skinning_source=None,
+                                    skinning_error="ambiguous_skinning_source", skinning_merged_layout=())
+        elif entry["draw"].skinning_merged_layout != draw.skinning_merged_layout:
+            entry["draw"] = replace(entry["draw"], skinning_merged_layout=())
         for source in draw.sources:
             source_entry = dict(source)
             source_entry["conditions"] = draw.conditions

@@ -7,10 +7,14 @@ only this class's deliberate bridge contract.
 
 import json
 import logging
+import os
 import traceback
 
 import webview
 
+from app.assets.game_extract import game_index
+from app.assets.game_extract.runtime import find_paks
+from app.settings import game_folders
 from app.bridge.access import FolderAccess
 from app.bridge.asset_preview import AssetPreview
 from app.bridge import ini as ini_api
@@ -19,6 +23,7 @@ from app.bridge.mod_preview import ModPreview
 from app.bridge.registry import AssetFolderRegistry, ModFolderRegistry
 from app.bridge import toggle as toggle_api
 from app.bridge.model_export import ModelExport
+from app.bridge.rig_extraction import RigExtraction
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,6 +51,7 @@ class ModViewerAPI:
                 }
         self._mod_preview = ModPreview(self._access)
         self._asset_preview = AssetPreview(self._access)
+        self._rig_extraction = RigExtraction(self._asset_preview._asset_selection)
         self._mod_registry = ModFolderRegistry(self._access)
         self._asset_registry = AssetFolderRegistry(
             self._access,
@@ -87,6 +93,70 @@ class ModViewerAPI:
 
     def select_asset_dump_folder(self):
         return self.select_asset_folder()
+
+    def select_game_folder(self):
+        try:
+            return self._rig_extraction.pick_game(self._window)
+        except (OSError, ValueError) as error:
+            return {"error": str(error)}
+
+    def get_saved_game_folder(self):
+        """The Settings folder for Wuthering Waves, granted for extraction."""
+        return self._rig_extraction.saved_game()
+
+    def get_game_folders(self):
+        try:
+            return {"value": game_folders.load_game_folders()}
+        except ValueError as error:
+            return {"error": str(error), "value": {}}
+
+    def select_game_directory(self, kind):
+        """Pick and persist one tool's game folder (GIMI, ZZMI or WWMI)."""
+        try:
+            if kind not in game_folders.GAME_KINDS:
+                raise ValueError("Unknown game folder.")
+            result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
+            if not result:
+                return {"value": game_folders.load_game_folders()}
+            folder = os.path.realpath(result[0])
+            if not os.path.isdir(folder):
+                raise ValueError("Select an existing folder.")
+            if kind == "WWMI":
+                find_paks(folder)
+            return {"value": game_folders.save_game_folder(kind, folder)}
+        except (OSError, ValueError) as error:
+            return {"error": str(error)}
+
+    def clear_game_directory(self, kind):
+        try:
+            if kind == "WWMI":
+                folder = game_folders.load_game_folders().get("WWMI")
+                if folder:
+                    game_index.remove(folder)
+            return {"value": game_folders.save_game_folder(kind, None)}
+        except (OSError, ValueError) as error:
+            return {"error": str(error)}
+
+    def get_game_index_status(self):
+        return self._rig_extraction.index_status()
+
+    def start_game_index(self):
+        return self._rig_extraction.start_index()
+
+    def get_game_index_job(self, job_id):
+        return self._rig_extraction.status(job_id)
+
+    def cancel_game_index(self, job_id):
+        return self._rig_extraction.cancel(job_id)
+
+    def start_asset_rig_extraction(self, folder_path, game_token, query=None):
+        return self._rig_extraction.start(folder_path, game_token, query)
+
+    def get_asset_rig_extraction(self, job_id):
+        return self._rig_extraction.status(job_id)
+
+    def cancel_asset_rig_extraction(self, job_id):
+        return self._rig_extraction.cancel(job_id)
 
     def extract_asset(self, folder_path, name, dump_path, original_path=None):
         return self._asset_registry.extract_asset(
@@ -230,6 +300,15 @@ class ModViewerAPI:
 
     def get_model_skinning_preview(self, folder_path):
         return self._mod_preview.get_model_skinning_preview(folder_path)
+
+    def get_asset_skinning_preview(self, token):
+        return self._asset_preview.get_skinning_preview(token)
+
+    def get_asset_animation(self, token, clip_id):
+        return self._asset_preview.get_animation(token, clip_id)
+
+    def get_model_animation(self, token, clip_id):
+        return self._mod_preview.get_animation(token, clip_id)
 
     def get_memory_diagnostics(self):
         return self._mod_preview.get_memory_diagnostics()

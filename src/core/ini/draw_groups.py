@@ -1,12 +1,14 @@
 """Assembly of resolved ``DrawCall`` records into component draw groups."""
 
 import re
+import hashlib
+import json
 from dataclasses import replace
 
 from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
 from ..geometry.draw_call import AuthoredDrawCall, DrawCall
 from ..geometry.identity import DrawOccurrence
-from ..geometry.skinning import resolve_skinning_source
+from ..geometry.skinning import resolve_skinning_source, WwmiBlendRemap
 from ..mod_source import DirectoryModSource
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
@@ -15,8 +17,20 @@ from .draw_resources import (
 )
 from .draw_scan import _buffer_resource_at_draw, _scan_sections_for_draws
 from .sections import ResourceTable
+from .wwmi_skeleton import stock_wwmi_merged_layouts
 from .texture_roles import (TextureOverrideIndex, _condition_group_is_consistent,
                             _condition_difference)
+
+
+def _merged_draw_path(occurrence, root, helpers):
+    """Whether a draw runs in the root override or its proven draw helpers."""
+    path = tuple(getattr(occurrence, "path", ()) or ())
+    if not path:
+        return True
+    if str(path[0][0]).casefold() != root.casefold():
+        return False
+    called = [str(step[0]) for step in path[1:]] + [str(getattr(occurrence, "section", ""))]
+    return all(name.casefold() in helpers for name in called)
 
 
 def _lookup_component_value(mapping, component):
@@ -159,6 +173,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                       qualified_vars=None, *, section_info=None, resource_source=None):
     """Build resolved component groups while preserving authored draw snapshots."""
     resources = ResourceTable.normalize(resources)
+    merged_layouts = stock_wwmi_merged_layouts(sections)
     if seen is None:
         seen = {}
     if section_info is None:
@@ -553,6 +568,47 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             draw.skinning_source = skinning_source
             draw.skinning_error = skinning_error
             draw.skinning_resolution = skinning_resolution
+            merged = merged_layouts.get(section_name.casefold())
+            if merged and not _merged_draw_path(authored.occurrence, section_name, merged.helpers):
+                merged = None
+            if merged:
+                proof_source, proof_error = resolve_skinning_source(
+                    {4: merged.blend_resource}, resolve_vertex_info,
+                    bone_id_offset=authored.skinning_bone_offset,
+                    remap_resources={35: merged.remap.vertex_resource} if merged.remap else {})
+                if proof_source and proof_source.encoding in ("wwmi_u8_4", "wwmi_u8_8"):
+                    remap = None
+                    if merged.remap:
+                        spec = merged.remap
+                        reverse = resolve_vertex_info(spec.reverse_resource)
+                        forward = resolve_vertex_info(spec.forward_resource)
+                        no_stride_file = resolve_vertex_info(spec.no_stride_resource).get("filename")
+                        same_blend = no_stride_file == proof_source.file
+                        if no_stride_file and not same_blend:
+                            original_ref = resource_source.resolve_resource(proof_source.file)
+                            no_stride_ref = resource_source.resolve_resource(no_stride_file)
+                            same_blend = bool(original_ref and no_stride_ref
+                                              and resource_source.same_reference(original_ref, no_stride_ref))
+                        widths = [re.fullmatch(r"(?:DXGI_FORMAT_)?R(16|32)_UINT", str(info.get("format", "")).upper())
+                                  for info in (reverse, forward)]
+                        if (not same_blend or not all(widths) or not reverse.get("filename") or not forward.get("filename")
+                                or spec.influence_count != proof_source.influence_count):
+                            proof_error = "invalid_vertex_vg_remap"
+                        else:
+                            remap = WwmiBlendRemap(reverse["filename"], forward["filename"], spec.remap_id,
+                                spec.bone_count, spec.compact_count, spec.vertex_count,
+                                *(int(width[1]) // 8 for width in widths))
+                    if not proof_error:
+                        draw.skinning_merged_layout = merged.layout
+                        draw.skinning_source = replace(proof_source,
+                            bone_id_namespace="wwmi_vertex_vg" if remap else "wwmi_merged",
+                            bone_id_domain=hashlib.sha256(json.dumps(merged.layout).encode()).hexdigest(),
+                            blend_remap=remap)
+                        draw.skinning_error = None
+                        draw.skinning_resolution["resolution_source"] = "verified_merged"
+                if proof_error:
+                    draw.skinning_source = None
+                    draw.skinning_error = proof_error
             _apply_diffuse_state(draw, authored, resolve_texture_file)
             _apply_auxiliary_map_state(draw, authored, resolve_texture_file)
             draw.texture_provenance = {

@@ -6,6 +6,7 @@ import { createFolderRegistryPanel } from './folder-registry-panel.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { initAssetExtractionDialog } from './asset-extraction-dialog.js';
+import { initRigExtractionDialog } from './rig-extraction-dialog.js';
 
 const $ = (id) => document.getElementById(id);
 const ASSET_TYPES = ['ZZMI', 'GIMI', 'WWMI'];
@@ -70,11 +71,27 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
   let selectedPath = null;
   let editorBusy = false;
   let partialExtraction = null;
+  let rigExtractionResult = null;
 
   function renderExtractionWarning() {
-    notice.hidden = !partialExtraction;
-    notice.textContent = partialExtraction ? t('asset.extractedPartial', partialExtraction) : '';
+    notice.hidden = !partialExtraction && !rigExtractionResult;
+    notice.textContent = partialExtraction
+      ? t('asset.extractedPartial', partialExtraction)
+      : rigExtractionResult
+        ? t('rigExtract.saved', rigExtractionResult)
+        : '';
   }
+
+  const rigExtraction = initRigExtractionDialog({
+    onSaved: (response, original) => {
+      partialExtraction = null;
+      rigExtractionResult = response.result;
+      renderExtractionWarning();
+      const current = getCurrentSource();
+      if (current?.kind === 'asset' && canonicalPath(current.path) === canonicalPath(original))
+        void switchAsset?.(original, { asset: true });
+    },
+  });
 
   const extraction = initAssetExtractionDialog({
     onSaved: (response, original) => {
@@ -83,6 +100,7 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
       }
       setTextError(error, '');
       partialExtraction = response.extraction?.partial ? response.extraction : null;
+      rigExtractionResult = null;
       renderExtractionWarning();
       const current = getCurrentSource();
       if (original && current?.kind === 'asset' && canonicalPath(current.path) === canonicalPath(original)) {
@@ -121,15 +139,23 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
     onEdit: (entry) => openEditor('edit', entry),
     onOpenFolder: async (entry) => (await bridgeReady()).open_asset_folder(entry.path),
     onDelete: (entry) => removeFolder(entry),
-    contextActions: (entry, isRoot) =>
-      isRoot || entry.asset
-        ? [
-            {
-              label: t(entry.asset ? 'asset.update' : 'asset.add'),
-              action: () => extraction.open(entry),
-            },
-          ]
-        : [],
+    contextActions: (entry, isRoot) => {
+      const actions =
+        isRoot || entry.asset
+          ? [
+              {
+                label: t(entry.asset ? 'asset.update' : 'asset.add'),
+                action: () => extraction.open(entry),
+              },
+            ]
+          : [];
+      if (entry.asset && entry.asset_type === 'WWMI')
+        actions.push({
+          label: t('rigExtract.title'),
+          action: () => rigExtraction.open(entry),
+        });
+      return actions;
+    },
     rootBusySelectors: ['switch', 'rebuild', 'more', 'edit', 'remove'],
     renderRootExtras: (entry) => {
       const tools = document.createElement('span');

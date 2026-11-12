@@ -223,7 +223,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 skinning_manifest[draw.label] = \
                     SkinningManifestEntry.from_vertices(
                         draw.label, draw.skinning_source,
-                        packed.used_vertices)
+                        packed.used_vertices, asset_binding=draw.asset_binding,
+                        merged_layout=draw.skinning_merged_layout)
 
             entry: dict = {
                 **cache.publish(packed, geometry),

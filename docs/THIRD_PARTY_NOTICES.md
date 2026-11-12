@@ -32,3 +32,18 @@ r185 under the same MIT license.
 This application vendors the minified no-conflict Ace core, INI mode,
 Tomorrow Night theme, and search-box extension without modifying those
 upstream files.
+
+## Optional game extraction runtime
+
+- Runtime: CUE4Parse-MCP 1.2.0, Windows x64 self-contained release
+- Source: https://github.com/sinnafuls/cue4parse-mcp/releases/tag/v1.2.0
+- The complete upstream archive is downloaded separately on first explicit
+  game-rig extraction and verified against its pinned SHA-256. It is not included
+  in the viewer bundle. Its license files and dependency notices remain in the
+  runtime cache's `licenses` directory.
+- CUE4Parse uses Apache-2.0; its license is included as
+  `licenses/CUE4Parse-LICENSE.txt`. Other runtime components retain their upstream
+  licenses and notices.
+
+The viewer invokes this runtime as a separate process to read the selected game
+archives and export native mesh/property/animation data into private staging.

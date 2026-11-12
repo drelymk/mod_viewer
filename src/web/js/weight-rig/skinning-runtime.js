@@ -260,6 +260,9 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
           sourceFile: source.file,
           boneIdOffset: offset,
           boneIdsModelWide: source.bone_ids_model_wide === true,
+          boneIdDomain: source.bone_id_domain || 'model',
+          legacySourceKey: source.legacy_source_key || null,
+          legacyBoneIdOffset: Number(source.legacy_bone_id_offset || 0),
         };
       }
     }
@@ -323,6 +326,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     state.encoding = entry.encoding || null;
     state.diagnostics = entry.diagnostics || null;
     state.weightBoneStats = weightBoneStats;
+    state.gameRig = entry.game_rig ? { ...entry.game_rig, boneMap: entry.game_bone_map || {} } : null;
     state.loaded = true;
     state.error = null;
     return { state, source };

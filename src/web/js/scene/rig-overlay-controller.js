@@ -1452,12 +1452,17 @@ export function createRigOverlayController({
   }
 
   function updatePoseFromEvent(detail) {
-    if (disposed || !Number.isInteger(Number(detail?.jointId))) return;
+    if (disposed) return;
+    // Bulk updates such as animation playback carry no joint; Number(null) must not select joint 0.
+    const rawJointId = detail?.jointId;
+    const hasJoint =
+      rawJointId !== null && rawJointId !== undefined && rawJointId !== '' && Number.isInteger(Number(rawJointId));
+    if (!hasJoint && !Array.isArray(detail?.jointIds)) return;
     invalidateHumanoidJointCandidates();
     updatePosedOverlay(currentSource);
     if (currentSnapshot?.jointPickIntent) refreshPickCandidates();
     // The gesture owns its proxy while canonical frames update underneath it.
-    if (!poseDrag) updateProxy(currentSource, currentSnapshot, detail);
+    if (hasJoint && !poseDrag) updateProxy(currentSource, currentSnapshot, detail);
   }
 
   function beginPoseDrag() {

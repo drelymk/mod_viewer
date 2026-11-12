@@ -5,6 +5,11 @@ export default {
   'settings.title': '设置',
   'settings.autoRestore': '从资产自动恢复模组缺失部件',
   'settings.autoRestoreDescription': '模组加载后，从资产库中匹配的资产恢复缺失的原始部件。恢复的部件仅用于预览。',
+  'settings.gameFolders': '游戏目录',
+  'settings.gameFoldersHint': '已保存的文件夹会在提取时自动填入游戏文件夹。',
+  'settings.selectFolder': '选择文件夹',
+  'settings.clearFolder': '清除',
+  'settings.notSet': '未设置',
   'settings.hint': '更改会自动保存。',
   'asset.extractedPartial':
     '资产提取不完整：已保存 {components} 个组件，跳过 {skipped} 个资源组。可能缺少部件。详情请查看 extraction_report.json。',

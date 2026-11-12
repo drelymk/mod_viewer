@@ -127,6 +127,7 @@ def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path)
     value = {
         "version": 2,
         "model_rig_builder_version": metadata.MODEL_RIG_BUILDER_VERSION,
+        "model_rig_identity": "a" * 64,
         "controls": {
             "leftShoulder": {
                 "semantic": {"sideN": -0.18, "height01": 0.7,
