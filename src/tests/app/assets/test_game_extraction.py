@@ -878,6 +878,67 @@ def test_native_session_reuse_redaction_and_cancellation(tmp_path, monkeypatch):
     assert not list(work.glob("command-*.json"))
 
 
+@pytest.mark.parametrize("limit", ["file", "total"])
+@pytest.mark.parametrize("completed", [False, True])
+def test_native_export_budget_terminates_writing_and_completed_helpers(tmp_path, monkeypatch, limit, completed):
+    game = tmp_path / "game"
+    game.mkdir()
+    (game / "data.pak").write_bytes(b"archive")
+    work = tmp_path / "work"
+    nested = work / "animations/nested"
+    nested.mkdir(parents=True)
+    growing = nested / "clip.psa"
+    growing.write_bytes(b"x" * (240 if limit == "file" else 120))
+    if limit == "total":
+        (work / "prior.json").write_bytes(b"x" * 120)
+    monkeypatch.setattr(runtime, "MAX_EXPORT_BYTES", 256)
+    monkeypatch.setattr(runtime, "MAX_WORK_BYTES", 256 if limit == "total" else 4096)
+    client = runtime.Client(tmp_path / "tool.exe", game, work, threading.Event())
+    stopped, polls, writes = [], [], []
+
+    class Input:
+        def write(self, _data):
+            pass
+        def flush(self):
+            pass
+        def close(self):
+            stopped.append("stdin")
+
+    class Process:
+        stdin = Input()
+        returncode = None
+        def poll(self):
+            if self.returncode is None:
+                polls.append(True)
+            return self.returncode
+        def kill(self):
+            stopped.append("kill")
+            self.returncode = -1
+        def wait(self):
+            stopped.append("wait")
+
+    def write_more(_delay):
+        writes.append(True)
+        assert len(writes) == 1, "The over-budget producer was allowed to keep writing."
+        with growing.open("ab") as stream:
+            stream.write(b"x" * 32)
+        if completed:
+            (work / "command-1.json").write_text("{}")
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *_args, **_kwargs: Process())
+    monkeypatch.setattr(runtime.time, "sleep", write_more)
+    with pytest.raises(ValueError, match="temporary output budget"):
+        client.call("batch", kind="anim", paths=[BASE], outDir=str(nested))
+    assert stopped == ["kill", "wait", "stdin"] and client.process is None
+    assert polls == [True, True]  # One pending check, then the existing close path.
+    assert not (work / "command-1.json").exists()
+    # The existing job owns staging cleanup; the client only stops its producer.
+    assert growing.exists()
+    with pytest.raises(ValueError, match="temporary output budget"):
+        client.call("search", query="fixture")
+    assert stopped == ["kill", "wait", "stdin"]
+
+
 @pytest.mark.parametrize("response", [
     {"items": []},
     {"items": [{"path": MESH + "Other", "state": "failed"}]},

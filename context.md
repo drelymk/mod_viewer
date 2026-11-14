@@ -946,8 +946,12 @@ of documentation, comments and tests; use portable fixtures instead.
   update may require a new viewer build with updated keys or parser support.
   Expose only package search/folders, mesh/property and animation export. Keep one mounted provider
   per job, export only into private staging, and terminate it before staging
-  cleanup on completion, failure or cancellation. Never download executable code
-  during extraction or silently select a newer parser.
+  cleanup on completion, failure or cancellation. Monitor the native work
+  directory before commands, while awaiting responses and on completion; exceeding
+  the per-file or cumulative output budget terminates the helper through the
+  existing failure path. Polling permits overshoot between checks; it is not a
+  filesystem quota. Never download executable code during extraction or silently
+  select a newer parser.
   Never publish private configuration, keys or native logs. Settings > Game
   directory persists native-picker game folders per tool (`gameFolders` in
   config.json). Settings and extraction share the same UI for every registered

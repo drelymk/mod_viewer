@@ -11,6 +11,12 @@ meshes and ActorX animations. Mesh exports disable materials, textures and morph
 targets. One provider remains mounted until the extraction job finishes; closing
 or cancelling the job terminates the process before staging cleanup. Responses
 are atomic files in private staging, with bounded JSON requests and responses.
+The Python client checks the private work directory before each command, during
+the existing 50 ms response polling loop and on completion. Any file over 160 MiB
+or combined native output over 4 GiB terminates the helper through the existing
+error path before staging cleanup. These are monitored budgets, not filesystem
+quotas: a write can overshoot between checks. The helper's response-size limit
+and Python's per-format read limits remain separate checks.
 Only staged descendants can receive exports. Public AES data is bundled as
 `keys.json` beside the helper and verified by the existing runtime manifest.
 

@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+from stat import S_ISREG
 import subprocess
 import time
 
@@ -12,6 +13,8 @@ from app.settings import paths
 PARSER_COMMIT = "cb909733773daea9015a67f6955d6f2ec24d3629"
 VERSION = "direct-2-" + PARSER_COMMIT[:12]
 MAX_RESPONSE = 32 * 1024 * 1024
+MAX_EXPORT_BYTES = 160 * 1024 * 1024
+MAX_WORK_BYTES = 4 * 1024 ** 3
 
 
 class ExtractionCancelled(ValueError):
@@ -85,11 +88,26 @@ class Client:
             if process.stdin:
                 process.stdin.close()
 
+    def _check_output_budget(self):
+        total = 0
+        for file in self.work.rglob("*"):
+            check_cancelled(self.cancel)
+            try:
+                info = file.stat()
+            except FileNotFoundError:
+                continue  # The helper atomically renames response files while running.
+            if S_ISREG(info.st_mode):
+                size = info.st_size
+                total += size
+                if size > MAX_EXPORT_BYTES or total > MAX_WORK_BYTES:
+                    raise ValueError("Native game exports exceeded the temporary output budget; existing Asset files were preserved.")
+
     def call(self, operation, *, timeout=600, **arguments):
         check_cancelled(self.cancel)
         self.serial += 1
         output = self.work / f"command-{self.serial}.json"
         try:
+            self._check_output_budget()
             if self.process is None:
                 self.process = subprocess.Popen(
                     [str(self.executable), "--paks", str(self.paks), "--work", str(self.work)],
@@ -103,12 +121,14 @@ class Client:
             deadline = time.monotonic() + timeout
             while not output.is_file():
                 check_cancelled(self.cancel)
+                self._check_output_budget()
                 if self.process.poll() is not None:
                     raise ValueError("The game extraction helper stopped unexpectedly.")
                 if time.monotonic() > deadline:
                     raise ValueError("The game extraction tool timed out.")
                 time.sleep(.05)
             check_cancelled(self.cancel)
+            self._check_output_budget()
             if output.stat().st_size > MAX_RESPONSE:
                 raise ValueError("The game extraction response is too large.")
             result = json.loads(output.read_text(encoding="utf-8-sig"))
