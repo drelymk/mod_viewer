@@ -1,23 +1,17 @@
-"""Pinned native extraction tool, private game configuration and bounded calls."""
+"""Bundled, pinned direct CUE4Parse helper and one bounded extraction session."""
 
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
-import tempfile
-import threading
 import time
-from urllib.request import Request, urlopen
-import zipfile
 
 from app.settings import paths
 
 
-VERSION = "1.2.0"
-ARCHIVE_SHA256 = "4f1e546141797dd85ab6de8642712292318abad53a57e0cafbda6e30bb59999e"
-ARCHIVE_URL = f"https://github.com/sinnafuls/cue4parse-mcp/releases/download/v{VERSION}/cue4parse-mcp-{VERSION}-windows-x64.zip"
-_INSTALL_LOCK = threading.Lock()
+PARSER_COMMIT = "cb909733773daea9015a67f6955d6f2ec24d3629"
+VERSION = "direct-1-" + PARSER_COMMIT[:12]
+MAX_RESPONSE = 32 * 1024 * 1024
 
 
 class ExtractionCancelled(ValueError):
@@ -33,53 +27,29 @@ def check_cancelled(cancel):
         raise ExtractionCancelled("Extraction cancelled; existing Asset files were preserved.")
 
 
-def cache_directory():
-    base = os.environ.get("LOCALAPPDATA") or os.path.dirname(paths.config_path())
-    return Path(base) / "3DMigotoModViewer" / "extraction"
-
-
-def ensure_runtime(cancel, cache=None):
-    cache = Path(cache) if cache else cache_directory()
-    destination = cache / f"cue4parse-{VERSION}"
-    executable = destination / "Cue4ParseMcp.exe"
-    with _INSTALL_LOCK:
-        check_cancelled(cancel)
-        marker = destination / ".viewer-runtime.json"
-        if executable.is_file() and marker.is_file():
-            record = json.loads(marker.read_text(encoding="utf-8"))
-            if record == {"version": VERSION, "archive_sha256": ARCHIVE_SHA256}:
-                return executable
-        cache.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="install-", dir=cache) as temporary:
-            stage = Path(temporary)
-            archive = stage / "runtime.zip"
-            request = Request(ARCHIVE_URL, headers={"User-Agent": "ModViewer-AssetExtraction"})
-            digest, count = hashlib.sha256(), 0
-            with urlopen(request, timeout=45) as response, archive.open("wb") as output:
-                while block := response.read(1024 * 1024):
-                    check_cancelled(cancel)
-                    count += len(block)
-                    if count > 512 * 1024 * 1024:
-                        raise ValueError("The extraction runtime download is too large.")
-                    digest.update(block)
-                    output.write(block)
-            if digest.hexdigest() != ARCHIVE_SHA256:
-                raise ValueError("Extraction runtime checksum verification failed.")
-            unpacked = stage / "unpacked"
-            with zipfile.ZipFile(archive) as bundle:
-                if len(bundle.infolist()) > 20000 or sum(x.file_size for x in bundle.infolist()) > 2 * 1024 ** 3:
-                    raise ValueError("Extraction runtime archive exceeds its limits.")
-                for member in bundle.infolist():
-                    target = (unpacked / member.filename.replace("\\", "/")).resolve()
-                    if not target.is_relative_to(unpacked.resolve()) or member.external_attr >> 16 & 0o170000 == 0o120000:
-                        raise ValueError("Extraction runtime contains an unsafe archive entry.")
-                bundle.extractall(unpacked)
-            if not (unpacked / executable.name).is_file():
-                raise ValueError("Extraction runtime executable is missing.")
-            (unpacked / marker.name).write_text(json.dumps({"version": VERSION, "archive_sha256": ARCHIVE_SHA256}), encoding="utf-8")
-            if destination.exists():
-                raise ValueError("The cached extraction runtime is incomplete. Remove that cache and retry.")
-            unpacked.rename(destination)
+def ensure_runtime(cancel, bundle=None):
+    root = Path(bundle) if bundle else Path(paths.vendor_dir()) / "game-extract"
+    executable = root / "ModViewer.GameExtract.exe"
+    check_cancelled(cancel)
+    try:
+        record = json.loads((root / "runtime.json").read_text(encoding="utf-8"))
+        if record.get("version") != VERSION or record.get("parser") != PARSER_COMMIT:
+            raise ValueError("Unsupported extraction runtime version.")
+        files = record.get("files", {})
+        required = {executable.name, "CUE4Parse.dll", "CUE4Parse-Conversion.dll", "CUE4Parse-Natives.dll",
+                    "oodle-data-shared.dll", "zlib-ng2.dll", "ModViewer.GameExtract.deps.json", "ModViewer.GameExtract.runtimeconfig.json"}
+        if not isinstance(files, dict) or not required.issubset(files) or len(files) > 2000:
+            raise ValueError("Incomplete extraction runtime manifest.")
+        for relative, digest in files.items():
+            check_cancelled(cancel)
+            file = (root / relative).resolve()
+            if not file.is_relative_to(root.resolve()) or not file.is_file():
+                raise ValueError("Unsafe or missing extraction runtime file.")
+            with file.open("rb") as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+                    raise ValueError("Extraction runtime checksum verification failed.")
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("The bundled extraction helper is missing or incomplete. Rebuild it with tools/build_game_extract.py or reinstall the viewer.") from error
     return executable
 
 
@@ -102,50 +72,62 @@ def find_paks(game_folder):
 class Client:
     def __init__(self, executable, game_folder, work, cancel):
         self.executable, self.work, self.cancel = Path(executable), Path(work), cancel
-        self.config = self.work / "games.json"
-        self.config.write_text(json.dumps({"games": {"wuwa": {
-            "paksDir": str(find_paks(game_folder)), "ueVersion": "GAME_WutheringWaves",
-            "aesUrl": "https://yarik0chka.github.io/wuwa-keys/keys.json",
-        }}}), encoding="utf-8")
+        self.paks = find_paks(game_folder)
         self.serial = 0
+        self.process = None
 
-    def call(self, *arguments, timeout=600, allow_partial=False):
+    def close(self):
+        process, self.process = self.process, None
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            if process.stdin:
+                process.stdin.close()
+
+    def call(self, operation, *, timeout=600, **arguments):
         check_cancelled(self.cancel)
         self.serial += 1
         output = self.work / f"command-{self.serial}.json"
-        error = self.work / f"command-{self.serial}.log"
-        environment = {**os.environ, "CUE4PARSE_MCP_LOG_LEVEL": "Warning"}
-        with output.open("wb") as stdout, error.open("wb") as stderr:
-            process = subprocess.Popen([str(self.executable), *arguments, "--config", str(self.config)],
-                stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, env=environment,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            deadline = time.monotonic() + timeout
-            try:
-                while process.poll() is None:
-                    check_cancelled(self.cancel)
-                    if time.monotonic() > deadline:
-                        raise ValueError("The game extraction tool timed out.")
-                    time.sleep(.1)
-            finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait()
-        if output.stat().st_size > 32 * 1024 * 1024:
-            raise ValueError("The game extraction response is too large.")
         try:
+            if self.process is None:
+                self.process = subprocess.Popen(
+                    [str(self.executable), "--paks", str(self.paks), "--work", str(self.work)],
+                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            request = json.dumps(dict(id=self.serial, op=operation, **arguments)).encode("utf-8") + b"\n"
+            if len(request) > 256 * 1024:
+                raise ValueError("The game extraction request is too large.")
+            self.process.stdin.write(request)
+            self.process.stdin.flush()
+            deadline = time.monotonic() + timeout
+            while not output.is_file():
+                check_cancelled(self.cancel)
+                if self.process.poll() is not None:
+                    raise ValueError("The game extraction helper stopped unexpectedly.")
+                if time.monotonic() > deadline:
+                    raise ValueError("The game extraction tool timed out.")
+                time.sleep(.05)
+            check_cancelled(self.cancel)
+            if output.stat().st_size > MAX_RESPONSE:
+                raise ValueError("The game extraction response is too large.")
             result = json.loads(output.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError) as error:
-            raise ValueError("The game extraction tool returned an invalid response.") from error
-        # Native logs/configuration may contain keys. Never forward them to the UI.
-        partial = allow_partial and isinstance(result, dict) and result.get("state") == "completed_with_errors"
-        if (process.returncode and not partial) or not isinstance(result, dict) or result.get("failures") or (result.get("error") and not partial):
-            raise ValueError("Game data could not be extracted. Check that the selected installation is complete and its version is supported.")
-        return result
+            if not isinstance(result, dict) or result.get("error"):
+                raise ValueError("Game data could not be extracted. Check that the selected installation is complete and its version is supported.")
+            return result
+        except (OSError, json.JSONDecodeError) as error:
+            self.close()
+            raise ValueError("The game extraction helper returned an invalid response.") from error
+        except BaseException:
+            self.close()
+            raise
+        finally:
+            output.unlink(missing_ok=True)
 
     def search(self, query, kind, under):
         if query and not query[0].isalnum():
             raise ValueError("Use a character name beginning with a letter or number.")
-        result = self.call("search", "wuwa", query, "--type", kind, "--under", under, "--limit", "500")
+        result = self.call("search", query=query, type=kind, under=under)
         if result.get("truncated"):
             raise SearchTruncated("The game search is too broad. Use a more specific character name.")
         packages = [row["path"] for row in result.get("results", [])]
@@ -154,38 +136,40 @@ class Client:
         return packages
 
     def folders(self, folder):
-        result = self.call("ls", "wuwa", folder)
+        result = self.call("folders", folder=folder)
         names = result.get("folders", [])
-        if not isinstance(names, list) or any(not isinstance(name, str) or "/" in name or name in ("", ".", "..") for name in names):
+        if not isinstance(names, list) or any(not isinstance(name, str) or "/" in name or "\\" in name or name in ("", ".", "..") for name in names):
             raise ValueError("The game folder listing returned unsupported names.")
         return names
 
-    def export(self, kind, package, destination, format=None):
-        arguments = [f"export-{kind}", "wuwa", package, "--out", str(destination)]
-        if format:
-            arguments += ["--format", format]
-        result = self.call(*arguments)
+    @staticmethod
+    def _files(result, destination):
         files = [Path(file).resolve() for file in result.get("rootFiles", [])]
         if not files or any(not p.is_file() or not p.is_relative_to(Path(destination).resolve()) for p in files):
             raise ValueError("The game export did not produce a contained output file.")
         return files
 
+    def export(self, kind, package, destination, format=None):
+        self._format(kind, format)
+        result = self.call("export", kind=kind, path=package, outDir=str(destination))
+        return self._files(result, destination)
+
     def batch(self, kind, packages, destination, format=None):
+        self._format(kind, format)
         files = {}
         for start in range(0, len(packages), 500):
-            request = {"kind": kind, "paths": packages[start:start + 500], "outDir": str(destination)}
-            if format:
-                request["format"] = format
-            request_file = self.work / "batch-request.json"
-            request_file.write_text(json.dumps(request), encoding="utf-8")
-            result = self.call("batch", "wuwa", "--request", str(request_file), "--run", allow_partial=True)
-            # The CLI bounds inline items; the complete manifest is authoritative.
-            manifest = Path(result.get("manifestPath", "")).resolve()
-            if not manifest.is_relative_to(Path(destination).resolve()):
-                raise ValueError("The game batch manifest escaped its output folder.")
-            result = json.loads(manifest.read_text(encoding="utf-8-sig"))
-            if result.get("state") not in ("completed", "completed_with_errors"):
-                raise ValueError("Some game exports failed; no Asset files were changed.")
-            for item in result.get("items", []):
+            chunk = packages[start:start + 500]
+            result = self.call("batch", kind=kind, paths=chunk, outDir=str(destination))
+            items = result.get("items", [])
+            if len(items) != len(chunk) or {item.get("path") for item in items} != set(chunk):
+                raise ValueError("The game batch returned incomplete package identities.")
+            for item in items:
+                if item.get("state") == "completed":
+                    self._files(item, destination)
                 files[item["path"]] = item
         return files
+
+    @staticmethod
+    def _format(kind, format):
+        if kind not in ("json", "mesh", "anim") or format not in (None, {"mesh": "ueformat", "anim": "psa"}.get(kind)):
+            raise ValueError("Unsupported game extraction format.")

@@ -12,8 +12,19 @@ export function initRigExtractionDialog({ onSaved }) {
   let busy = false;
   let picking = false;
   let revision = 0;
+  let support = null;
+  let supportError = false;
 
   function labels() {
+    $('availability').textContent = t(
+      supportError
+        ? 'gameExtract.supportFailed'
+        : support === null
+          ? 'common.loading'
+          : support.extraction
+            ? 'gameExtract.available'
+            : 'gameExtract.unavailable',
+    );
     $('ok').textContent = t(busy ? 'asset.extracting' : 'common.ok');
     $('progress').textContent =
       busy && state?.phase
@@ -22,7 +33,7 @@ export function initRigExtractionDialog({ onSaved }) {
   }
   function controls() {
     $('browse').disabled = busy || picking;
-    $('ok').disabled = busy || picking;
+    $('ok').disabled = busy || picking || !support?.extraction;
     $('query').disabled = busy;
     $('cancel').disabled = picking || (busy && state?.phase === 'install');
     labels();
@@ -50,7 +61,7 @@ export function initRigExtractionDialog({ onSaved }) {
     picking = true;
     controls();
     try {
-      const selected = await (await bridgeReady()).select_game_folder();
+      const selected = await (await bridgeReady()).select_game_folder(entry.asset_type);
       if (request !== revision) return;
       if (selected?.error) setModalError($('error'), selected.error);
       else if (selected?.token) {
@@ -67,7 +78,7 @@ export function initRigExtractionDialog({ onSaved }) {
   });
   $('form').addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (busy || picking) return;
+    if (busy || picking || !support?.extraction) return;
     if (!game || !$('query').value.trim()) {
       setModalError($('error'), t('rigExtract.required'));
       return;
@@ -105,6 +116,8 @@ export function initRigExtractionDialog({ onSaved }) {
       entry = selected;
       game = null;
       state = null;
+      support = null;
+      supportError = false;
       $('asset').value = selected.path;
       $('asset').title = selected.path;
       $('query').value = selected.name || selected.path.split(/[\\/]/).pop();
@@ -117,13 +130,21 @@ export function initRigExtractionDialog({ onSaved }) {
       const request = revision;
       (async () => {
         try {
-          const saved = await (await bridgeReady()).get_saved_game_folder?.();
+          const api = await bridgeReady();
+          const capabilities = await api.get_game_extraction_support();
+          if (request !== revision) return;
+          support = capabilities[selected.asset_type] || { extraction: false };
+          controls();
+          const saved = await api.get_saved_game_folder?.(selected.asset_type);
           if (request === revision && saved?.token && !game) {
             game = saved;
             $('game').value = saved.path;
           }
         } catch {
-          // A missing or stale saved folder only leaves the field for manual selection.
+          if (request === revision && support === null) {
+            supportError = true;
+            controls();
+          }
         }
       })();
     },

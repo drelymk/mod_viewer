@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 
 from .wwmi_skeleton import (
-    _API, _assignment, _control, _draw_body, _draw_lists, _local_flag, _match, _neutral_lists, _pixel_line, _plain,
+    _API, _assignment, _control, _draw_body, _draw_lists, _local_flag, _match, _neutral_lists, _pixel_line,
     _MERGER, _OFFSET, _COUNT, _PIXEL_HELPERS, WwmiSkeletonProof,
 )
 
@@ -305,7 +305,7 @@ def _carry_pose_source(lines):
     return result
 
 
-def _remap_program(plain, initializer, remapper, targets, blend, component_proxies):
+def _remap_program(plain, initializer, remapper, targets, blend, component_proxies, references):
     init = plain.get(initializer)
     remap = plain.get(remapper)
     init = _default_remap_counts(init) if init else init
@@ -377,7 +377,7 @@ def _remap_program(plain, initializer, remapper, targets, blend, component_proxi
         pairs = [values for values in component_proxies.values()
                  if values and values[1:] == (out_main[1], out_extra[1])]
         if not pairs and not any(out_main[1] in line or out_extra[1] in line
-                                 for name, lines in plain.items() if lines and name not in (initializer, remapper)
+                                 for name, lines in references.items() if lines and name not in (initializer, remapper)
                                  for line in lines):
             # Prepared for a component that no longer exists; nothing consumes it.
             continue
@@ -396,18 +396,17 @@ def _remap_program(plain, initializer, remapper, targets, blend, component_proxi
         results[key] = WwmiRemapProof(vertex[1], reverse[1], forward[1], no_stride, identity,
                                      bone_count, int(size[1]), vertices[0], int(influence[1]))
     unused = set(prepared) - set(results)
-    if (any(name in line for name in unused for section, lines in plain.items()
+    if (any(name in line for name in unused for section, lines in references.items()
             if lines and section not in (initializer, remapper) for line in lines)
             or set(results) != {values[0] for values in component_proxies.values() if values}):
         return None
     return results
 
 
-def modern_wwmi_merged_layouts(commands):
+def modern_wwmi_merged_layouts(commands, plain):
     """Recognize complete current stock programs; leave custom programs unproven."""
     if any(name in commands for name in (_MERGER, _BLEND_REMAP, _SKELETON_REMAP, *_PIXEL_HELPERS)):
         return {}
-    plain = {name: _plain(lines) for name, lines in commands.items()}
     mergers = [(name, value) for name, lines in plain.items()
                if name.startswith("commandlist") and (value := _merger_program(lines))]
     if len(mergers) != 1:
@@ -532,7 +531,8 @@ def modern_wwmi_merged_layouts(commands):
                         and f"run = {_BLEND_REMAP}" in lines]
         if len(initializers) != 1 or (None, f"run = {initializers[0]}") not in commands.get("present", ()):
             return {}
-        remaps = _remap_program(plain, initializers[0], remapper, targets, blend, component_proxies)
+        references = {name: [line for _phase, line in lines] for name, lines in commands.items()}
+        remaps = _remap_program(plain, initializers[0], remapper, targets, blend, component_proxies, references)
         if remaps is None:
             return {}
         allowed.update((initializers[0], remapper))

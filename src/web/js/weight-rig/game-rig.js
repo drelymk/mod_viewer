@@ -3,22 +3,9 @@ import { Matrix4, Quaternion, Vector3 } from 'three';
 import { sourceBoneKey } from './weight-rig-reconcile-evidence.js';
 import { orientModelForest } from './weight-rig-reconcile-forest.js';
 
-export function buildGameRigReconciliation(sourceRigs = []) {
-  const reference = sourceRigs[0]?.gameRig;
-  if (
-    !reference?.id ||
-    !Array.isArray(reference.bones) ||
-    !reference.bones.length ||
-    reference.bones.length > 4096 ||
-    sourceRigs.some((source) => source.gameRig?.id !== reference.id)
-  )
-    return null;
-  const worlds = [];
-  const frames = new Map();
-  const pivots = new Map();
-  const roots = new Map();
-  const joints = [];
-  const edges = [];
+export function isGameRigSkeleton(reference) {
+  if (!reference?.id || !Array.isArray(reference.bones) || !reference.bones.length || reference.bones.length > 4096)
+    return false;
   const names = new Set();
   for (const [jointId, bone] of reference.bones.entries()) {
     if (
@@ -36,10 +23,9 @@ export function buildGameRigReconciliation(sourceRigs = []) {
       bone.rotation.length !== 4 ||
       !bone.rotation.every(Number.isFinite)
     )
-      return null;
+      return false;
     names.add(bone.name);
-    const rotation = new Quaternion(...bone.rotation);
-    if (Math.abs(rotation.length() - 1) > 0.001) return null;
+    if (Math.abs(Math.sqrt(bone.rotation.reduce((sum, value) => sum + value * value, 0)) - 1) > 0.001) return false;
     const scale = bone.scale || [1, 1, 1];
     if (
       !Array.isArray(scale) ||
@@ -53,7 +39,23 @@ export function buildGameRigReconciliation(sourceRigs = []) {
           Math.abs(v - scale[0]) <= 2e-3 * Math.abs(scale[0]),
       )
     )
-      return null;
+      return false;
+  }
+  return true;
+}
+
+export function buildGameRigReconciliation(sourceRigs = []) {
+  const reference = sourceRigs[0]?.gameRig;
+  if (!isGameRigSkeleton(reference) || sourceRigs.some((source) => source.gameRig?.id !== reference.id)) return null;
+  const worlds = [];
+  const frames = new Map();
+  const pivots = new Map();
+  const roots = new Map();
+  const joints = [];
+  const edges = [];
+  for (const [jointId, bone] of reference.bones.entries()) {
+    const rotation = new Quaternion(...bone.rotation);
+    const scale = bone.scale || [1, 1, 1];
     const world = new Matrix4().compose(new Vector3(...bone.translation), rotation.normalize(), new Vector3(...scale));
     if (bone.parent >= 0) world.premultiply(worlds[bone.parent]);
     else roots.set(jointId, 1);

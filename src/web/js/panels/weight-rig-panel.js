@@ -4,6 +4,7 @@
 import { weightRigApi } from '../weight-rig/weight-rig-core.js';
 const {
   activateWeightRig,
+  loadRigAnimationLibrary,
   getRigAnimationState,
   selectRigAnimation,
   setRigAnimationPlaying,
@@ -677,15 +678,16 @@ function syncAnimation(state = getRigAnimationState()) {
     state.clips.forEach((clip) => ui.animationSelect.add(new Option(clip.name, clip.id)));
   }
   ui.animationSelect.value = state.selected || '';
-  ui.animationSelect.disabled = !state.clips.length;
+  const activating = !!loadingPromise || !!getModelRigState().loading;
+  ui.animationSelect.disabled = activating || !state.clips.length;
   ui.animationPlay.textContent = t(state.playing ? 'animation.pause' : 'animation.play');
-  ui.animationPlay.disabled = !state.duration || state.loading;
+  ui.animationPlay.disabled = activating || !state.duration || state.loading;
   ui.animationStop.disabled = !state.selected;
-  ui.animationTime.disabled = !state.duration || state.loading;
+  ui.animationTime.disabled = activating || !state.duration || state.loading;
   ui.animationTime.max = String(state.duration || 1);
   ui.animationTime.value = String(state.time);
   ui.animationStatus.textContent =
-    state.error ||
+    (state.errorKey ? t(state.errorKey) : state.error) ||
     (state.loading
       ? t('weightRig.animationLoading')
       : state.clips.length
@@ -1171,10 +1173,20 @@ function closePopover() {
 
 function loadOnDemand() {
   if (loadingPromise) return loadingPromise;
-  loadingPromise = activateWeightRig().finally(() => {
-    loadingPromise = null;
-  });
-  return loadingPromise;
+  const request = loadRigAnimationLibrary()
+    .then((animation) => {
+      if (animation.stale) return;
+      syncAnimation(animation);
+      syncRigOptions();
+      return activateWeightRig();
+    })
+    .finally(() => {
+      if (loadingPromise !== request) return;
+      loadingPromise = null;
+      syncAnimation();
+    });
+  loadingPromise = request;
+  return request;
 }
 
 export function initWeightRigPanel() {
@@ -1184,6 +1196,7 @@ export function initWeightRigPanel() {
   window.addEventListener('mod-viewer-model-weight-changed', (event) => {
     latestWeightState = event.detail;
     syncWeightControls(event.detail);
+    syncAnimation();
     syncStatus();
   });
   window.addEventListener('mod-viewer-model-physics-changed', (event) => {

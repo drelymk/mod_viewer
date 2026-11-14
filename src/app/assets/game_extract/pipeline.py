@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import shutil
 
-from app.assets.animation_conversion import convert_clip, merge_reference_layer
+from app.assets.animation_conversion import ReferencePoseMismatch, convert_clip, merge_reference_layer, reference_layer_timing
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
 from .native import capture, make_rig, match_components, read_mesh
@@ -62,6 +62,35 @@ def sequence(file):
         slim["TrackToSkeletonMapTable"] = [dict(BoneTreeIndex=row["BoneTreeIndex"]) for row in table
                                            if isinstance(row, dict) and "BoneTreeIndex" in row]
     return dict(Type="AnimSequence", Name=matches[0].get("Name"), Properties=slim)
+
+
+def animation_reference(client, skeleton, rig):
+    """Read the mesh's declared skeleton for conservative absolute-local playback.
+
+    This fallback is only for Animation mode with an identical ordered hierarchy.
+    The native converter does no retargeting beyond a short BoneTree table, so
+    absent trailing entries have the same absolute-local behavior as Animation.
+    Explicit other modes require native mesh-targeted conversion first.
+    """
+    rows = document(client.export("json", skeleton, client.work / "source-skeleton")[0])
+    sources = [row for row in rows if row.get("Type") == "Skeleton"]
+    if len(sources) != 1:
+        raise ValueError("The animation source skeleton is unavailable.")
+    source = sources[0]
+    reference = source.get("ReferenceSkeleton", {})
+    infos, poses = reference.get("FinalRefBoneInfo"), reference.get("FinalRefBonePose")
+    modes = source.get("Properties", {}).get("BoneTree")
+    if (not isinstance(infos, list) or not isinstance(poses, list) or not isinstance(modes, list)
+            or len(infos) != len(rig["bones"]) or len(poses) != len(infos) or len(modes) > len(infos)
+            or any(not isinstance(mode, dict) or mode.get("TranslationRetargetingMode") != "EBoneTranslationRetargetingMode::Animation"
+                   for mode in modes)):
+        raise ValueError("The animation source skeleton requires unsupported retargeting.")
+    bones = [dict(name=info["Name"], parent=info["ParentIndex"],
+                  translation=[pose["Translation"][axis] for axis in ("X", "Y", "Z")],
+                  rotation=[pose["Rotation"][axis] for axis in ("X", "Y", "Z", "W")],
+                  scale=[pose["Scale3D"][axis] for axis in ("X", "Y", "Z")])
+             for info, pose in zip(infos, poses)]
+    return validate_rig({**rig, "bones": bones})
 
 
 def clip_id(name, package, used):
@@ -208,28 +237,81 @@ def verify_candidates(client, captured, candidates, cancel):
     return [row for row in matches if len(row[3]) == best]
 
 
+def rest_worlds(bones):
+    """Compose validated reference transforms, rejecting malformed or cyclic hierarchies."""
+    import numpy as np
+
+    local, parents = [], []
+    for bone in bones:
+        parent = bone["parent"]
+        if type(parent) is not int or not -1 <= parent < len(bones):
+            raise ValueError("Invalid companion skeleton parent.")
+        translation, rotation, scale = [np.asarray(bone[key], dtype=float) for key in ("translation", "rotation", "scale")]
+        if (translation.shape != (3,) or rotation.shape != (4,) or scale.shape != (3,)
+                or any(not np.isfinite(value).all() or (np.abs(value) > 1e6).any() for value in (translation, rotation, scale))):
+            raise ValueError("Invalid companion reference transform.")
+        length = np.linalg.norm(rotation)
+        if (abs(length - 1) > .001 or np.min(np.abs(scale)) < 1e-6
+                or np.any(np.abs(scale - scale[0]) > .002 * abs(scale[0]))):
+            raise ValueError("Invalid companion reference rotation or scale.")
+        x, y, z, w = rotation / length
+        matrix = np.eye(4)
+        matrix[:3, :3] = np.array([
+            [1 - 2 * (y*y + z*z), 2 * (x*y - z*w), 2 * (x*z + y*w)],
+            [2 * (x*y + z*w), 1 - 2 * (x*x + z*z), 2 * (y*z - x*w)],
+            [2 * (x*z - y*w), 2 * (y*z + x*w), 1 - 2 * (x*x + y*y)],
+        ]) * scale
+        matrix[:3, 3] = translation
+        local.append(matrix)
+        parents.append(parent)
+    worlds = [None] * len(bones)
+    for index in range(len(bones)):
+        chain, visiting = [], set()
+        current = index
+        while current >= 0 and worlds[current] is None:
+            if current in visiting:
+                raise ValueError("Cyclic companion skeleton.")
+            visiting.add(current)
+            chain.append(current)
+            current = parents[current]
+        for current in reversed(chain):
+            parent = parents[current]
+            worlds[current] = local[current] if parent < 0 else worlds[parent] @ local[current]
+            if not np.isfinite(worlds[current]).all():
+                raise ValueError("Invalid companion world reference transform.")
+    return worlds
+
+
 def sub_skeleton_map(primary, mesh):
-    """Map a companion mesh's bones to the primary skeleton only when names, parents and rest transforms are identical."""
+    """Prove named bones, the induced parent hierarchy and identical world reference transforms."""
+    import numpy as np
+
     index = {bone["name"]: number for number, bone in enumerate(primary["bones"])}
-    if len(index) != len(primary["bones"]) or len({bone["name"] for bone in mesh["bones"]}) != len(mesh["bones"]):
+    names = {bone["name"] for bone in mesh["bones"]}
+    if not names or len(index) != len(primary["bones"]) or len(names) != len(mesh["bones"]):
+        return None
+    try:
+        primary_worlds, mesh_worlds = rest_worlds(primary["bones"]), rest_worlds(mesh["bones"])
+    except (ValueError, TypeError, KeyError):
         return None
     result = []
-    for bone in mesh["bones"]:
+    for ordinal, bone in enumerate(mesh["bones"]):
         target = index.get(bone["name"])
         if target is None:
             return None
-        other = primary["bones"][target]
         parent = mesh["bones"][bone["parent"]]["name"] if bone["parent"] >= 0 else None
-        expected = primary["bones"][other["parent"]]["name"] if other["parent"] >= 0 else None
-        if parent != expected or any(abs(a - b) > 1e-4 for key in ("translation", "rotation", "scale")
-                                    for a, b in zip(bone[key], other[key])):
+        ancestor = primary["bones"][target]["parent"]
+        while ancestor >= 0 and primary["bones"][ancestor]["name"] not in names:
+            ancestor = primary["bones"][ancestor]["parent"]
+        expected = primary["bones"][ancestor]["name"] if ancestor >= 0 else None
+        if parent != expected or not np.allclose(primary_worlds[target], mesh_worlds[ordinal], rtol=0, atol=1e-4):
             return None
         result.append(target)
     return result
 
 
-def adopt_companions(client, captured, primary, primary_package, proven, character_root, cancel, index=None):
-    """Prove leftover components (props) against meshes sharing an exact sub-skeleton of the primary rig.
+def adopt_companions(client, captured, primary, primary_package, proven, character_root, cancel):
+    """Prove leftover components (props) against compatible sub-skeletons of the primary rig.
 
     A component is adopted only when exactly one companion mesh proves it; its palette is remapped to primary bones.
     """
@@ -238,18 +320,19 @@ def adopt_companions(client, captured, primary, primary_package, proven, charact
         return {}
     character = character_root.rsplit("/", 1)[-1]
     try:
-        if index is not None:
-            names = index.search(character, "Client/Content/Aki/Character")
-        else:
-            names = client.search(character, "SkeletalMesh", "Client/Content/Aki/Character")
+        # The shape index covers only some character folders. It must never hide
+        # accessories elsewhere or a second matching mesh that makes proof ambiguous.
+        names = list(dict.fromkeys(client.search(character, "SkeletalMesh", "Client/Content/Aki/Character")))
     except ExtractionCancelled:
         raise
     except ValueError:
         return {}
+    if len(names) > 64:
+        return {}
     found = {}
-    for package in names[:64]:
+    for package in names:
         check_cancelled(cancel)
-        if package == primary_package or package.startswith(character_root + "/"):
+        if package == primary_package:
             continue
         try:
             mesh = read_mesh(client.export("mesh", package, client.work / "companions", "ueformat")[0])
@@ -306,7 +389,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     character_root = "/".join(parts[:role + 3])
     skin_root = mesh_package.rsplit("/", 2)[0]
     palette_by_component = dict(zip(proven, palettes))
-    companions = adopt_companions(client, captured, mesh, mesh_package, set(proven), character_root, cancel, index)
+    companions = adopt_companions(client, captured, mesh, mesh_package, set(proven), character_root, cancel)
     for index, (_package, palette) in companions.items():
         palette_by_component[index] = palette
     proven = sorted(palette_by_component)
@@ -322,19 +405,28 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         raise ValueError("No character animation sequences were found.")
     metadata_dir = client.work / "animation-metadata"
     metadata_files = client.batch("json", packages, metadata_dir)
-    sequences, skipped, reasons = {}, 0, collections.Counter()
+    sequences, skipped_items, reasons = {}, {}, collections.Counter()
+    other_skeletons = set()
+
+    def reject(kind, source, reason, base=None):
+        item = dict(kind=kind, source=source, reason=reason)
+        if base is not None:
+            item["base"] = base
+        skipped_items[source] = item
+
     for package in packages:
         check_cancelled(cancel)
         file = exported_file(metadata_files.get(package), metadata_dir, ".json")
         if file is None:
-            skipped += 1
+            reject("metadata", package, "The native tool could not export sequence metadata.")
             continue
         item = sequence(file)
         if not item:
-            skipped += 1
+            reject("metadata", package, "The exported package does not contain one animation sequence.")
             continue
         properties = item.get("Properties", {})
         if package_name(properties.get("Skeleton", {}).get("ObjectPath")) != skeleton:
+            other_skeletons.add(package)
             continue
         sequences[package] = item
     bases = {path: item for path, item in sequences.items()
@@ -349,20 +441,35 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     pairs = {}
     for package, item in bases.items():
         # Supported game layout: exact companion under this skin's RibbonAnim.
-        # Skeleton, source timing, additive metadata and omitted base tracks also
+        # Skeleton, sample spacing, additive metadata and omitted base tracks also
         # have to agree; a similar filename alone never authorizes a layer.
         layer_path = skin_root + "/RibbonAnim/Rib_" + item["Name"]
         layer = sequences.get(layer_path)
-        if not package.startswith(character_root + "/CommonAnim/") or not layer:
+        if not package.startswith(character_root + "/CommonAnim/"):
+            continue
+        if layer is None:
+            if layer_path in packages:
+                reason = ("Secondary clip skeleton differs from the verified body skeleton." if layer_path in other_skeletons
+                          else skipped_items.get(layer_path, {}).get("reason", "Secondary clip metadata is unavailable."))
+                reject("layer", layer_path, reason, package)
             continue
         base, extra = item["Properties"], layer["Properties"]
-        if (extra.get("AdditiveAnimType") == "AAT_LocalSpaceBase" and extra.get("RefPoseType") == "ABPT_RefPose"
-                and extra.get("NumFrames") == base["NumFrames"]
-                and extra.get("SequenceLength") == base["SequenceLength"]):
+        try:
+            if extra.get("AdditiveAnimType") != "AAT_LocalSpaceBase" or extra.get("RefPoseType") != "ABPT_RefPose":
+                raise ValueError("Secondary clip is not a reference-pose local additive layer.")
+            timing = reference_layer_timing(base["NumFrames"], base["SequenceLength"],
+                                            extra.get("NumFrames"), extra.get("SequenceLength"))
+            for table in (base["TrackToSkeletonMapTable"], extra["TrackToSkeletonMapTable"]):
+                ids = [row["BoneTreeIndex"] for row in table]
+                if not ids or any(type(i) is not int or not 0 <= i < len(rig["bones"]) for i in ids) or len(set(ids)) != len(ids):
+                    raise ValueError("Secondary clip authored bone mask is invalid.")
             body_ids = {row["BoneTreeIndex"] for row in base["TrackToSkeletonMapTable"]}
             mask = sorted({row["BoneTreeIndex"] for row in extra["TrackToSkeletonMapTable"]} - body_ids)
-            if mask:
-                pairs[package] = layer_path, mask
+            if not mask:
+                raise ValueError("Secondary clip has no body-omitted authored tracks.")
+            pairs[package] = layer_path, mask, timing
+        except (ValueError, KeyError, TypeError) as error:
+            reject("layer", layer_path, str(error) if isinstance(error, ValueError) else "Secondary clip metadata is incomplete.", package)
     animation_dir = client.work / "animations"
     tracks = client.batch("anim", sorted(set(bases) | {row[0] for row in pairs.values()}), animation_dir, "psa")
     output.mkdir(parents=True, exist_ok=True)
@@ -371,6 +478,25 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     entries = preserve_library(asset, library, rig, previous)
     existing = {key: document(library / entry["file"]) for key, entry in entries.items()}
     used, imported, secondary = set(entries), 0, 0
+    reference = None
+    reference_failure = None
+
+    def convert(data, item, duration):
+        nonlocal reference, reference_failure
+        if reference is None:
+            try:
+                return convert_clip(data, rig, duration)
+            except ReferencePoseMismatch:
+                if reference_failure is not None:
+                    raise ValueError(reference_failure)
+                try:
+                    reference = animation_reference(client, skeleton, rig)
+                except (ValueError, KeyError, TypeError) as error:
+                    reference_failure = str(error) if isinstance(error, ValueError) else "Animation source skeleton metadata is incomplete."
+                    raise ValueError(reference_failure) from error
+        tracks = item["Properties"]["TrackToSkeletonMapTable"]
+        return convert_clip(data, rig, duration, reference=reference, authored_bones=[row["BoneTreeIndex"] for row in tracks])
+
     provenance = []
     ordered = sorted(bases, key=lambda package: (not package.startswith(character_root + "/CommonAnim/"), package))
     for number, package in enumerate(ordered):
@@ -379,32 +505,37 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         item = bases[package]
         file = exported_file(tracks.get(package), animation_dir, ".psa")
         if file is None:
-            skipped += 1
-            reasons["The native tool could not export the animation tracks."] += 1
+            reason = "The native tool could not export the animation tracks."
+            reject("clip", package, reason)
+            reasons[reason] += 1
             continue
         duration = item["Properties"]["SequenceLength"]
         try:
-            frames, binary = convert_clip(file.read_bytes(), rig, duration)
+            frames, binary = convert(file.read_bytes(), item, duration)
+            if frames != item["Properties"]["NumFrames"]:
+                raise ValueError("Animation frame count differs from its sequence metadata.")
         except (ValueError, KeyError) as error:
-            skipped += 1
-            reasons[str(error) if isinstance(error, ValueError) else "Animation data is missing a required chunk."] += 1
+            reason = str(error) if isinstance(error, ValueError) else "Animation data is missing a required chunk."
+            reject("clip", package, reason)
+            reasons[reason] += 1
             continue
         base_hash = hashlib.sha256(binary).hexdigest()
         layer_info = None
         if package in pairs:
-            layer_path, mask = pairs[package]
+            layer_path, mask, timing = pairs[package]
             layer_file = exported_file(tracks.get(layer_path), animation_dir, ".psa")
             try:
                 if layer_file is None:
                     raise ValueError("Secondary clip is unavailable.")
-                layer_frames, layer_binary = convert_clip(layer_file.read_bytes(), rig, duration)
-                if layer_frames != frames:
-                    raise ValueError("Secondary clip timing differs.")
-                binary = merge_reference_layer(binary, layer_binary, rig, mask)
-                layer_info = dict(source=layer_path, sha256=hashlib.sha256(layer_file.read_bytes()).hexdigest(), bone_ids=mask)
+                layer_duration = timing["layer_duration"]
+                layer_frames, layer_binary = convert(layer_file.read_bytes(), sequences[layer_path], layer_duration)
+                if layer_frames != timing["layer_frames"]:
+                    raise ValueError("Secondary clip frame count differs from its sequence metadata.")
+                binary = merge_reference_layer(binary, layer_binary, rig, mask, duration=duration, layer_duration=layer_duration)
+                layer_info = dict(source=layer_path, sha256=hashlib.sha256(layer_file.read_bytes()).hexdigest(), bone_ids=mask, timing=timing)
                 secondary += 1
-            except (ValueError, KeyError):
-                skipped += 1
+            except (ValueError, KeyError) as error:
+                reject("layer", layer_path, str(error) if isinstance(error, ValueError) else "Secondary clip data is incomplete.", package)
         binary_hash = hashlib.sha256(binary).hexdigest()
         key = reusable_clip_key(entries, existing, package, item["Name"], {base_hash, binary_hash})
         if key is None:
@@ -430,7 +561,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         provenance.append(dict(id=key, source=package, secondary=layer_info))
         imported += 1
     if not imported or len(entries) > 1024:
-        detail = f" Most common skip reason ({sum(reasons.values())} of {len(ordered)} clips): {reasons.most_common(1)[0][0]}" if reasons else ""
+        detail = f" Most common skip reason ({reasons.most_common(1)[0][1]} of {len(ordered)} clips): {reasons.most_common(1)[0][0]}" if reasons else ""
         raise ValueError("No usable animation library could be produced within the viewer limits." + detail)
     for entry in entries.values():
         read_clip(str(library), entry, rig)
@@ -442,6 +573,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     report = dict(format="mod-viewer-rig-extraction", version=1, game="wuwa", mesh=mesh_package,
                   skeleton=skeleton, skeleton_id=rig["id"], proven_components=len(proven), unmatched_components=len(captured) - len(proven),
                   companion_meshes=sorted({package for package, _ in companions.values()}), animations=provenance,
-                  bones=len(rig["bones"]), clips=len(entries), imported=imported, secondary=secondary, skipped=skipped)
+                  bones=len(rig["bones"]), clips=len(entries), imported=imported, secondary=secondary,
+                  skipped=len(skipped_items), skipped_layers=sum(item["kind"] == "layer" for item in skipped_items.values()),
+                  skipped_details=list(skipped_items.values()))
     (output / "RigExtraction.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report, fingerprints

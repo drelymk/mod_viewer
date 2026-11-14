@@ -445,6 +445,7 @@
         <input id="rig-extract-query" type="text" required maxlength="100" autocomplete="off" />
       </label>
       <p class="modal-field-hint" data-i18n="rigExtract.destinationHint"></p>
+      <p id="rig-extract-availability" class="modal-field-hint" role="status"></p>
       <p id="rig-extract-progress" class="modal-field-hint" role="status" aria-live="polite"></p>
       <div class="modal-actions">
         <button id="rig-extract-cancel" type="button" data-i18n="common.cancel">Cancel</button>
@@ -696,23 +697,27 @@
       <div class="settings-game-row" data-game-kind="GIMI">
         <span class="settings-game-name">GIMI</span>
         <input class="settings-game-path" type="text" readonly aria-label="GIMI game directory" placeholder="Not set">
-        <button class="ui-button settings-game-select" type="button" data-i18n="settings.selectFolder">Select folder</button>
-        <button class="ui-button settings-game-clear" type="button" data-i18n="settings.clearFolder" hidden>Clear</button>
+        <button class="ui-button settings-game-index" type="button" hidden data-i18n-title="gameIndex.button" data-i18n-aria-label="gameIndex.button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-rebuild"></use></svg></button>
+        <button class="ui-button settings-game-select" type="button" title="Select folder" aria-label="Select folder" data-i18n-title="settings.selectFolder" data-i18n-aria-label="settings.selectFolder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
+        <button class="ui-button settings-game-clear" type="button" title="Clear" aria-label="Clear" data-i18n-title="settings.clearFolder" data-i18n-aria-label="settings.clearFolder" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
       </div>
+      <p class="settings-game-index-status modal-field-hint" data-game-kind="GIMI" role="status" hidden></p>
       <div class="settings-game-row" data-game-kind="ZZMI">
         <span class="settings-game-name">ZZMI</span>
         <input class="settings-game-path" type="text" readonly aria-label="ZZMI game directory" placeholder="Not set">
-        <button class="ui-button settings-game-select" type="button" data-i18n="settings.selectFolder">Select folder</button>
-        <button class="ui-button settings-game-clear" type="button" data-i18n="settings.clearFolder" hidden>Clear</button>
+        <button class="ui-button settings-game-index" type="button" hidden data-i18n-title="gameIndex.button" data-i18n-aria-label="gameIndex.button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-rebuild"></use></svg></button>
+        <button class="ui-button settings-game-select" type="button" title="Select folder" aria-label="Select folder" data-i18n-title="settings.selectFolder" data-i18n-aria-label="settings.selectFolder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
+        <button class="ui-button settings-game-clear" type="button" title="Clear" aria-label="Clear" data-i18n-title="settings.clearFolder" data-i18n-aria-label="settings.clearFolder" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
       </div>
+      <p class="settings-game-index-status modal-field-hint" data-game-kind="ZZMI" role="status" hidden></p>
       <div class="settings-game-row" data-game-kind="WWMI">
         <span class="settings-game-name">WWMI</span>
         <input class="settings-game-path" type="text" readonly aria-label="WWMI game directory" placeholder="Not set">
         <button class="ui-button settings-game-index" type="button" hidden data-i18n-title="gameIndex.button" data-i18n-aria-label="gameIndex.button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-rebuild"></use></svg></button>
-        <button class="ui-button settings-game-select" type="button" data-i18n="settings.selectFolder">Select folder</button>
-        <button class="ui-button settings-game-clear" type="button" data-i18n="settings.clearFolder" hidden>Clear</button>
+        <button class="ui-button settings-game-select" type="button" title="Select folder" aria-label="Select folder" data-i18n-title="settings.selectFolder" data-i18n-aria-label="settings.selectFolder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
+        <button class="ui-button settings-game-clear" type="button" title="Clear" aria-label="Clear" data-i18n-title="settings.clearFolder" data-i18n-aria-label="settings.clearFolder" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
       </div>
-      <p class="settings-game-index-status modal-field-hint" role="status" hidden></p>
+      <p class="settings-game-index-status modal-field-hint" data-game-kind="WWMI" role="status" hidden></p>
       <p class="settings-game-error modal-field-hint" role="alert" hidden></p>
     </section>
     <p id="settings-hint" class="modal-field-hint" data-i18n="settings.hint">Changes are saved automatically.</p>

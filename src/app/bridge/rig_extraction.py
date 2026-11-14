@@ -10,9 +10,8 @@ import uuid
 import webview
 
 from app.assets import paths as asset_paths
-from app.assets.game_extract import game_index, pipeline
-from app.assets.game_extract.native import capture
-from app.assets.game_extract.runtime import Client, ExtractionCancelled, check_cancelled, ensure_runtime, find_paks
+from app.assets.game_extract import backends
+from app.assets.game_extract.runtime import ExtractionCancelled, check_cancelled
 from app.assets.permissions import inherit_directory_permissions
 from app.settings import config, game_folders
 
@@ -74,42 +73,46 @@ class RigExtraction:
         self._games, self._jobs = {}, {}
         self._active = None
 
-    def _grant(self, folder):
+    def _grant(self, folder, kind="WWMI"):
         folder = Path(folder).resolve()
-        find_paks(folder)
+        backends.validate_folder(kind, folder)
         token = uuid.uuid4().hex
         with self._lock:
             if len(self._games) >= 16:
                 self._games.pop(next(iter(self._games)))
-            self._games[token] = str(folder)
-        return {"token": token, "path": str(folder)}
+            self._games[token] = {"path": str(folder), "kind": kind}
+        return {"token": token, "path": str(folder), "kind": kind}
 
-    def pick_game(self, window):
+    def pick_game(self, window, kind="WWMI"):
+        backends.backend_for(kind)
         result = window.create_file_dialog(webview.FileDialog.FOLDER)
         if not result:
             return None
-        granted = self._grant(result[0])
+        granted = self._grant(result[0], kind)
         try:
             # A folder chosen for extraction becomes the Settings folder, so it is added or updated there.
-            game_folders.save_game_folder("WWMI", granted["path"])
+            game_folders.save_game_folder(kind, granted["path"])
         except (OSError, ValueError):
             pass
         return granted
 
-    def saved_game(self):
+    def saved_game(self, kind="WWMI"):
         """Grant the folder saved in Settings, which was chosen through the native picker."""
         try:
-            folder = game_folders.load_game_folders().get("WWMI")
-            return self._grant(folder) if folder and Path(folder).is_dir() else None
+            folder = game_folders.load_game_folders().get(kind)
+            return self._grant(folder, kind) if folder and Path(folder).is_dir() else None
         except (OSError, ValueError):
             return None
 
-    def index_status(self):
+    def index_status(self, kind="WWMI"):
         try:
-            folder = game_folders.load_game_folders().get("WWMI")
+            backend = backends.backend_for(kind)
+            if backend is None:
+                return {"state": "unsupported", "meshes": 0}
+            folder = game_folders.load_game_folders().get(kind)
             if not folder or not Path(folder).is_dir():
                 return {"state": "none", "meshes": 0}
-            return game_index.status(folder)
+            return backend.index_status(folder)
         except (OSError, ValueError):
             return {"state": "none", "meshes": 0}
 
@@ -124,21 +127,24 @@ class RigExtraction:
             self._active = job_id
             return job_id
 
-    def start_index(self):
+    def start_index(self, kind="WWMI"):
         """Build the index of the Settings game folder in the background."""
         try:
-            folder = game_folders.load_game_folders().get("WWMI")
+            backend = backends.require_backend(kind)
+            folder = game_folders.load_game_folders().get(kind)
             if not folder or not Path(folder).is_dir():
-                raise ValueError("Choose the Wuthering Waves game folder in Settings first.")
-            game = self._grant(folder)["path"]
+                raise ValueError("Choose this game's folder in Settings first.")
+            game = str(Path(folder).resolve())
+            backends.validate_folder(kind, game)
             job_id = self._begin()
-            threading.Thread(target=self._run_index, args=(job_id, game), daemon=True).start()
+            threading.Thread(target=self._run_index, args=(job_id, game, backend), daemon=True).start()
             return {"job_id": job_id, "status": "running"}
         except (OSError, ValueError, TypeError) as error:
-            return {"error": str(error)}
+            return backends.error_response(error)
 
-    def _run_index(self, job_id, game):
+    def _run_index(self, job_id, game, backend):
         stage = None
+        client = None
         with self._lock:
             cancel = self._jobs[job_id]["cancel"]
 
@@ -149,9 +155,9 @@ class RigExtraction:
 
         try:
             progress("tools")
-            executable = ensure_runtime(cancel)
             stage = Path(tempfile.mkdtemp(prefix="mod-viewer-index-"))
-            _, count = game_index.build(Client(executable, game, stage, cancel), game, progress, cancel)
+            client = backend.open_client(game, stage, cancel)
+            _, count = backend.build_index(client, game, progress, cancel)
             with self._lock:
                 self._jobs[job_id].update(status="complete", phase="complete", result={"meshes": count})
         except ExtractionCancelled as error:
@@ -162,6 +168,8 @@ class RigExtraction:
             with self._lock:
                 self._jobs[job_id].update(status="error", error=message)
         finally:
+            if client is not None:
+                client.close()
             if stage is not None:
                 shutil.rmtree(stage, ignore_errors=True)
             with self._lock:
@@ -170,8 +178,7 @@ class RigExtraction:
     def start(self, folder, game_token, query=None):
         try:
             selected, entry, _, record = self._selection(folder)
-            if entry["type"] != "WWMI":
-                raise ValueError("Game rig/animation extraction currently supports Wuthering Waves Assets.")
+            backend = backends.require_backend(entry["type"])
             target = Path(asset_paths.safe_asset_dir(entry["path"], record["path"]) or "")
             if not target.is_absolute() or not target.is_dir():
                 raise ValueError("Select an indexed Asset folder.")
@@ -181,17 +188,16 @@ class RigExtraction:
                 raise ValueError("Enter a character name beginning with a letter or number, at most 100 characters long.")
             with self._lock:
                 game = self._games.get(game_token) if isinstance(game_token, str) else None
-                if not game:
+                if not game or game["kind"] != entry["type"]:
                     raise ValueError("Choose the game folder through the native picker first.")
+                game = game["path"]
                 if target.resolve().is_relative_to(Path(game)) or Path(game).is_relative_to(target.resolve()):
                     raise ValueError("The Asset and game installation must be separate folders.")
-                if self._active:
-                    raise ValueError("A rig extraction is already running.")
                 job_id = self._begin()
-            threading.Thread(target=self._run, args=(job_id, selected, entry, record, game, query.strip()), daemon=True).start()
+            threading.Thread(target=self._run, args=(job_id, selected, entry, record, game, query.strip(), backend), daemon=True).start()
             return {"job_id": job_id, "status": "running"}
-        except (OSError, ValueError, PermissionError, TypeError) as error:
-            return {"error": str(error)}
+        except (OSError, ValueError, TypeError) as error:
+            return backends.error_response(error)
 
     def status(self, job_id):
         with self._lock:
@@ -206,8 +212,9 @@ class RigExtraction:
             job["cancel"].set()
             return {"cancelled": True}
 
-    def _run(self, job_id, selected, entry, record, game, query):
+    def _run(self, job_id, selected, entry, record, game, query, backend):
         stage = None
+        client = None
         committed = False
         with self._lock:
             cancel = self._jobs[job_id]["cancel"]
@@ -222,22 +229,21 @@ class RigExtraction:
             if not asset.is_absolute():
                 raise ValueError("The selected Asset is no longer available.")
             original = sidecar_revision(asset)
-            _, geometry = capture(entry["path"], record)
+            _, geometry = backend.capture(entry["path"], record)
             progress("tools")
-            executable = ensure_runtime(cancel)
             stage = Path(tempfile.mkdtemp(prefix=".rig-extract-", dir=asset.parent))
             work = stage / "work"
             work.mkdir()
             output = stage / "output"
-            client = Client(executable, game, work, cancel)
+            client = backend.open_client(game, work, cancel)
             try:
-                index = game_index.ensure(client, game, progress, cancel)
+                index = backend.ensure_index(client, game, progress, cancel)
             except ExtractionCancelled:
                 raise
             except Exception:
                 # The index is only an accelerator; native searches remain correct without it.
                 index = None
-            result, fingerprints = pipeline.build(client, entry["path"], record, output, query, progress, cancel, index)
+            result, fingerprints = backend.build(client, entry["path"], record, output, query, progress, cancel, index)
             check_cancelled(cancel)
             with config.transaction():
                 current, current_entry, _, current_record = self._selection(selected)
@@ -266,6 +272,8 @@ class RigExtraction:
             with self._lock:
                 self._jobs[job_id].update(status="error", error="Rig extraction failed; existing Asset files were preserved.")
         finally:
+            if client is not None:
+                client.close()
             try:
                 if (stage is not None and stage.name.startswith(".rig-extract-")
                         and stage.resolve().parent == asset.resolve().parent

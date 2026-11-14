@@ -12,8 +12,7 @@ import traceback
 
 import webview
 
-from app.assets.game_extract import game_index
-from app.assets.game_extract.runtime import find_paks
+from app.assets.game_extract import backends
 from app.settings import game_folders
 from app.bridge.access import FolderAccess
 from app.bridge.asset_preview import AssetPreview
@@ -94,15 +93,18 @@ class ModViewerAPI:
     def select_asset_dump_folder(self):
         return self.select_asset_folder()
 
-    def select_game_folder(self):
+    def select_game_folder(self, kind="WWMI"):
         try:
-            return self._rig_extraction.pick_game(self._window)
+            return self._rig_extraction.pick_game(self._window, kind)
         except (OSError, ValueError) as error:
             return {"error": str(error)}
 
-    def get_saved_game_folder(self):
-        """The Settings folder for Wuthering Waves, granted for extraction."""
-        return self._rig_extraction.saved_game()
+    def get_saved_game_folder(self, kind="WWMI"):
+        """Grant only this game's native-picked Settings folder."""
+        return self._rig_extraction.saved_game(kind)
+
+    def get_game_extraction_support(self):
+        return backends.capabilities()
 
     def get_game_folders(self):
         try:
@@ -119,29 +121,27 @@ class ModViewerAPI:
             if not result:
                 return {"value": game_folders.load_game_folders()}
             folder = os.path.realpath(result[0])
-            if not os.path.isdir(folder):
-                raise ValueError("Select an existing folder.")
-            if kind == "WWMI":
-                find_paks(folder)
+            backends.validate_folder(kind, folder)
             return {"value": game_folders.save_game_folder(kind, folder)}
         except (OSError, ValueError) as error:
             return {"error": str(error)}
 
     def clear_game_directory(self, kind):
         try:
-            if kind == "WWMI":
-                folder = game_folders.load_game_folders().get("WWMI")
+            backend = backends.backend_for(kind)
+            if backend is not None:
+                folder = game_folders.load_game_folders().get(kind)
                 if folder:
-                    game_index.remove(folder)
+                    backend.remove_index(folder)
             return {"value": game_folders.save_game_folder(kind, None)}
         except (OSError, ValueError) as error:
             return {"error": str(error)}
 
-    def get_game_index_status(self):
-        return self._rig_extraction.index_status()
+    def get_game_index_status(self, kind="WWMI"):
+        return self._rig_extraction.index_status(kind)
 
-    def start_game_index(self):
-        return self._rig_extraction.start_index()
+    def start_game_index(self, kind="WWMI"):
+        return self._rig_extraction.start_index(kind)
 
     def get_game_index_job(self, job_id):
         return self._rig_extraction.status(job_id)

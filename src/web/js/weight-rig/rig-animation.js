@@ -1,4 +1,9 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
+import { t } from '../i18n/index.js';
+
+function animationError(key) {
+  return Object.assign(new Error(t(key)), { translationKey: key });
+}
 
 // The bind pose is constant per rig; compute its inverse world matrices once.
 const bindCache = new WeakMap();
@@ -56,6 +61,7 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
   let playing = false;
   let loading = false;
   let error = null;
+  let errorKey = null;
   let time = 0;
   let frame = null;
   let last = 0;
@@ -65,13 +71,14 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
     playing,
     loading,
     error,
+    errorKey,
     time,
     duration: clip?.duration || 0,
   });
   const changed = () => notify(snapshot());
-  const pose = () => {
+  const pose = ({ finalize = !playing } = {}) => {
     if (clip && values && getRig()?.id === clip.skeleton_id)
-      applyPose(sampleAnimation(getRig(), clip, values, time), { finalize: !playing });
+      applyPose(sampleAnimation(getRig(), clip, values, time), { finalize });
   };
   function cancel() {
     if (frame !== null) cancelAnimationFrame(frame);
@@ -108,6 +115,7 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
     values = null;
     time = 0;
     error = null;
+    errorKey = null;
     applyPose(null);
     suspendPhysics(false);
     changed();
@@ -123,30 +131,38 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
     try {
       const response = await loadClip(rig.animation_session, id);
       if (current !== generation || getRig() !== rig) return;
-      if (response?.status !== 'ok') throw new Error(response?.error || 'Animation is unavailable.');
+      if (response?.status !== 'ok')
+        throw response?.error ? new Error(response.error) : animationError('animation.unavailable');
       const metadata = response.clip;
       if (metadata.skeleton_id !== rig.id || metadata.bone_count !== rig.bones.length)
-        throw new Error('Animation does not match the loaded rig.');
+        throw animationError('animation.rigMismatch');
       const download = await fetch(metadata.data.url, { cache: 'no-store' });
-      if (!download.ok) throw new Error('Animation download failed.');
+      if (!download.ok) throw animationError('animation.downloadFailed');
       const buffer = await download.arrayBuffer();
       if (current !== generation || getRig() !== rig) return;
       if (
         buffer.byteLength !== metadata.data.length ||
         buffer.byteLength !== metadata.frame_count * rig.bones.length * 28
       )
-        throw new Error('Animation download is incomplete.');
+        throw animationError('animation.downloadIncomplete');
       clip = metadata;
       values = new Float32Array(buffer);
       loading = false;
       prepare();
       suspendPhysics(true);
-      pose();
+      pose({ finalize: false });
       setPlaying(true);
     } catch (failure) {
       if (current !== generation) return;
+      cancel();
+      playing = false;
+      clip = null;
+      values = null;
+      applyPose(null);
+      suspendPhysics(false);
       loading = false;
       error = failure.message;
+      errorKey = failure.translationKey || null;
       changed();
     }
   }

@@ -616,6 +616,7 @@ def main():
     verify_assets()
     verify_web()
     verify_features()
+    run([sys.executable, os.path.join(HERE, "..", "tools", "build_game_extract.py"), "--verify-format"])
     clean()
     build(onedir=args.onedir, console=args.console, python=python)
     report(args.onedir)

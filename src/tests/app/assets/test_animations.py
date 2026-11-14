@@ -3,10 +3,12 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+from copy import deepcopy
 
 import pytest
 
 from app.assets.animations import AnimationSessions
+from app.assets.animation_conversion import reference_layer_timing
 from app.assets.skinning import capture_skinning, decode_captured_skinning
 from core.geometry.migoto_format import MigotoBinaryLayout, MigotoElement
 from app.assets.index import build_index
@@ -60,6 +62,62 @@ def test_conversion_coordinates_timing_and_skeleton_contract():
         convert(source, rig, 1)
 
 
+@pytest.mark.parametrize("difference", ["rotation", "translation", "both"])
+def test_verified_source_reference_preserves_authored_keys_and_uses_mesh_rest_for_omitted_tracks(difference):
+    rig, source = sample()
+    # Omitted native tracks contain their source reference transform in every frame.
+    source = bytearray(source)
+    for frame in range(2):
+        struct.pack_into("<3f", source, len(source) - 128 + (frame * 2 + 1) * 32, 1, -2, 3)
+    reference = deepcopy(rig)
+    if difference in ("rotation", "both"):
+        rig["bones"][1]["rotation"] = [0, 0, 2 ** -.5, 2 ** -.5]
+    if difference in ("translation", "both"):
+        rig["bones"][1]["translation"] = [4, 5, 6]
+    convert = converter()
+    with pytest.raises(ValueError, match="reference skeleton"):
+        convert(source, rig, 1)
+    _, original = convert(source, reference, 1)
+    _, authored = convert(source, rig, 1, reference=reference, authored_bones=[0, 1])
+    assert authored == original
+    _, omitted = convert(source, rig, 1, reference=reference, authored_bones=[0])
+    for frame in range(2):
+        offset = (frame * 2 + 1) * 28
+        assert omitted[offset - 28:offset] == original[offset - 28:offset]
+        assert struct.unpack_from("<7f", omitted, offset) == pytest.approx(rig["bones"][1]["translation"] + rig["bones"][1]["rotation"])
+    # A declared omission cannot conceal a non-reference animated rotation.
+    moving = bytearray(source)
+    struct.pack_into("<4f", moving, len(source) - 20, 0, 0, 1, 0)
+    with pytest.raises(ValueError, match="undeclared"):
+        convert(moving, rig, 1, reference=reference, authored_bones=[0])
+
+
+@pytest.mark.parametrize("change", ["name", "parent", "translation", "scale", "nonfinite", "rotation", "header", "track_map"])
+def test_source_reference_cannot_bypass_skeleton_validation(change):
+    rig, source = sample()
+    reference = deepcopy(rig)
+    authored = [0, 1]
+    bone = reference["bones"][1]
+    if change == "name":
+        bone["name"] = "Other01"
+    elif change == "parent":
+        bone["parent"] = -1
+    elif change == "translation":
+        bone["translation"][0] += 1
+    elif change == "scale":
+        bone["scale"] = [2, 2, 2]
+    elif change == "nonfinite":
+        bone["scale"] = [float("nan")] * 3
+    elif change == "rotation":
+        bone["rotation"] = [0, 0, 0, 0]
+    elif change == "header":
+        bone["rotation"] = [0, 0, 1, 0]
+    elif change == "track_map":
+        authored = [0, 2]
+    with pytest.raises(ValueError):
+        converter()(source, rig, 1, reference=reference, authored_bones=authored)
+
+
 def test_reference_layer_preserves_body_and_refuses_existing_motion():
     rig, _ = sample()
     rows = [(0, 0, 0, 0, 0, 0, 1), (1, 2, 3, 0, 0, 0, 1),
@@ -81,6 +139,37 @@ def test_reference_layer_preserves_body_and_refuses_existing_motion():
     struct.pack_into("<f", subtle_motion, 3 * 28, 1.00001)
     with pytest.raises(ValueError, match="already has base motion"):
         merge(subtle_motion, layer, rig, [1])
+
+
+@pytest.mark.parametrize("layer_frames, mode", [(7, "exact"), (6, "hold-last"), (13, "trim-end")])
+def test_reference_layer_aligns_endpoints_without_resampling_body_or_layer(layer_frames, mode):
+    rig, _ = sample()
+    frames, duration = 7, .2
+    layer_duration = (layer_frames - 1) / 30
+    body_rows = [(float(frame), 0, 0, 0, 0, 0, 1) if bone == 0 else (1, 2, 3, 0, 0, 0, 1)
+                 for frame in range(frames) for bone in range(2)]
+    layer_rows = [(99, 99, 99, 0, 0, 0, 1) if bone == 0 else (frame + 1, 2, 3, 0, 0, 0, 1)
+                  for frame in range(layer_frames) for bone in range(2)]
+    body = b"".join(struct.pack("<7f", *row) for row in body_rows)
+    layer = b"".join(struct.pack("<7f", *row) for row in layer_rows)
+    timing = reference_layer_timing(frames, duration, layer_frames, layer_duration)
+    assert timing["mode"] == mode
+    result = converter("merge_reference_layer")(body, layer, rig, [1], duration=duration, layer_duration=layer_duration)
+    assert len(result) == len(body)
+    for frame in range(frames):
+        offset = frame * 56
+        source_offset = min(frame, layer_frames - 1) * 56 + 28
+        assert result[offset:offset + 28] == body[offset:offset + 28]
+        assert result[offset + 28:offset + 56] == layer[source_offset:source_offset + 28]
+
+
+@pytest.mark.parametrize("frames, duration, layer_frames, layer_duration", [
+    (7, .2, 6, .2), (7, .2, 13, .5), (7, .2, 1, .1), (True, .2, 7, .2),
+    (7, 0, 7, .2), (7, float("nan"), 7, .2), (7, .2, 7, float("inf")), (7, 6e-10, 7, 3e-9),
+])
+def test_reference_layer_alignment_rejects_incompatible_or_invalid_timing(frames, duration, layer_frames, layer_duration):
+    with pytest.raises(ValueError, match="sample spacing"):
+        reference_layer_timing(frames, duration, layer_frames, layer_duration)
 
 
 def test_layer_metadata_timing_mask_and_reference_contract(tmp_path):

@@ -12,21 +12,40 @@ available. It does not reconstruct the game's physics simulation.
 
 ## Game-folder extraction
 
-An indexed WWMI Asset exposes `Extract Rig/Animation` in its row menu. The
-native picker authorizes an installation folder or Paks directory with a
+All indexed Assets expose the same `Extract Rig/Animation` dialog, and each
+registered game has the same folder and index controls in Settings. Availability
+comes from the backend registry: WWMI extraction and indexing work now; GIMI and
+ZZMI show a translated availability message with execution disabled. Their game
+folders can already be selected and saved.
+
+`game_extract/backends.py` is the adapter registry; `wwmi.py` implements the
+Wuthering Waves adapter using the existing pipeline, native proof, runtime and
+index modules. A new adapter supplies folder validation, a client session, index
+operations, capture fingerprints and package building. Register it under its
+existing game kind to enable the shared controls. The bridge retains folder
+grants, cancellation, revision checks and atomic installation for every adapter.
+The backend rejects unsupported jobs even when called directly.
+
+For WWMI, the native picker authorizes an installation folder or Paks directory with a
 separate opaque grant; it does not authorize Mod or Asset browsing. The
 prefilled character name is only a fallback hint: meshes are first found by
 matching the Asset's per-component vertex and index counts against the game's
 mesh sections, then proven by native geometry.
 An individual archive is insufficient for discovering meshes and companion clips.
 
-The backend downloads the pinned CUE4Parse-MCP 1.2.0 Windows runtime and verifies
-its archive SHA-256 before caching it. The complete upstream runtime, including
-its licenses, is retained. Private per-job configuration mounts the selected
-installation read-only with `GAME_WutheringWaves` and the public WuWa key endpoint.
+The bundled Mod Viewer helper calls CUE4Parse directly at the fixed revision
+`cb909733773daea9015a67f6955d6f2ec24d3629`, retaining the parser previously used by
+the extractor. It has no MCP server or general-purpose tool interface. Its
+build uses checksum-pinned sources and locked dependencies, includes licenses
+and the .NET runtime, and verifies bundled file hashes before extraction.
+One private process mounts the selected installation read-only with
+`GAME_WutheringWaves` and the public WuWa key endpoint for the whole job.
+Extraction never downloads executable code or requires an installed .NET SDK.
 No keys, native logs or private tool configuration are forwarded to the browser
 or written into an Asset. Process arguments use an argument list, not a shell;
 Windows processes run without opening a console window.
+See [the helper build instructions](../native/game-extract/README.md) for its
+supported operations, dependency pins and upstream limitations.
 
 A name match only discovers candidates. Adoption requires one unique native mesh
 whose component ranges, triangle-corner positions, captured UV channels and
@@ -37,11 +56,24 @@ compatible existing rig retains its explicit humanoid semantics, profile
 admissions and fingerprint. New rigs retain the normal fitted-control fallback;
 the extractor does not infer control semantics from bone names.
 
+Meshes may have different reference translations and rotations from their
+declared animation skeleton. Extraction verifies that source skeleton
+independently, requiring the same ordered names, parents and scales and Animation
+retargeting mode. Short or empty BoneTree tables retain the native converter's
+no-retargeting behavior for trailing bones; explicit other modes are rejected.
+Authored local animation keys are preserved; omitted tracks fall back to the
+mesh's reference transform after their source-reference keys are checked.
+This does not admit different hierarchies or general animation retargeting.
+
 Compatible body sequences are discovered under the verified character's Role
 folder and must reference the mesh's skeleton. Facial curves, game events and
 runtime cloth simulation are excluded. The supported game layout recognizes
 exact `RibbonAnim/Rib_<clip>` companions for CommonAnim clips under the selected
-skin. Skeleton, additive/reference metadata and frame count/duration must agree.
+skin. Skeleton, additive/reference metadata and endpoint-inclusive sample spacing
+must agree. Complete companion clips start at time zero. A longer layer is trimmed
+at the body's endpoint; a shorter layer holds its final pose. Body frame counts,
+durations and authored keys stay unchanged, with no time stretching. The exact
+source timing and held/trimmed frame counts are recorded in `reference_layer`.
 The mask comes from authored layer tracks absent from the body sequence, and the
 existing reference-layer converter independently rejects motion already present
 in those body tracks. No hardcoded character names or bone ID thresholds are used.
@@ -50,7 +82,10 @@ The generated library keeps version 1 JSON/binary tracks. Existing compatible
 catalog clips and other Animation-directory files are retained; filename
 collisions with user clips receive distinct game clip IDs. Legacy clips can be
 upgraded only when their data matches the newly verified body or composed clip.
-`RigExtraction.json` records game package identities and import counts.
+`RigExtraction.json` records game package identities, import counts and
+`skipped_details` with source identities, owning body clips and rejection reasons.
+Known companions rejected before conversion count toward `skipped` and
+`skipped_layers`; each source is counted once, including metadata/export failures.
 
 Extraction jobs report progress through opaque IDs and support cancellation
 before installation. All outputs are staged on the Asset's volume. Immediately
@@ -229,7 +264,9 @@ then Rig.json bone order. Reference scales come from the rig. Playback interpola
 translation and rotation across endpoint-inclusive samples over the source duration.
 No curve, morph, event, or game physics tracks are included.
 
-The catalog loads with the verified rig. Clip data loads only after selection,
+Opening Weight/Rig loads weights and the animation catalog first, then builds
+the rig automatically. Animation controls become available when activation
+finishes; no separate Load Rig action is needed. Clip data loads only after selection,
 through contained Asset paths and opaque session/clip IDs. Stale sessions,
 different skeletons, invalid transforms, truncated data and checksum failures
 cannot publish clips. Geometry uses the existing localhost blob transport.

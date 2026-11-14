@@ -856,8 +856,15 @@ of documentation, comments and tests; use portable fixtures instead.
   scale, CB copies with or without `ref`, assignment spacing, dotted/namespaced
   resource names, pixel/flag state around the gate, bare words 3DMigoto ignores,
   merge-only components, proxies referencing undeclared resources (null), unused
-  remaps, and same-INI neutral or draw-only command lists. Draws inside those
+  remaps, and same-INI neutral or draw-only command lists. Pixel-slot save/restore
+  helpers may use empty resource placeholders only when every consumer (including
+  phased commands) is pixel-only; reject buffer declarations, resource aliases,
+  geometry/compute consumers and any access to protected rig resources. Draws inside those
   helpers inherit the proof only when called from the proven override itself.
+  Project proven pixel-only commands and helper calls out of structural template
+  matching, including binders, mergers and cleanup; retain original commands for
+  protected-resource and remap-consumer validation. Never project variable writes,
+  geometry or compute effects out of that proof.
   Blend must stay a file-backed buffer; any other section writing vb4,
   `vs-cb3/4`, protected resources or running merger/binder still rejects.
   Read tables lazily through the same ModSource/BufferStore containment rules.
@@ -893,29 +900,77 @@ of documentation, comments and tests; use portable fixtures instead.
   transport; clear publications on replacement and reject stale loads. Playback
   owns the pose and suspends Weight physics; manual posing/editing stops it.
   Stop restores baseline geometry and model disposal cancels pending loads/frames.
-  Offline secondary-layer conversion requires an explicit authored bone mask,
-  identical skeleton/frame timing and reference-pose local additive metadata.
-  CUE4Parse bakes those layers to absolute local transforms. Copy them only into
-  unchanged reference-pose tracks; refuse existing base motion and preserve all
-  other tracks byte-exact. Never guess layer pairing or rescale incompatible clips.
+  Playback may use one uniquely identified verified skeleton's compatible mesh
+  subset while the manual ModelRig retains its original all-source admission.
+  Apply fallback transforms through each mesh's exact game-bone palette, never
+  inferred joint aliases. Temporarily filter unsupported meshes (and their loose
+  parts) during playback, pause and seeking; preserve eyes, controls and isolation.
+  Stop, failure, manual posing, topology changes and disposal release the filter
+  and restore baseline geometry. Competing animation skeletons stay unavailable.
+  Discover the playback binding once per loaded weight/model revision, using
+  shared skeleton metadata and exact per-mesh palettes. Library discovery remains
+  independent of surface influence graphs, reconciliation and humanoid fitting.
+  Opening Weight/Rig loads weights and the animation library first, then activates
+  the manual rig automatically as its final stage, with the same lifecycle for
+  models with or without clips. Keep animation controls disabled until activation
+  settles so rig construction cannot interrupt newly started playback. Stale
+  library loads must not activate a replacement model. Playback reuses the rig
+  without rebuilding it. Prepare visible playback meshes lazily and reuse per-mesh
+  transform maps and quaternion objects across frames; pause/seek may finalize
+  hidden compatible meshes without changing their visibility.
+  Secondary-layer conversion requires an explicit authored bone mask, a verified
+  shared skeleton and reference-pose local additive metadata. CUE4Parse bakes
+  those layers to absolute local transforms. Game extraction may align complete,
+  zero-based companion sequences with equal endpoint-inclusive sample spacing
+  within Float32 rounding: trim a longer layer or hold the final pose of a shorter
+  one, preserving body frames/duration and all other tracks byte-exact. Never
+  stretch time or infer pairing from timing alone. Copy only into unchanged
+  reference-pose tracks and refuse existing base motion. Record source timing,
+  held/trimmed frame counts and every rejected known companion with its reason;
+  rejected companions contribute once each to the skipped total.
+  Extraction may admit different mesh/source reference translations and rotations
+  only after reading the verified mesh's declared Skeleton and proving the same
+  ordered names, parents and scales with Animation retargeting mode. A short or
+  empty explicit BoneTree has the native converter's no-retargeting behavior for
+  trailing bones; explicit other modes remain unsupported. Validate PSA reference
+  bones against that source skeleton. Preserve authored absolute-local keys;
+  omitted tracks use the mesh reference transform only when their exported keys
+  match the source reference. Unproven skeleton differences remain unsupported.
 - Game-folder extraction is an explicit indexed-WWMI-Asset action. Native game
   picker grants use opaque tokens independent of Mod/Asset folder access. Pin
   and verify the native runtime; run it with argument arrays and hidden consoles.
+  Use the bundled direct CUE4Parse helper at its pinned parser revision, with
+  locked build dependencies and verified runtime file hashes. Expose only package
+  search/folders, mesh/property and animation export. Keep one mounted provider
+  per job, export only into private staging, and terminate it before staging
+  cleanup on completion, failure or cancellation. Never download executable code
+  during extraction or silently select a newer parser.
   Never publish private configuration, keys or native logs. Settings > Game
   directory persists native-picker game folders per tool (`gameFolders` in
-  config.json); extraction only prefills the WWMI one, re-validated and re-granted
-  by the backend. The character name is tried first (a name search that cannot
+  config.json). Settings and extraction share the same UI for every registered
+  game, driven by `game_extract/backends.py` capabilities. Only WWMI currently
+  has an adapter; unavailable games keep folder selection but cannot start jobs.
+  Extraction prefills only its Asset's game folder, re-validated and re-granted
+  by the backend. Opaque grants include the game kind and cannot cross games.
+  Game adapters own validation, native clients, indexing and package building;
+  the shared bridge owns authorization, jobs and atomic installation. The character name is tried first (a name search that cannot
   be verified falls back to geometry). Geometry candidates are the meshes whose
   section vertex/index counts cover the most captured components, so props in
   other meshes do not block the body; require the unique best native
   geometry/UV/positive-weight proof, and report unproven components, before adopting its skeleton and component palettes.
   Leftover components (props) are adopted only from a companion mesh found by
-  the verified character folder name whose skeleton is an exact name/parent/rest
-  sub-skeleton of the body, proven uniquely by one mesh and remapped to body bones;
-  authored rigs require every source to resolve, so unproven parts disable them. Preserve compatible
+  the verified character folder name across the full Character tree, including
+  the character's own folder and accessories outside the shape index. Never
+  silently truncate the candidates. Require unique bone names, the body's induced
+  parent hierarchy and identical world-space reference transforms (within 0.0001).
+  Omitted ancestor chains may collapse to the nearest represented ancestor;
+  changed represented ancestry or rest placement remains rejected. Each component
+  must be proven uniquely by one mesh and its palette remapped to body bones;
+  manual authored rigs require every source to resolve; animation may use the
+  compatible subset under the playback contract above. Preserve compatible
   explicit rig semantics and existing clip/user-file identities.
-  Only exact supported companion layout plus matching source skeleton, timing,
-  additive metadata and body-omitted authored track masks authorizes secondary
+  Only exact supported companion layout plus matching source skeleton, sample
+  spacing, additive metadata and body-omitted authored track masks authorizes secondary
   conversion; never use character names or numeric bone thresholds as proof.
   Stage all sidecars, then revalidate registry, geometry and sidecar revisions
   under the shared config transaction. Install Rig.json, Animation and its report

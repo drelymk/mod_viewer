@@ -52,6 +52,7 @@ EXPECTED_API_METHODS = {
     "get_mod_folders",
     "get_viewer_preferences",
     "get_saved_game_folder",
+    "get_game_extraction_support",
     "get_game_folders",
     "select_game_directory",
     "clear_game_directory",

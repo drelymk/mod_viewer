@@ -42,6 +42,17 @@ import {
 export const activeMeshes = [];
 const controlDependencies = new WeakMap();
 let isolation = null;
+let rigAnimationMeshes = null;
+
+/** Playback filters effective visibility without changing eyes, controls or isolation. */
+export function setRigAnimationMeshes(meshes) {
+  if (rigAnimationMeshes === meshes) return;
+  rigAnimationMeshes = meshes;
+  const changed = activeMeshes.flatMap((mesh) => [mesh, ...getLooseParts(mesh)]);
+  for (const mesh of changed) applyMeshVisibility(mesh, { notify: false, render: false });
+  notifyMeshStateChanged(changed);
+  requestRender();
+}
 
 export function isMeshIsolationActive() {
   return isolation !== null;
@@ -171,6 +182,7 @@ export function invalidateControlDependencies(mesh) {
 
 export function resetMeshes({ preserveModelOrientation = false } = {}) {
   isolation = null;
+  rigAnimationMeshes = null;
   window.dispatchEvent(new CustomEvent('mod-viewer-isolation-changed'));
   // Release source-level physics participants before their member geometry is
   // disposed. This keeps teardown callbacks on live meshes.
@@ -466,7 +478,10 @@ export function applyTextureVariant(mesh, { render = true } = {}) {
 // or an explicit reset/reload replaces it.
 export function applyMeshVisibility(mesh, { notify = true, render = true } = {}) {
   const previous = mesh.visible;
-  mesh.visible = meshUnderlyingVisible(mesh) && isolationIncludes(mesh);
+  mesh.visible =
+    meshUnderlyingVisible(mesh) &&
+    isolationIncludes(mesh) &&
+    (!rigAnimationMeshes || rigAnimationMeshes.has(getLoosePartSource(mesh) || mesh));
   const changed = previous !== mesh.visible;
   const owner = getLoosePartSource(mesh) || mesh;
   if (changed && owner.userData.animationState) wakeAnimationRuntime();

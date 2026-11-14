@@ -149,6 +149,32 @@ def _pixel_line(line):
                 or line in _PIXEL_RUNS)
 
 
+def _pixel_scratch_line(line, resources):
+    key, value = _assignment(line)
+    return key in resources and (value == "null" or bool(_match(r"ref ps-t\d+", value or "")))
+
+
+def _pixel_scratch_resources(commands):
+    """Prove empty placeholders are used exclusively for pixel-slot save/restore.
+
+    Check every consumer, including phase-prefixed commands. Resource aliases,
+    buffer declarations and geometry/compute consumers cannot establish this role.
+    """
+    resources = set()
+    for lines in commands.values():
+        for _phase, line in lines:
+            key, value = _assignment(line)
+            if (key and _match(r"resource[\w.\-\\]+", key) and _match(r"ref ps-t\d+", value or "")
+                    and commands.get(key) == []):
+                resources.add(key)
+    for lines in commands.values():
+        for _phase, line in lines:
+            used = resources.intersection(re.findall(r"\bresource[\w.\-\\]+", line))
+            if used and not (_control(line) or _pixel_line(line) or _pixel_scratch_line(line, resources)):
+                resources.difference_update(used)
+    return frozenset(resources)
+
+
 def _control(line):
     return line.startswith(("if ", "elif ", "else if ")) or line in {"else", "endif"}
 
@@ -170,6 +196,52 @@ def _local_lists(plain, allowed, known=frozenset()):
                    or (line.startswith("run = ") and line[6:] in known | result) for line in plain[name]):
                 result.add(name)
                 changed = True
+    return result
+
+
+def _without_pixel_state(commands):
+    """Project proven pixel-only work out of structural skeleton validation.
+
+    Keep the original commands for the independent protected-resource checks.
+    Variable writes and geometry/compute work are never removed by this projection.
+    """
+    plain = {name: _plain(lines) for name, lines in commands.items()}
+    resources = _pixel_scratch_resources(commands)
+    def pixel(line):
+        return _pixel_line(line) or _pixel_scratch_line(line, resources)
+    helpers = _local_lists(plain, pixel)
+    result = {}
+    for name, lines in plain.items():
+        if lines is None or name.startswith("resource"):
+            result[name] = lines
+            continue
+        output, stack, malformed = [], [], False
+        for line in lines:
+            if pixel(line) or (line.startswith("run = ") and line[6:] in helpers):
+                continue
+            if line.startswith("if "):
+                stack.append([len(output), False, False])
+            elif line.startswith(("elif ", "else if ")) or line == "else":
+                if not stack or stack[-1][2]:
+                    malformed = True
+                elif line == "else":
+                    stack[-1][2] = True
+            elif line == "endif":
+                if not stack:
+                    malformed = True
+                    output.append(line)
+                    continue
+                start, meaningful, _else = stack.pop()
+                if not meaningful:
+                    del output[start:]
+                    continue
+                if stack:
+                    stack[-1][1] = True
+            elif not _control(line) and stack:
+                stack[-1][1] = True
+            output.append(line)
+        # Malformed control structure cannot become valid through projection.
+        result[name] = lines if stack or malformed else output
     return result
 
 
@@ -229,13 +301,15 @@ def stock_wwmi_merged_layouts(sections):
     commands = _commands(sections)
     if not commands or _MERGER in commands or any(name in commands for name in _PIXEL_HELPERS):
         return {}
+    if not any(line == f"run = {_MERGER}" for lines in commands.values() for _phase, line in lines):
+        return {}
     from .wwmi_skeleton_modern import modern_wwmi_merged_layouts
 
-    return _legacy_layouts(commands) or modern_wwmi_merged_layouts(commands)
+    plain = _without_pixel_state(commands)
+    return _legacy_layouts(commands, plain) or modern_wwmi_merged_layouts(commands, plain)
 
 
-def _legacy_layouts(commands):
-    plain = {name: _plain(lines) for name, lines in commands.items()}
+def _legacy_layouts(commands, plain):
     mergers = [(name, value) for name, lines in plain.items()
                if name.startswith("commandlist") and (value := _merger(lines))]
     if len(mergers) != 1:

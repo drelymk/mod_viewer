@@ -26,3 +26,8 @@ src/config.json
 node_modules/
 .quality-reports/
 .ruff_cache/
+
+# Native extraction helper intermediates
+/native/game-extract/bin/
+/native/game-extract/obj/
+/native/game-extract/packages.lock.json

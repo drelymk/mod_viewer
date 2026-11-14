@@ -13,38 +13,56 @@ function initGameFolders(root) {
   const error = root.querySelector('.settings-game-error');
   if (!error) return;
   const rows = [...root.querySelectorAll('.settings-game-row')];
-  const indexButton = root.querySelector('.settings-game-index');
-  const indexStatus = root.querySelector('.settings-game-index-status');
   const indexDialog = initGameIndexDialog();
-  let indexState = null;
+  const indexStates = new Map();
+  let support = {};
+  let supportFailed = false;
   let current = {};
   const showIndex = () => {
-    const path = current.WWMI || '';
-    indexButton.hidden = !path;
-    indexStatus.hidden = !path || !indexState;
-    if (!indexStatus.hidden) indexStatus.textContent = t('gameIndex.status.' + indexState.state, indexState);
+    for (const row of rows) {
+      const kind = row.dataset.gameKind;
+      const path = current[kind] || '';
+      const capability = support[kind];
+      const button = row.querySelector('.settings-game-index');
+      const status = root.querySelector(`.settings-game-index-status[data-game-kind="${kind}"]`);
+      const state = indexStates.get(kind);
+      button.hidden = !path;
+      button.disabled = !capability?.index;
+      status.hidden = false;
+      status.textContent = !capability
+        ? t(supportFailed ? 'gameExtract.supportFailed' : 'common.loading')
+        : !capability.index
+          ? t('gameExtract.unavailable')
+          : state && path
+            ? t('gameIndex.status.' + state.state, state)
+            : t('gameExtract.available');
+    }
   };
-  const refreshIndex = async () => {
+  const refreshIndex = async (kind) => {
+    if (!support[kind]?.index) return showIndex();
     try {
-      const state = await (await bridgeReady()).get_game_index_status?.();
-      indexState = state && ['ready', 'missing', 'stale'].includes(state.state) ? state : null;
+      const state = await (await bridgeReady()).get_game_index_status(kind);
+      indexStates.set(kind, state && ['ready', 'missing', 'stale'].includes(state.state) ? state : null);
     } catch {
-      indexState = null;
+      indexStates.delete(kind);
     }
     showIndex();
   };
-  const offerIndex = async () => {
-    await indexDialog.open();
-    await refreshIndex();
+  const offerIndex = async (kind) => {
+    if (!support[kind]?.index) return;
+    await indexDialog.open(kind);
+    await refreshIndex(kind);
   };
   const show = (folders) => {
     current = folders || {};
     for (const row of rows) {
-      const path = current[row.dataset.gameKind] || '';
+      const kind = row.dataset.gameKind;
+      const path = current[kind] || '';
       const input = row.querySelector('.settings-game-path');
       input.value = path;
       input.title = path;
       input.placeholder = t('settings.notSet');
+      input.setAttribute('aria-label', t('settings.gameDirectoryFor', { game: kind }));
       row.querySelector('.settings-game-clear').hidden = !path;
     }
     showIndex();
@@ -55,34 +73,43 @@ function initGameFolders(root) {
     if (result?.value) show(result.value);
   };
   const run = async (row, method) => {
+    const kind = row.dataset.gameKind;
     const buttons = row.querySelectorAll('button');
-    const before = current[row.dataset.gameKind];
+    const before = current[kind];
     buttons.forEach((button) => (button.disabled = true));
     let result;
     try {
-      result = await (await bridgeReady())[method](row.dataset.gameKind);
+      result = await (await bridgeReady())[method](kind);
       apply(result);
     } catch (failure) {
       apply({ error: failure.message });
     } finally {
       buttons.forEach((button) => (button.disabled = false));
+      showIndex();
     }
-    if (row.dataset.gameKind !== 'WWMI') return;
-    if (method === 'clear_game_directory') indexState = null;
-    await refreshIndex();
-    const after = result?.value?.WWMI;
-    if (method === 'select_game_directory' && after && after !== before) await offerIndex();
+    if (method === 'clear_game_directory') indexStates.delete(kind);
+    await refreshIndex(kind);
+    const after = result?.value?.[kind];
+    if (method === 'select_game_directory' && after && after !== before) await offerIndex(kind);
   };
-  indexButton.addEventListener('click', offerIndex);
   for (const row of rows) {
+    row.querySelector('.settings-game-index').addEventListener('click', () => offerIndex(row.dataset.gameKind));
     row.querySelector('.settings-game-select').addEventListener('click', () => run(row, 'select_game_directory'));
     row.querySelector('.settings-game-clear').addEventListener('click', () => run(row, 'clear_game_directory'));
   }
   window.addEventListener(LANGUAGE_CHANGED, () => show(current));
   bridgeReady()
-    .then((api) => api.get_game_folders())
-    .then(apply, (failure) => apply({ error: failure.message }))
-    .then(refreshIndex);
+    .then(async (api) => {
+      const [folders, capabilities] = await Promise.allSettled([
+        api.get_game_folders(),
+        api.get_game_extraction_support(),
+      ]);
+      supportFailed = capabilities.status === 'rejected';
+      support = capabilities.status === 'fulfilled' ? capabilities.value : {};
+      apply(folders.status === 'fulfilled' ? folders.value : { error: folders.reason.message });
+      await Promise.all(rows.map((row) => refreshIndex(row.dataset.gameKind)));
+    })
+    .catch((failure) => apply({ error: failure.message }));
 }
 let autoRestoreMissingAssetParts = false;
 let persistence = null;

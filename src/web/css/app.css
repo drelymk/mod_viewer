@@ -787,9 +787,8 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .settings-game-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .settings-game-name { width: 44px; flex-shrink: 0; font-size: 12px; font-weight: 600; color: var(--text); }
 .settings-game-path { flex: 1; min-width: 0; font-size: 12px; text-overflow: ellipsis; }
-.settings-game-row .ui-button { flex-shrink: 0; }
-.settings-game-row .settings-game-index { width: 28px; height: 28px; min-height: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
-.settings-game-row .settings-game-index[hidden] { display: none; }
+.settings-game-row .ui-button { flex-shrink: 0; width: 28px; height: 28px; min-height: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.settings-game-row .ui-button[hidden] { display: none; }
 .settings-game-index-status { margin: -2px 0 6px 52px; }
 #asset-folder-modal-backdrop .modal, #asset-extract-backdrop .modal, #rig-extract-backdrop .modal { width: 360px; }
 .texture-bake-modal { width: min(520px, calc(100vw - 40px)); }

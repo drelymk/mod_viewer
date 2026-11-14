@@ -11,6 +11,7 @@ def test_asset_rig_extraction_menu_and_dialog_lifecycle(module_page):
       const calls=[],switches=[];let response={status:'running',phase:'rig',current:1,total:2};
       let pick={token:'game01',path:'game-folder'},pickResolve=null;
       window.pywebview={api:{
+        get_game_extraction_support:async()=>({GIMI:{extraction:false,index:false},ZZMI:{extraction:false,index:false},WWMI:{extraction:true,index:true}}),
         get_asset_folders:async()=>({folders:[root]}),list_asset_subfolders:async()=>({folders:[asset,unsupported]}),
         select_game_folder:async()=>pickResolve?await new Promise(r=>{pickResolve=r;}):pick,
         start_asset_rig_extraction:async(...args)=>{calls.push(args);return {job_id:'job01',status:'running'};},
@@ -29,13 +30,20 @@ def test_asset_rig_extraction_menu_and_dialog_lifecycle(module_page):
       const rootHasNoAction=!menu(list.querySelector('.asset-folder-row')).some(b=>b.textContent==='Extract Rig/Animation');
       list.querySelector('.asset-folder-expand').click();await settle();
       const row=path=>list.querySelector(`[data-asset-folder-path="${path}"]`);
-      const unsupportedHasNoAction=!menu(row(unsupported.path)).some(b=>b.textContent==='Extract Rig/Animation');
+      const unsupportedAction=menu(row(unsupported.path)).find(b=>b.textContent==='Extract Rig/Animation');
+      unsupportedAction.click();await settle();
+      const {setLocale,t}=await import('./js/i18n/index.js');
+      setLocale('ja');
+      const unsupportedShown=document.getElementById('rig-extract-ok').disabled&&
+        document.getElementById('rig-extract-availability').textContent===t('gameExtract.unavailable')&&
+        document.getElementById('rig-extract-asset').value===unsupported.path;
+      document.getElementById('rig-extract-cancel').click();setLocale('en');
       const open=()=>menu(row(asset.path)).find(b=>b.textContent==='Extract Rig/Animation').click();
       const $=name=>document.getElementById('rig-extract-'+name);
-      open();
+      open();await settle();
       const opened=$('backdrop').classList.contains('show')&&$('query').value==='Character01'&&$('asset').value===asset.path;
       const readOnly=$('asset').readOnly&&$('game').readOnly;
-      const hint=$('hint').textContent.includes('installation folder')&&$('hint').textContent.includes('individual archive');
+      const hint=$('hint').textContent.includes('installation')&&$('hint').textContent.includes('individual archive');
       const matchingStyle=getComputedStyle($('backdrop').querySelector('.modal')).width===
         getComputedStyle(document.querySelector('#asset-extract-backdrop .modal')).width&&
         getComputedStyle($('ok')).backgroundColor===getComputedStyle(document.getElementById('asset-extract-ok')).backgroundColor;
@@ -66,10 +74,10 @@ def test_asset_rig_extraction_menu_and_dialog_lifecycle(module_page):
       pickResolve=true;$('browse').click();await settle();document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));
       pickResolve({token:'stale',path:'stale-path'});await settle();
       const stalePicker=!$('backdrop').classList.contains('show')&&$('game').value==='';
-      return {rootHasNoAction,unsupportedHasNoAction,opened,readOnly,hint,matchingStyle,required,busy,failed,installing,cancelled,saved,pickerCancel,stalePicker,calls,switches};
+      return {rootHasNoAction,unsupportedShown,opened,readOnly,hint,matchingStyle,required,busy,failed,installing,cancelled,saved,pickerCancel,stalePicker,calls,switches};
     }''')
     assert all(result[key] for key in (
-        'rootHasNoAction', 'unsupportedHasNoAction', 'opened', 'readOnly', 'hint', 'matchingStyle',
+        'rootHasNoAction', 'unsupportedShown', 'opened', 'readOnly', 'hint', 'matchingStyle',
         'required', 'busy', 'failed', 'installing', 'cancelled', 'saved', 'pickerCancel', 'stalePicker')), result
     assert result['calls'] == [['library/Character01', 'game01', 'Character01']] * 3
     assert result['switches'] == [['library/Character01', {'asset': True}]]
@@ -81,6 +89,7 @@ def test_settings_game_folders_save_and_prefill_extraction(module_page):
       document.body.innerHTML = new DOMParser().parseFromString(html,'text/html').body.innerHTML;
       let folders = {WWMI:'wwmi-game'};const picks=[],clears=[];
       window.pywebview={api:{
+        get_game_extraction_support:async()=>({GIMI:{extraction:false,index:false},ZZMI:{extraction:false,index:false},WWMI:{extraction:true,index:true}}),
         get_viewer_preferences:async()=>({value:{}}),
         get_game_folders:async()=>({value:{...folders}}),
         select_game_directory:async kind=>{picks.push(kind);folders={...folders,[kind]:kind+'-new'};return {value:{...folders}};},
@@ -96,17 +105,25 @@ def test_settings_game_folders_save_and_prefill_extraction(module_page):
         row('WWMI').querySelector('.settings-game-clear').hidden,row('GIMI').querySelector('.settings-game-clear').hidden];
       row('GIMI').querySelector('.settings-game-select').click();await settle();
       const selected=row('GIMI').querySelector('input').value;
+      const {setLocale,t}=await import('./js/i18n/index.js');
+      setLocale('ja');
+      const unsupported=row('GIMI').querySelector('.settings-game-index');
+      const uniformControls=!unsupported.hidden&&unsupported.disabled&&
+        document.querySelector('.settings-game-index-status[data-game-kind="GIMI"]').textContent===t('gameExtract.unavailable')&&
+        row('GIMI').querySelector('input').getAttribute('aria-label')===t('settings.gameDirectoryFor',{game:'GIMI'});
+      setLocale('en');
       row('WWMI').querySelector('.settings-game-clear').click();await settle();
       const cleared=row('WWMI').querySelector('input').value;
       const {initRigExtractionDialog}=await import('./js/panels/rig-extraction-dialog.js');
       const dialog=initRigExtractionDialog({onSaved(){}});
-      dialog.open({path:'library/Character01',name:'Character01'});await settle();
-      return {kinds,initial,selected,cleared,picks,clears,prefilled:document.getElementById('rig-extract-game').value};
+      dialog.open({path:'library/Character01',name:'Character01',asset_type:'WWMI'});await settle();
+      return {kinds,initial,selected,cleared,picks,clears,uniformControls,prefilled:document.getElementById('rig-extract-game').value};
     }''')
     assert result['kinds'] == ['GIMI', 'ZZMI', 'WWMI']
     assert result['initial'] == ['wwmi-game', '', False, True]
     assert result['selected'] == 'GIMI-new' and result['cleared'] == ''
     assert result['picks'] == ['GIMI'] and result['clears'] == ['WWMI']
+    assert result['uniformControls']
     assert result['prefilled'] == 'wwmi-game'
 
 
@@ -116,14 +133,15 @@ def test_settings_index_prompt_after_selecting_game_and_reused_by_index_button(m
       document.body.innerHTML = new DOMParser().parseFromString(html,'text/html').body.innerHTML;
       const {applyTranslations}=await import('./js/i18n/index.js');applyTranslations(document);
       let folders={},state={state:'missing',meshes:0},job={status:'running',phase:'index',current:1,total:4};
-      const starts=[],cancels=[];
+      const starts=[],cancels=[];let startResolve=null;
       window.pywebview={api:{
+        get_game_extraction_support:async()=>({GIMI:{extraction:false,index:false},ZZMI:{extraction:false,index:false},WWMI:{extraction:true,index:true}}),
         get_viewer_preferences:async()=>({value:{}}),
         get_game_folders:async()=>({value:{...folders}}),
         select_game_directory:async kind=>{folders={...folders,[kind]:kind+'-new'};return {value:{...folders}};},
         clear_game_directory:async kind=>{delete folders[kind];return {value:{...folders}};},
         get_game_index_status:async()=>state,
-        start_game_index:async()=>{starts.push(1);return {job_id:'idx01',status:'running'};},
+        start_game_index:async kind=>{starts.push(kind);if(starts.length===1)return new Promise(r=>{startResolve=r;});return {job_id:'idx01',status:'running'};},
         get_game_index_job:async()=>job,
         cancel_game_index:async()=>{cancels.push(1);job={status:'cancelled',error:'cancelled'};return {cancelled:true};},
       }};
@@ -139,21 +157,28 @@ def test_settings_index_prompt_after_selecting_game_and_reused_by_index_button(m
       row('GIMI').querySelector('.settings-game-select').click();await settle();
       const noPromptForOtherGames=!backdrop.classList.contains('show');
       row('WWMI').querySelector('.settings-game-select').click();await wait(()=>backdrop.classList.contains('show'));
-      const status=document.querySelector('.settings-game-index-status');
+      const status=document.querySelector('.settings-game-index-status[data-game-kind="WWMI"]');
       const prompted=!button.hidden&&status.textContent==='Not indexed';
       document.getElementById('game-index-cancel').click();await settle();
       const dismissed=!backdrop.classList.contains('show')&&starts.length===0;
       button.click();await settle();
       state={state:'ready',meshes:7};job={status:'complete',phase:'complete'};
       document.getElementById('game-index-ok').click();
+      await wait(()=>!!startResolve);
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));
+      const protectedDuringStart=backdrop.classList.contains('show')&&document.getElementById('game-index-cancel').disabled;
+      startResolve({job_id:'idx01',status:'running'});
       await wait(()=>!backdrop.classList.contains('show'));await settle();
       const indexed=starts.length===1&&status.textContent==='Indexed · 7 meshes';
       job={status:'running',phase:'index',current:1,total:4};
       button.click();await settle();
       document.getElementById('game-index-ok').click();
       await wait(()=>document.getElementById('game-index-progress').textContent.includes('(1/4)'));
+      const {setLocale,t}=await import('./js/i18n/index.js');setLocale('ja');
+      const liveTranslation=document.getElementById('game-index-progress').textContent===t('gameIndex.running')+' (1/4)';
+      setLocale('en');
       document.getElementById('game-index-cancel').click();
       await wait(()=>!backdrop.classList.contains('show'));
-      return {hiddenWithoutPath,noPromptForOtherGames,prompted,dismissed,indexed,cancelled:cancels.length===1};
+      return {hiddenWithoutPath,noPromptForOtherGames,prompted,dismissed,indexed,protectedDuringStart,liveTranslation,routed:starts.every(kind=>kind==='WWMI'),cancelled:cancels.length===1};
     }""")
     assert all(result.values()), result

@@ -24,6 +24,9 @@ class IndexClient:
         self.work = work
         self.searches = []
 
+    def close(self):
+        pass
+
     def search(self, query, kind, under):
         self.searches.append(under)
         if under == pipeline.ROLE_ROOT:
@@ -90,8 +93,9 @@ def test_picked_game_updates_settings_and_index_job_uses_it(tmp_path, monkeypatc
     service.pick_game(SimpleNamespace(create_file_dialog=lambda *_: [str(game)]))
     assert game_folders.load_game_folders()["WWMI"] == str(game.resolve())
     assert service.index_status()["state"] == "missing"
-    monkeypatch.setattr("app.bridge.rig_extraction.ensure_runtime", lambda cancel: "tool.exe")
-    monkeypatch.setattr("app.bridge.rig_extraction.Client", lambda executable, folder, work, cancel: IndexClient(work))
+    monkeypatch.setattr("app.assets.game_extract.runtime.ensure_runtime", lambda cancel: "tool.exe")
+    monkeypatch.setattr("app.assets.game_extract.runtime.Client", lambda executable, folder, work, cancel: IndexClient(work))
+    grants = dict(service._games)
     job = service.start_index()["job_id"]
     deadline = time.monotonic() + 5
     while service.status(job)["status"] == "running" or service._active:
@@ -99,11 +103,12 @@ def test_picked_game_updates_settings_and_index_job_uses_it(tmp_path, monkeypatc
         time.sleep(.01)
     assert service.status(job)["status"] == "complete" and service.status(job)["result"] == {"meshes": 1}
     assert service.index_status() == dict(state="ready", meshes=1)
+    assert service._games == grants
 
 
 def test_runtime_folder_listing_rejects_path_like_names(tmp_path):
     client = runtime.Client.__new__(runtime.Client)
-    client.call = lambda *arguments: dict(folders=["FemaleMS", "../escape"])
+    client.call = lambda *_arguments, **_options: dict(folders=["BodyType01", "../escape"])
     try:
         client.folders("Client/Content")
     except ValueError:

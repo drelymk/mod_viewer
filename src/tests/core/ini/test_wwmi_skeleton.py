@@ -52,6 +52,108 @@ def test_proxy_assignments_may_follow_unconditional_pixel_setup_only():
     assert stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=conditional)) == {}
 
 
+def _pixel_scratch_ini(remapped=True):
+    text = modern_merged_skeleton_ini(remapped=remapped)
+    text = text.replace("drawindexed = 3, 0, 0", "run = CommandListPixelApply\ndrawindexed = 3, 0, 0\nrun = CommandListPixelRestore")
+    return text + """
+[ResourcePixelSaved]
+[CommandListPixelApply]
+if $mode == 1
+ResourcePixelSaved = ref ps-t60
+ps-t60 = ref ResourceEffect
+endif
+[CommandListPixelRestore]
+if $mode == 1
+ps-t60 = ref ResourcePixelSaved
+ResourcePixelSaved = null
+endif
+"""
+
+
+@pytest.mark.parametrize("remapped", [False, True])
+def test_pixel_save_restore_helpers_preserve_draw_palette_proof(remapped):
+    expected = stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=modern_merged_skeleton_ini(remapped=remapped)))
+    text = _pixel_scratch_ini(remapped)
+    sections = parse_sections("source-01.ini", text=text)
+    proofs = stock_wwmi_merged_layouts(sections)
+    assert {key: value._replace(helpers=frozenset()) for key, value in proofs.items()} == expected
+    draws = [draw for group in build_draw_groups(sections, extract_resources(sections)) for draw in group["draws"]]
+    assert draws and all(draw.skinning_merged_layout == expected["textureoverridepart01"].layout for draw in draws)
+    assert all(bool(draw.skinning_source.blend_remap) is remapped for draw in draws)
+    # The same pixel-only operations may be inline around a bound draw.
+    inline = text.replace("run = CommandListPixelApply", "ResourcePixelSaved = ref ps-t60\nps-t60 = ResourceEffect")
+    inline = inline.replace("run = CommandListPixelRestore", "ps-t60 = ref ResourcePixelSaved\nResourcePixelSaved = null")
+    assert stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=inline)) == proofs
+
+
+@pytest.mark.parametrize("anchor,remapped", [
+    ("[CommandListCleanup]\n", None), ("[CommandListBind]\n", None),
+    ("cs-cb8 = ref vs-cb4\n", None),
+    ("[CommandListCleanup]\n", False), ("[CommandListCleanup]\n", True),
+    ("cs-cb8 = ref vs-cb4\n", True), ("[CommandListPublish]\n", True),
+    ("[CommandListBind]\n", True), ("[CommandListInitialize]\n", True),
+    ("[CommandListRemapPose]\n", True),
+    ("run = CommandListBind\n", True),
+])
+def test_pixel_only_work_is_irrelevant_throughout_the_skeleton_program(anchor, remapped):
+    text = stock_merged_skeleton_ini() if remapped is None else modern_merged_skeleton_ini(remapped=remapped)
+    expected = stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=text))
+    pixel = "if $mode == 1\nrun = CommandListPixelOuter\nelse\nps-t60 = null\nendif\n"
+    changed = text.replace(anchor, anchor + pixel, 1) + """
+[CommandListPixelOuter]
+run = CommandListPixelInner
+[CommandListPixelInner]
+Resource\\RabbitFX\\Diffuse = null
+run = CommandList\\RabbitFX\\SetTextures
+"""
+    assert stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=changed)) == expected
+
+
+def test_unrelated_ini_skips_skeleton_template_projection(monkeypatch):
+    from core.ini import wwmi_skeleton
+
+    def unexpected(_commands):
+        raise AssertionError("Unrelated INIs must not run skeleton template projection.")
+
+    monkeypatch.setattr(wwmi_skeleton, "_without_pixel_state", unexpected)
+    sections = parse_sections("source-01.ini", text="[TextureOverridePart01]\nhash = 10101010\ndrawindexed = 3, 0, 0\n")
+    assert stock_wwmi_merged_layouts(sections) == {}
+
+
+@pytest.mark.parametrize("unsafe", [
+    "vb4 = ResourceEffect", "vs-cb4 = ResourceEffect", "ResourcePoseA = null",
+    "$\\WWMIv1\\vg_offset = 9", "$status01 = 0", "run = CommandListUnknown",
+])
+def test_structural_projection_never_discards_non_pixel_helper_effects(unsafe):
+    text = modern_merged_skeleton_ini(remapped=True)
+    text = text.replace("[CommandListCleanup]\n", "[CommandListCleanup]\nrun = CommandListExtra\n")
+    text += "\n[CommandListExtra]\nps-t60 = null\n" + unsafe + "\n"
+    assert stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=text)) == {}
+
+
+@pytest.mark.parametrize("before,after,extra", [
+    ("ref ps-t60", "ref vb4", ""),
+    ("ref ps-t60", "ref vs-cb4", ""),
+    ("ref ps-t60", "ref cs-t0", ""),
+    ("ref ps-t60", "ref ResourcePoseA", ""),
+    ("[ResourcePixelSaved]\n", "[ResourcePixelSaved]\nfilename = saved.buf\n", ""),
+    ("ResourcePixelSaved = null", "ResourcePixelSaved = copy ResourceEffect", ""),
+    ("ResourcePixelSaved = null", "ResourcePixelSaved = ref ResourceEffect", ""),
+    ("", "", "\n[CommandListOther]\ncs-t0 = ref ResourcePixelSaved\n"),
+    ("", "", "\n[CommandListOther]\nvb0 = ref ResourcePixelSaved\n"),
+    ("", "", "\n[CommandListOther]\npost cs-u0 = ref ResourcePixelSaved\n"),
+    ("", "", "\n[CommandListOther]\npost vb4 = ref ResourcePixelSaved\n"),
+    ("", "", "\n[CommandListOther]\nResourceAlias = ref ResourcePixelSaved\n"),
+    ("ResourcePixelSaved", "ResourcePoseA", ""),
+])
+def test_pixel_scratch_role_rejects_non_pixel_or_protected_consumers(before, after, extra):
+    text = _pixel_scratch_ini()
+    if before:
+        assert before in text
+        text = text.replace(before, after)
+    assert stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=text + extra)) == {}
+
+
 @pytest.mark.parametrize("before,after", [
     (r"vg_offset = 2", r"vg_offset = 3"),
     (r"vg_count = 1", r"vg_count = 0"),

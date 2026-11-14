@@ -1,5 +1,5 @@
 import hashlib
-from io import BytesIO
+from copy import deepcopy
 import json
 from pathlib import Path
 import shutil
@@ -7,7 +7,6 @@ import struct
 import threading
 import time
 from types import SimpleNamespace
-import zipfile
 
 import pytest
 
@@ -37,7 +36,7 @@ def attributes(values):
     return struct.pack("<i", len(values)) + b"".join(string(key) + struct.pack("<i", len(data)) + data for key, data in values.items())
 
 
-def psa(bones, rows):
+def psa(bones, rows, duration=1):
     records = bytearray()
     for bone in bones:
         row = bytearray(120)
@@ -45,15 +44,16 @@ def psa(bones, rows):
         struct.pack_into("<i4f3f", row, 72, bone["parent"], *bone["rotation"], *bone["translation"])
         records.extend(row)
     info = bytearray(168)
-    struct.pack_into("<f", info, 152, 2)
-    struct.pack_into("<i", info, 164, 2)
+    frames = len(rows) // len(bones)
+    struct.pack_into("<f", info, 152, frames / duration)
+    struct.pack_into("<i", info, 164, frames)
     keys = bytearray()
     for ordinal, row in enumerate(rows):
         x, y, z, qx, qy, qz, qw = row
-        keys.extend(struct.pack("<8f", x, -y, z, qx, -qy, qz, -qw if ordinal % 2 == 0 else qw, 1))
+        keys.extend(struct.pack("<8f", x, -y, z, qx, -qy, qz, -qw if bones[ordinal % len(bones)]["parent"] < 0 else qw, 1))
     def chunk(name, size, count, data):
         return struct.pack("<20siii", name, 0, size, count) + data
-    return chunk(b"BONENAMES", 120, 2, records) + chunk(b"ANIMINFO", 168, 1, info) + chunk(b"ANIMKEYS", 32, 4, keys)
+    return chunk(b"BONENAMES", 120, len(bones), records) + chunk(b"ANIMINFO", 168, 1, info) + chunk(b"ANIMKEYS", 32, len(rows), keys)
 
 
 def fixture(tmp_path, scale=(1, 1, 1)):
@@ -129,6 +129,76 @@ def test_mesh_name_is_tried_first_then_captured_geometry(tmp_path):
     assert queries == ["Character01", ""]  # mesh by name, then the animation search
 
 
+@pytest.mark.parametrize("mode", ["Animation", "short", "empty", "AnimationRelative", "oversized", "malformed"])
+def test_extraction_uses_verified_source_reference_with_mesh_specific_rest_rotations(tmp_path, mode):
+    root, asset, record, client, _ = fixture(tmp_path)
+    original_export, original_batch = client.export, client.batch
+    original = read_mesh(client.export("mesh", MESH, client.work / "original")[0])["bones"]
+    rotation = [0, 0, 2 ** -.5, 2 ** -.5]
+    source = dict(Type="Skeleton", Properties=dict(BoneTree=[
+        dict(TranslationRetargetingMode="EBoneTranslationRetargetingMode::" + ("AnimationRelative" if mode == "AnimationRelative" else "Animation")) for _ in original]),
+        ReferenceSkeleton=dict(
+            FinalRefBoneInfo=[dict(Name=bone["name"], ParentIndex=bone["parent"]) for bone in original],
+            FinalRefBonePose=[dict(Translation=dict(zip(("X", "Y", "Z"), bone["translation"])),
+                                  Rotation=dict(zip(("X", "Y", "Z", "W"), bone["rotation"])),
+                                  Scale3D=dict(zip(("X", "Y", "Z"), bone["scale"]))) for bone in original]))
+    tree = source["Properties"]["BoneTree"]
+    if mode == "short":
+        source["Properties"]["BoneTree"] = tree[:1]
+    elif mode == "empty":
+        source["Properties"]["BoneTree"] = []
+    elif mode == "oversized":
+        source["Properties"]["BoneTree"] = tree + tree
+    elif mode == "malformed":
+        source["Properties"]["BoneTree"] = [None]
+    exports = []
+    authored = False
+
+    def export(kind, package, destination, format=None):
+        if package == SKELETON:
+            exports.append(package)
+            destination.mkdir(parents=True, exist_ok=True)
+            file = destination / "Skeleton01.json"
+            file.write_text(json.dumps([source]))
+            return [file]
+        files = original_export(kind, package, destination, format)
+        if kind == "mesh":
+            bone = original[1]
+            before = struct.pack("<3f4f3f", *bone["translation"], *bone["rotation"], *bone["scale"])
+            after = struct.pack("<3f4f3f", *bone["translation"], *rotation, *bone["scale"])
+            files[0].write_bytes(files[0].read_bytes().replace(before, after, 1))
+        return files
+
+    def batch(kind, packages, destination, format=None):
+        result = original_batch(kind, packages, destination, format)
+        if kind == "json" and authored:
+            file = Path(result[BASE]["rootFiles"][0])
+            rows = json.loads(file.read_text())
+            rows[0]["Properties"]["TrackToSkeletonMapTable"].append(dict(BoneTreeIndex=1))
+            file.write_text(json.dumps(rows))
+        return result
+
+    client.export, client.batch = export, batch
+    client.search = lambda query, kind, under: [MESH] if kind == "SkeletalMesh" else [BASE]
+    output = tmp_path / "output"
+    if mode not in ("Animation", "short", "empty"):
+        with pytest.raises(ValueError, match="unsupported retargeting"):
+            pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+        assert exports == [SKELETON] and not (asset / "Rig.json").exists()
+        return
+    result, _ = pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+    assert result["imported"] == 1 and exports == [SKELETON]
+    omitted = (output / "Animation/Clip01.bin").read_bytes()
+    assert struct.unpack_from("<4f", omitted, 28 + 12) == pytest.approx(rotation)
+    authored = True
+    output = tmp_path / "authored"
+    pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+    keys = (output / "Animation/Clip01.bin").read_bytes()
+    assert struct.unpack_from("<4f", keys, 28 + 12) == (0, 0, 0, 1)
+    assert keys[:28] == omitted[:28]
+    assert not (asset / "Rig.json").exists()
+
+
 def test_prop_geometry_in_another_mesh_does_not_block_the_body(tmp_path):
     root, _, record, client, _ = fixture(tmp_path)
     prop = root / "Character01/22222222"
@@ -145,7 +215,55 @@ def test_prop_geometry_in_another_mesh_does_not_block_the_body(tmp_path):
     assert result["proven_components"] == 1 and result["unmatched_components"] == 1
 
 
-def test_companion_prop_meshes_join_the_rig_only_with_an_exact_sub_skeleton(tmp_path, monkeypatch):
+@pytest.mark.parametrize("change, expected", [
+    ("unchanged", [0, 2, 3]), ("quaternion_sign", [0, 2, 3]),
+    ("translation", None), ("rotation", None), ("scale", None),
+    ("wrong_parent", None), ("missing_name", None), ("duplicate_name", None),
+    ("cycle", None), ("invalid_parent", None), ("nonfinite", None),
+    ("invalid_rotation", None), ("nonuniform_scale", None),
+])
+def test_companion_sub_skeleton_proves_collapsed_ancestors_in_world_space(change, expected):
+    def bone(name, parent, translation, rotation=None, scale=None):
+        return dict(name=name, parent=parent, translation=translation,
+                    rotation=rotation or [0, 0, 0, 1], scale=scale or [1, 1, 1])
+
+    rotation = [0, 0, 2 ** -.5, 2 ** -.5]
+    primary = dict(bones=[bone("Root", -1, [0, 0, 0]),
+                          bone("Anchor01", 0, [1, 0, 0], rotation, [-2, -2, -2]),
+                          bone("Joint01", 1, [2, 0, 0]), bone("Joint02", 2, [1, 0, 0])])
+    mesh = dict(bones=[bone("Root", -1, [0, 0, 0]),
+                       bone("Joint01", 0, [1, -4, 0], rotation, [-2, -2, -2]),
+                       bone("Joint02", 1, [1, 0, 0])])
+    joint = mesh["bones"][1]
+    if change == "quaternion_sign":
+        joint["rotation"] = [-value for value in rotation]
+    elif change == "translation":
+        joint["translation"][0] += .01
+    elif change == "rotation":
+        joint["rotation"] = [0, 0, 0, 1]
+    elif change == "scale":
+        joint["scale"] = [2, 2, 2]
+    elif change == "wrong_parent":
+        # World transforms alone cannot prove a hierarchy that skips a represented parent.
+        mesh["bones"][2] = bone("Joint02", 0, [1, -6, 0], rotation, [-2, -2, -2])
+    elif change == "missing_name":
+        joint["name"] = "Unknown01"
+    elif change == "duplicate_name":
+        joint["name"] = "Root"
+    elif change == "cycle":
+        joint["parent"] = 2
+    elif change == "invalid_parent":
+        joint["parent"] = -2
+    elif change == "nonfinite":
+        joint["translation"][0] = float("nan")
+    elif change == "invalid_rotation":
+        joint["rotation"] = [0, 0, 0, 0]
+    elif change == "nonuniform_scale":
+        joint["scale"] = [1, 2, 1]
+    assert pipeline.sub_skeleton_map(primary, mesh) == expected
+
+
+def test_companion_prop_discovery_and_unique_sub_skeleton_adoption(tmp_path, monkeypatch):
     def bone(name, parent, x=0):
         return dict(name=name, parent=parent, translation=[x, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])
 
@@ -162,24 +280,100 @@ def test_companion_prop_meshes_join_the_rig_only_with_an_exact_sub_skeleton(tmp_
     work = tmp_path / "work"
     work.mkdir()
     captured = [dict(index=0), dict(index=1)]
+    primary_package = CHARACTER + "/Model/Body01"
+    accessory = "Client/Content/Aki/Character/Prop/Accessory/Character01/Model/Item01"
+    own_accessory = CHARACTER + "/Model/Item01"
+    packages = [primary_package, accessory]
+    exports = []
 
     class Client:
         def __init__(self):
             self.work = work
 
         def search(self, query, kind, under):
-            assert query == "Sample"
-            return ["Client/Content/Aki/Character/Prop/Item/Model/Item", "Client/Content/Aki/Character/Role/FemaleMS/Sample/Own"]
+            assert (query, kind, under) == ("Character01", "SkeletalMesh", "Client/Content/Aki/Character")
+            return packages
 
         def export(self, kind, package, destination, format=None):
+            exports.append(package)
             return [package]
 
     monkeypatch.setattr(pipeline, "read_mesh", lambda package: mesh)
     monkeypatch.setattr(pipeline, "match_components",
                         lambda parts, _mesh: [dict(bone_map=[0, 1, 2])] if parts[0]["index"] == 1 else (_ for _ in ()).throw(ValueError()))
-    found = pipeline.adopt_companions(Client(), captured, primary, "Client/Content/Aki/Character/Role/FemaleMS/Sample/Model/Body",
-                                      {0}, "Client/Content/Aki/Character/Role/FemaleMS/Sample", threading.Event())
+    def discover():
+        return pipeline.adopt_companions(Client(), captured, primary, primary_package, {0}, CHARACTER, threading.Event())
+
+    found = discover()
     assert list(found) == [1] and found[1][1]["bone_map"] == [0, 2, 1]
+    assert exports == [accessory]
+    packages[:] = [primary_package, own_accessory, own_accessory]
+    assert discover()[1][0] == own_accessory  # same-character meshes are candidates; repeated search rows are not ambiguity
+    packages.append(accessory)
+    assert discover() == {}  # a second proven mesh, including an unindexed accessory, is ambiguous
+    packages[:] = [own_accessory] + [CHARACTER + f"/Model/Decoy{number:02}" for number in range(64)]
+    exports.clear()
+    assert discover() == {} and not exports  # never adopt from a silently truncated candidate set
+    packages[:] = [accessory]
+    monkeypatch.setattr(pipeline, "read_mesh", lambda package: prop)
+    assert discover() == {}  # geometry alone cannot authorize a different hierarchy
+
+
+@pytest.mark.parametrize("indexed", [False, True])
+def test_companion_extraction_exposes_animation_for_every_preview_source(tmp_path, monkeypatch, indexed):
+    from app.assets.game_extract.game_index import GameIndex
+    from app.bridge.asset_preview import AssetPreview
+
+    root, asset, record, client, _ = fixture(tmp_path)
+    prop = asset / "22222222"
+    shutil.copytree(asset / "11111111", prop)
+    file = prop / "Component 0.vb"
+    data = bytearray(file.read_bytes())
+    for offset in range(0, len(data), 28):
+        struct.pack_into("<f", data, offset, struct.unpack_from("<f", data, offset)[0] + 10)
+    file.write_bytes(data)
+    metadata = json.loads((prop / "Metadata.json").read_text())
+    metadata["vb0_hash"] = "22222222"
+    (prop / "Metadata.json").write_text(json.dumps(metadata))
+    record = index.build_index("WWMI", str(root))["assets"][0]
+    original_export, original_search = client.export, client.search
+    body = read_mesh(original_export("mesh", MESH, client.work / "reference")[0])
+    companion = deepcopy(body)
+    companion["positions"] = [(x + 10, y, z) for x, y, z in body["positions"]]
+    package = "Client/Content/Aki/Character/Prop/Accessory/Character01/Model/Item01"
+    searches = []
+
+    def search(query, kind, under):
+        searches.append((kind, under))
+        return [package] if under == "Client/Content/Aki/Character" else original_search(query, kind, under)
+
+    client.search = search
+    client.export = lambda kind, path, *args: [path] if path == package else original_export(kind, path, *args)
+    original_reader = pipeline.read_mesh
+    monkeypatch.setattr(pipeline, "read_mesh", lambda file: companion if file == package else original_reader(file))
+    # A ready index deliberately lacks the accessory; it cannot replace the broader native search.
+    cached = GameIndex({MESH: [[3, 3]]}) if indexed else None
+    output = tmp_path / "output"
+    result, _ = pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event(), cached)
+    assert result["proven_components"] == 2 and result["unmatched_components"] == 0
+    report = json.loads((output / "RigExtraction.json").read_text())
+    assert report["companion_meshes"] == [package]
+    assert ("SkeletalMesh", "Client/Content/Aki/Character") in searches
+    shutil.copytree(output, asset, dirs_exist_ok=True)
+    preview = AssetPreview(object())
+    monkeypatch.setattr(preview, "_asset_selection", lambda _: (
+        str(asset), dict(type="WWMI", path=str(root)), {}, record))
+    try:
+        payload = preview.load_asset(str(asset))
+        weights = preview.get_skinning_preview(payload["metadata"]["asset"]["rig_session"])
+        assert weights["status"] == "ok" and len(weights["game_rigs"]) == 1
+        assert len(weights["meshes"]) == 2
+        rig = next(iter(weights["game_rigs"].values()))
+        assert all(mesh["game_rig_id"] == rig["id"] for mesh in weights["meshes"].values())
+        assert [clip["id"] for clip in rig["animations"]] == ["Clip01"]
+        assert preview.get_animation(rig["animation_session"], "Clip01")["status"] == "ok"
+    finally:
+        preview.clear_preview()
 
 
 def test_native_proof_and_secondary_pipeline_lifecycle(tmp_path):
@@ -224,6 +418,73 @@ def test_native_proof_and_secondary_pipeline_lifecycle(tmp_path):
     with pytest.raises(ValueError, match="unique matching"):
         pipeline.build(client, str(root), record, tmp_path / "failed", "Character01", lambda *_: None, threading.Event())
     assert not (tmp_path / "failed").exists()
+
+
+@pytest.mark.parametrize("scenario", ["hold", "trim", "rate", "reference", "mask", "skeleton", "export", "metadata", "frame_count"])
+def test_secondary_alignment_preserves_body_and_reports_rejected_companions(tmp_path, scenario):
+    root, asset, record, client, _ = fixture(tmp_path)
+    bones = read_mesh(client.export("mesh", MESH, client.work / "reference")[0])["bones"]
+    layer_frames = 10 if scenario == "trim" else 3
+    layer_duration = (layer_frames - 1) * .5 if scenario != "rate" else 2
+    body_rows = [(float(frame), 0, 0, 0, 0, 0, 1) if bone == 0 else (1, 2, 3, 0, 0, 0, 1)
+                 for frame in range(4) for bone in range(2)]
+    layer_rows = [(99, 99, 99, 0, 0, 0, 1) if bone == 0 else (frame + 1, 2, 3, 0, 0, 0, 1)
+                  for frame in range(layer_frames) for bone in range(2)]
+    original_batch = client.batch
+
+    def batch(kind, packages, destination, format=None):
+        result = original_batch(kind, packages, destination, format)
+        for package in packages:
+            if kind == "json" and package == LAYER and scenario == "metadata":
+                result[package] = dict(state="failed", rootFiles=[], failures=["Export failed."])
+                continue
+            file = Path(result[package]["rootFiles"][0])
+            if kind == "json":
+                rows = json.loads(file.read_text())
+                props = rows[0]["Properties"]
+                props.update(NumFrames=4 if package == BASE else layer_frames,
+                             SequenceLength=1.5 if package == BASE else layer_duration)
+                if package == LAYER:
+                    if scenario == "reference":
+                        props["RefPoseType"] = "ABPT_AnimFrame"
+                    elif scenario == "mask":
+                        props["TrackToSkeletonMapTable"] = [dict(BoneTreeIndex=0)]
+                    elif scenario == "skeleton":
+                        props["Skeleton"] = dict(ObjectPath=CHARACTER + "/Model/OtherSkeleton.0")
+                file.write_text(json.dumps(rows))
+            elif package == BASE:
+                file.write_bytes(psa(bones, body_rows, 1.5))
+            elif scenario == "export":
+                result[package] = dict(state="failed", rootFiles=[], failures=["Export failed."])
+            else:
+                frames = layer_rows if scenario != "frame_count" else layer_rows + layer_rows[-2:]
+                file.write_bytes(psa(bones, frames, layer_duration))
+        return result
+
+    client.batch = batch
+    output = tmp_path / "output"
+    result, _ = pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+    raw = (output / "Animation/Clip01.bin").read_bytes()
+    _, body = pipeline.convert_clip(psa(bones, body_rows, 1.5), {"bones": bones}, 1.5)
+    assert result["clips"] == result["imported"] == 1
+    for frame in range(4):
+        assert raw[frame * 56:frame * 56 + 28] == body[frame * 56:frame * 56 + 28]
+    if scenario in ("hold", "trim"):
+        assert result["secondary"] == 1 and result["skipped"] == result["skipped_layers"] == 0
+        metadata = json.loads((output / "Animation/Clip01.json").read_text())
+        timing = metadata["reference_layer"]["timing"]
+        assert timing["body_duration"] == 1.5 and timing["layer_duration"] == layer_duration
+        assert timing["held_frames"] == (1 if scenario == "hold" else 0)
+        assert timing["trimmed_frames"] == (6 if scenario == "trim" else 0)
+        for frame in range(4):
+            expected = layer_rows[min(frame, layer_frames - 1) * 2 + 1]
+            assert struct.unpack_from("<7f", raw, frame * 56 + 28) == expected
+    else:
+        assert result["secondary"] == 0 and result["skipped"] == result["skipped_layers"] == 1
+        detail, = result["skipped_details"]
+        assert detail["kind"] == "layer" and detail["source"] == LAYER and detail["base"] == BASE and detail["reason"]
+        assert raw == body
+    assert not (asset / "Rig.json").exists()
 
 
 def test_scaled_reference_extraction_identity_errors_and_ambiguity(tmp_path, monkeypatch):
@@ -336,8 +597,8 @@ def test_job_picker_authorization_cancellation_revision_and_save_lifecycle(tmp_p
         assert resume.wait(5)
         runtime.check_cancelled(cancel)
         return Path("tool.exe")
-    monkeypatch.setattr("app.bridge.rig_extraction.ensure_runtime", tool)
-    monkeypatch.setattr("app.bridge.rig_extraction.Client", lambda *_: None)
+    monkeypatch.setattr("app.assets.game_extract.runtime.ensure_runtime", tool)
+    monkeypatch.setattr("app.assets.game_extract.runtime.Client", lambda *_: None)
     def build(_client, root, record, output, *_):
         output.mkdir()
         (output / "Rig.json").write_bytes(b"rig")
@@ -345,7 +606,7 @@ def test_job_picker_authorization_cancellation_revision_and_save_lifecycle(tmp_p
         (output / "Animation/manifest.json").write_bytes(b"animation")
         (output / "RigExtraction.json").write_bytes(b"report")
         return dict(bones=2, clips=1, imported=1, secondary=1, skipped=0), capture(root, record)[1]
-    monkeypatch.setattr("app.bridge.rig_extraction.pipeline.build", build)
+    monkeypatch.setattr("app.assets.game_extract.wwmi.build", build)
     monkeypatch.setattr("app.bridge.rig_extraction.inherit_directory_permissions", lambda _: None)
     def finish(job):
         deadline = time.monotonic() + 5
@@ -390,28 +651,65 @@ def test_native_game_picker_never_grants_mod_or_asset_access(tmp_path, monkeypat
         api._access.asset_folder(str(game))
 
 
-def test_runtime_pin_archive_containment_and_cache_lifecycle(tmp_path, monkeypatch):
-    def bundle(name="Cue4ParseMcp.exe"):
-        stream = BytesIO()
-        with zipfile.ZipFile(stream, "w") as archive:
-            archive.writestr(name, b"synthetic executable")
-        return stream.getvalue()
-    current = bundle()
-    monkeypatch.setattr(runtime, "urlopen", lambda *_args, **_kwargs: BytesIO(current))
-    monkeypatch.setattr(runtime, "ARCHIVE_SHA256", hashlib.sha256(current).hexdigest())
-    tool = runtime.ensure_runtime(threading.Event(), tmp_path / "cache01")
-    assert tool.read_bytes() == b"synthetic executable"
-    assert runtime.ensure_runtime(threading.Event(), tmp_path / "cache01") == tool
-    current = bundle("../escape.exe")
-    monkeypatch.setattr(runtime, "ARCHIVE_SHA256", hashlib.sha256(current).hexdigest())
-    with pytest.raises(ValueError, match="unsafe"):
-        runtime.ensure_runtime(threading.Event(), tmp_path / "cache02")
-    monkeypatch.setattr(runtime, "ARCHIVE_SHA256", "0" * 64)
+@pytest.mark.parametrize("game_kind", ["GIMI", "ZZMI"])
+def test_game_adapters_scope_grants_and_reject_unavailable_jobs(tmp_path, monkeypatch, game_kind):
+    from app.assets.game_extract import backends
+
+    root, asset, record, _, _ = fixture(tmp_path)
+    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
+    game = tmp_path / "game"
+    game.mkdir()
+    (game / "data.pak").write_bytes(b"archive")
+    kind = game_kind
+    service = RigExtraction(lambda _: (str(asset), dict(type=kind, path=str(root)), {}, record))
+    window = SimpleNamespace(create_file_dialog=lambda *_: [str(game)])
+    other = service.pick_game(window, game_kind)
+    assert other["kind"] == game_kind and service.saved_game(game_kind)["path"] == str(game)
+    assert service.saved_game("WWMI") is None
+    assert service.index_status(game_kind)["state"] == "unsupported"
+    assert service.start_index(game_kind)["error_code"] == "gameExtract.unavailable"
+    assert service.start(str(asset), other["token"])["error_code"] == "gameExtract.unavailable"
+    assert not service._jobs and not (asset / "Rig.json").exists()
+    kind = "WWMI"
+    assert "error" in service.start(str(asset), other["token"])
+    assert not service._jobs
+    # A newly registered adapter routes through the same folder and job lifecycle.
+    monkeypatch.setitem(backends._BACKENDS, game_kind, backends.backend_for("WWMI"))
+    assert backends.capabilities()[game_kind] == dict(extraction=True, index=True)
+    assert service.index_status(game_kind)["state"] == "missing"
+    with pytest.raises(ValueError, match="Unknown"):
+        service.pick_game(window, "Other")
+
+
+def test_bundled_runtime_pin_integrity_and_containment(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    required = ("ModViewer.GameExtract.exe", "CUE4Parse.dll", "CUE4Parse-Conversion.dll", "CUE4Parse-Natives.dll",
+                "oodle-data-shared.dll", "zlib-ng2.dll", "ModViewer.GameExtract.deps.json", "ModViewer.GameExtract.runtimeconfig.json")
+    files = {}
+    for name in required:
+        (bundle / name).write_bytes(b"synthetic runtime")
+        files[name] = hashlib.sha256(b"synthetic runtime").hexdigest()
+    record = dict(version=runtime.VERSION, parser=runtime.PARSER_COMMIT, files=files)
+    manifest = bundle / "runtime.json"
+    manifest.write_text(json.dumps(record))
+    assert runtime.ensure_runtime(threading.Event(), bundle) == bundle / required[0]
+    (bundle / required[0]).write_bytes(b"modified")
     with pytest.raises(ValueError, match="checksum"):
-        runtime.ensure_runtime(threading.Event(), tmp_path / "cache03")
+        runtime.ensure_runtime(threading.Event(), bundle)
+    (bundle / required[0]).write_bytes(b"synthetic runtime")
+    files["../outside.dll"] = files[required[0]]
+    manifest.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="Unsafe"):
+        runtime.ensure_runtime(threading.Event(), bundle)
+    files.pop("../outside.dll")
+    record["version"] = "unsupported"
+    manifest.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="version"):
+        runtime.ensure_runtime(threading.Event(), bundle)
 
 
-def test_native_process_errors_are_redacted_and_cancellation_stops_process(tmp_path, monkeypatch):
+def test_native_session_reuse_redaction_and_cancellation(tmp_path, monkeypatch):
     game = tmp_path / "game"
     game.mkdir()
     (game / "data.pak").write_bytes(b"archive")
@@ -419,35 +717,73 @@ def test_native_process_errors_are_redacted_and_cancellation_stops_process(tmp_p
     work.mkdir()
     cancel = threading.Event()
     client = runtime.Client(tmp_path / "tool.exe", game, work, cancel)
-    calls = []
+    calls, requests, stopped = [], [], []
+    response = {"results": [{"path": MESH}]}
+    class Input:
+        def write(self, data):
+            request = json.loads(data)
+            requests.append(request)
+            if response is not None:
+                (work / f"command-{request['id']}.json").write_text(json.dumps(response))
+        def flush(self):
+            pass
+        def close(self):
+            stopped.append("stdin")
     class Process:
-        returncode = 1
+        returncode = None
         def __init__(self, arguments, **options):
             calls.append((arguments, options))
-            options["stdout"].write(b'{"error":"synthetic-private-token"}')
+            self.stdin = Input()
         def poll(self):
+            return self.returncode
+        def kill(self):
+            stopped.append("kill")
+            self.returncode = -1
+        def wait(self):
+            stopped.append("wait")
             return self.returncode
     monkeypatch.setattr(runtime.subprocess, "Popen", Process)
     with pytest.raises(ValueError, match="character name"):
         client.search("--config=outside.json", "SkeletalMesh", "Client/Content")
     assert calls == []
+    for _ in range(2):
+        assert client.search("name with spaces", "SkeletalMesh", "Client/Content/Aki") == [MESH]
+    assert len(calls) == 1 and requests[0]["query"] == "name with spaces"
+    assert calls[0][0] == [str(tmp_path / "tool.exe"), "--paks", str(game), "--work", str(work)]
+    assert "shell" not in calls[0][1] and not (work / "games.json").exists()
+    response = {"error": "synthetic-private-token"}
     with pytest.raises(ValueError) as failure:
-        client.call("search", "wuwa", "name with spaces")
+        client.call("search", query="fixture")
     assert "synthetic-private-token" not in str(failure.value)
-    assert calls[0][0][3] == "name with spaces"
-    assert "shell" not in calls[0][1]
-    killed = []
-    class Pending(Process):
-        returncode = None
-        def poll(self):
-            cancel.set()
-            return self.returncode
-        def kill(self):
-            killed.append(True)
-            self.returncode = -1
-        def wait(self):
-            return self.returncode
-    monkeypatch.setattr(runtime.subprocess, "Popen", Pending)
+    assert stopped == ["kill", "wait", "stdin"] and client.process is None
+    response = None
+    with pytest.raises(ValueError, match="timed out"):
+        client.call("search", query="fixture", timeout=-1)
+    assert stopped == ["kill", "wait", "stdin"] * 2
+    response = {"results": []}
+    monkeypatch.setattr(runtime, "MAX_RESPONSE", 1)
+    with pytest.raises(ValueError, match="too large"):
+        client.call("search", query="fixture")
+    assert stopped == ["kill", "wait", "stdin"] * 3
+    monkeypatch.setattr(runtime, "MAX_RESPONSE", 32 * 1024 * 1024)
+    response = None
+    def pending():
+        cancel.set()
+        return None
+    monkeypatch.setattr(Process, "poll", lambda self: pending() if self.returncode is None else self.returncode)
     with pytest.raises(runtime.ExtractionCancelled):
-        client.call("search", "wuwa", "fixture")
-    assert killed == [True]
+        client.call("search", query="fixture")
+    assert stopped == ["kill", "wait", "stdin"] * 4
+    assert not list(work.glob("command-*.json"))
+
+
+@pytest.mark.parametrize("response", [
+    {"items": []},
+    {"items": [{"path": MESH + "Other", "state": "failed"}]},
+    {"items": [{"path": MESH, "state": "completed", "rootFiles": ["../escape.json"]}]},
+])
+def test_native_batch_rejects_incomplete_or_uncontained_results(tmp_path, response):
+    client = object.__new__(runtime.Client)
+    client.call = lambda *_args, **_kwargs: response
+    with pytest.raises(ValueError):
+        client.batch("json", [MESH], tmp_path)

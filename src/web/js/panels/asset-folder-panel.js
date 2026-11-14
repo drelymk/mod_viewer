@@ -149,7 +149,7 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
               },
             ]
           : [];
-      if (entry.asset && entry.asset_type === 'WWMI')
+      if (entry.asset)
         actions.push({
           label: t('rigExtract.title'),
           action: () => rigExtraction.open(entry),
