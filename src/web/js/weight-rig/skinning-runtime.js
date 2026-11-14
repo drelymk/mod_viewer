@@ -9,6 +9,8 @@ import { EMPTY_ACTIVE_VERTICES } from './weight-runtime.js';
 import { createWorkBudget } from './cooperative-scheduler.js';
 import { resumeAnimatedMesh } from '../mesh/animation-runtime.js';
 import { syncLoosePartMaterial } from '../mesh/loose-parts.js';
+import { createAnimationSkinningGpu } from './animation-skinning-gpu.js';
+import { invalidateCharacterShadowGeometry } from '../scene/shadow-invalidation.js';
 
 function typedView(buffer, descriptor, Type, typeName) {
   if (!descriptor || descriptor.type !== typeName) {
@@ -63,7 +65,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
   }
 
   function vertexDifference(previousVertices, currentVertices) {
-    if (!previousVertices?.length) return new Uint32Array();
+    if (!previousVertices?.length || previousVertices === currentVertices) return EMPTY_ACTIVE_VERTICES;
     const current = new Set(currentVertices || []);
     const removed = [];
     for (const vertex of previousVertices) {
@@ -123,21 +125,38 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     state,
     {
       request = true,
-      invalidateShadow = true,
+      invalidateShadow: shouldInvalidateShadow = true,
       skipHidden = false,
       composedTransforms = null,
       composedRotations = null,
+      gpu = false,
     } = {},
   ) {
     if (!state.loaded || !state.baselinePositions) return false;
     if (skipHidden && !mesh.visible) return false;
     const physicsActive =
       state.deformationMode === 'physics' && state.physicsEnabled && composedTransforms && composedRotations;
-    const position = mesh.geometry.attributes.position;
     const finalTransforms = physicsActive ? composedTransforms : state.poseTransforms;
     const finalRotations = physicsActive ? composedRotations : state.poseRotations;
     const previousVertices = state.combinedActiveVertices || EMPTY_ACTIVE_VERTICES;
     const activeVertices = combinedActiveVerticesForState(state);
+    if (gpu && !physicsActive && activeVertices.length && finalTransforms) {
+      state.animationGpu ??= createAnimationSkinningGpu(mesh, state);
+      if (state.animationGpu) {
+        mesh.userData.animationSuspended = true;
+        state.animationGpu.update(finalTransforms, finalRotations, activeVertices);
+        markFinalBoundsDirty(mesh, state);
+        if (shouldInvalidateShadow) invalidateCharacterShadowGeometry({ request });
+        else if (request) requestRender();
+        return true;
+      }
+    }
+    if (state.animationGpu) {
+      state.animationGpu.materialize();
+      state.animationGpu.dispose();
+      state.animationGpu = null;
+    }
+    const position = mesh.geometry.attributes.position;
     const takingOwnership = Boolean(activeVertices.length || state.deformationMode || state.physicsEnabled);
     const wasSuspended = mesh.userData.animationSuspended === true;
     if (takingOwnership && mesh.userData.animationSuspended !== true) {
@@ -198,8 +217,8 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
         }
       }
     }
-    if (invalidateShadow && changed && !resumedAnimation) {
-      invalidateShadow({ request });
+    if (shouldInvalidateShadow && changed && !resumedAnimation) {
+      invalidateCharacterShadowGeometry({ request });
     } else if (request && changed && !resumedAnimation) requestRender();
     return changed;
   }
@@ -458,6 +477,8 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
 
   function rebaseAfterShapeChange(mesh, { positions = null, normals = null } = {}) {
     const state = states.get(mesh);
+    state?.animationGpu?.dispose();
+    if (state) state.animationGpu = null;
     const position = mesh?.geometry?.attributes?.position;
     if (!state?.loaded || !position) return false;
     const shapedPositions = positions || new Float32Array(position.array);
@@ -487,6 +508,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
   function disposeMesh(mesh) {
     const state = states.get(mesh);
     if (!state) return;
+    state.animationGpu?.dispose();
     state.disposed = true;
     mesh.userData.animationSuspended = false;
     if (state.debugMaterial) state.debugMaterial.dispose();

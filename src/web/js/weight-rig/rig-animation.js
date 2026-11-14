@@ -87,8 +87,8 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
   function tick(now) {
     frame = null;
     if (!playing || !clip) return;
-    // Allow display-timing jitter so a 60 Hz display steps every second frame.
-    if (now - last >= 1000 / 30 - 2) {
+    // Allow display-timing jitter so a 60 Hz display steps every frame.
+    if (now - last >= 1000 / 60 - 2) {
       time = (time + (now - last) / 1000) % clip.duration;
       last = now;
       pose();

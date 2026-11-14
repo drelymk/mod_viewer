@@ -14,7 +14,7 @@ from core.materials.profiles import material_profile_for
 from tests.support.dds_data import dx10_dds, mode6_block, uncompressed_dds
 
 from .payloads import append_stream, model_payload, solid_texture, split_color_dds, textured_payload, weighted_payload
-from .support import bridge_calls, mesh_pixel, mesh_pixels, open_model, project_mesh_points, wait_loaded, wait_texture
+from .support import bridge_calls, mesh_pixel, mesh_pixels, open_model, project_mesh_points, wait_loaded, wait_texture, prepare_compute_clock, set_geometry_blob
 
 
 def _open_fixture(viewer, payload, extra=None):
@@ -37,6 +37,211 @@ def _activate_rig(page, *, humanoid=False):
       window.__rigApi = weightRigApi;
     }""")
     page.wait_for_function('window.__rigApi.getModelRigState().loaded')
+
+
+@pytest.mark.parametrize('mode', ['shape', 'pose', 'combined', 'swapped', 'sparse'])
+def test_compute_animation_gpu_matches_cpu_and_preserves_tool_geometry(module_page, tmp_path, mode):
+    from tests.support.animations import compute_mod, load_mod
+
+    ini = compute_mod(tmp_path / 'mod', rotating_pose=True)
+    _, built = load_mod(ini, ini.parent)
+    entry = next(iter(built.meshes.values()))
+    if mode == 'sparse':
+        for shape in entry['animation_geometry']['shape_passes']:
+            reference = shape['deltas']
+            raw = built.geometry.data[reference['offset']:reference['offset'] + reference['length']]
+            shape['deltas'] = built.geometry.add(b''.join(raw[index:index + 12] for index in range(0, len(raw), 24)))
+    if mode in ('combined', 'swapped'):
+        pose = entry['animation_geometry']['pose']
+        for vertex, weights in enumerate(((.3, .4, .2, .1), (0, .6, .4, 0), (.5, -.2, .3, .4))):
+            struct.pack_into('<4f', built.geometry.data, pose['blend']['weights']['offset'] + vertex * 16, *weights)
+            struct.pack_into('<4i', built.geometry.data, pose['blend']['indices']['offset'] + vertex * 16, 0, 1, 0, 1)
+        for frame in range(pose['frame_count']):
+            offset = pose['frames']['offset'] + (frame * pose['bone_count'] + 1) * 56
+            struct.pack_into('<6f4f4f', built.geometry.data, offset,
+                             1.2, .8, 1.1, .5, -.1, .2, -.3, 0, 0, -(1 - .3 ** 2) ** .5, -.1, .2, -.05, .1)
+    prepare_compute_clock(module_page)
+    set_geometry_blob(module_page, built.geometry)
+    result = module_page.evaluate('''async ({entry, mode}) => {
+      const T = await import('three/webgpu');
+      const gpu = await import('./js/mesh/deformation-gpu.js');
+      const {decodeF32} = await import('./js/textures/decode.js');
+      const runtime = window.__animation, controls = window.__controls;
+      const renderer = new T.WebGPURenderer(); renderer._getFallback = null;
+      try {await renderer.init();} catch {return {unavailable:true};}
+      if (!renderer.backend.isWebGPUBackend || renderer.backend.compatibilityMode) return {unavailable:true};
+      renderer._animation.stop();
+      renderer.setSize(32,32);
+      const errors = [];
+      renderer.backend.device.addEventListener('uncapturederror', event => errors.push(event.error.message));
+      const payload = structuredClone(entry.animation_geometry);
+      if (mode === 'shape' || mode === 'sparse') payload.pose = null;
+      if (mode === 'pose') payload.shape_passes = [];
+      if (mode === 'combined') payload.coordinate_transform = 'identity';
+      if (mode === 'swapped') payload.coordinate_transform = 'swap_yz_negate';
+      if (mode === 'sparse') {
+        payload.overlay = payload.position_only = true;
+      }
+      const makeMesh = () => {
+        const geometry = new T.BufferGeometry();
+        geometry.setAttribute('position',new T.BufferAttribute(decodeF32(entry.pos).slice(),3));
+        geometry.setAttribute('normal',new T.BufferAttribute(decodeF32(payload.base_normals).slice(),3));
+        geometry.setIndex([0,1,2]);
+        const mesh = new T.Mesh(geometry,new T.MeshBasicNodeMaterial());
+        mesh.userData.basePositions = geometry.attributes.position.array.slice();
+        if (payload.overlay) {
+          mesh.userData.humanoidRestPositions = mesh.userData.basePositions.map(value=>value+2);
+          mesh.userData.humanoidRestNormals = geometry.attributes.normal.array.slice();
+        }
+        return mesh;
+      };
+      const sampleCpu = mesh => ({positions:[...mesh.geometry.attributes.position.array],
+        normals:[...mesh.geometry.attributes.normal.array]});
+      const cpu = makeMesh();
+      runtime.registerAnimatedMesh(cpu,payload.track_id,payload);
+      const expected = [];
+      const times = [0,16.6,33.4,49.9,66.7,100];
+      for (const time of times) {window.__frame(time);expected.push(sampleCpu(cpu));}
+      runtime.resetAnimationRuntime(); controls.resetControlState();
+      gpu.setAnimationComputeRenderer(renderer);
+      const mesh = makeMesh(), rawPosition = mesh.geometry.attributes.position.array;
+      const initial = [...rawPosition];
+      if (!runtime.registerAnimatedMesh(mesh,payload.track_id,payload)) throw new Error('GPU track registration failed');
+      const position = mesh.geometry.attributes.position, normal = mesh.geometry.attributes.normal;
+      const scene = new T.Scene();mesh.frustumCulled=false;
+      const camera = new T.PerspectiveCamera(60,1,.1,100);camera.position.z=10;
+      gpu.withAnimationGpuAccess(()=>renderer.render(scene,camera));
+      const retainedBuffers = renderer.info.memory.storageAttributes + renderer.info.memory.attributes;
+      scene.add(mesh);
+      // Loading can render the new model before its first animation tick.
+      gpu.withAnimationGpuAccess(()=>renderer.render(scene,camera));
+      const read = async attribute => mode === 'sparse' && attribute === normal ? [...attribute.array]
+        : [...new Float32Array(await renderer.getArrayBufferAsync(attribute.data || attribute))];
+      const actual = [];
+      for (const time of times) {
+        window.__frame(time);
+        gpu.withAnimationGpuAccess(()=>renderer.render(scene,camera));
+        actual.push({positions:await read(position),normals:await read(normal)});
+      }
+      const lazy = initial.every((value,index)=>rawPosition[index]===value);
+      const mirror = sampleCpu(mesh);
+      runtime.setAnimationPaused(true);
+      const sleeping = window.__pendingFrames()===0;
+      mesh.userData.animationSuspended=true;
+      position.array.fill(7); position.needsUpdate=true;
+      runtime.wakeAnimationRuntime();window.__frame(200);
+      const owned = [...position.array];
+      mesh.userData.animationSuspended=false;
+      runtime.resumeAnimatedMesh(mesh);window.__frame(300);
+      gpu.withAnimationGpuAccess(()=>renderer.render(scene,camera));
+      const released = sampleCpu(mesh);
+      const releasedGpu = await read(position);
+      const stable = position===mesh.geometry.attributes.position && normal===mesh.geometry.attributes.normal;
+      runtime.resetAnimationRuntime();gpu.setAnimationComputeRenderer(null);
+      mesh.geometry.dispose();mesh.material.dispose();cpu.geometry.dispose();cpu.material.dispose();
+      await renderer.backend.device.queue.onSubmittedWorkDone();
+      const buffers = renderer.info.memory.storageAttributes + renderer.info.memory.attributes;
+      renderer.dispose();
+      return {expected,actual,lazy,mirror,sleeping,owned,released,releasedGpu,stable,errors,
+        cleared:runtime.animationRuntimeSnapshot().clocks,
+        buffers,retainedBuffers};
+    }''', {'entry': entry, 'mode': mode})
+    if result.get('unavailable'):
+        pytest.skip('compute animation requires a compatible WebGPU device')
+    assert result['errors'] == []
+    for expected, actual in zip(result['expected'], result['actual'], strict=True):
+        assert actual['positions'] == pytest.approx(expected['positions'], abs=2e-5)
+        assert actual['normals'] == pytest.approx(expected['normals'], abs=2e-5)
+    assert result['expected'][0]['positions'] != result['expected'][1]['positions']
+    assert result['lazy'] and result['sleeping'] and result['stable']
+    assert result['mirror']['positions'] == pytest.approx(result['expected'][-1]['positions'])
+    assert result['mirror']['normals'] == pytest.approx(result['expected'][-1]['normals'])
+    assert result['owned'] == [7] * len(result['owned'])
+    assert result['releasedGpu'] == pytest.approx(result['released']['positions'], abs=2e-5)
+    assert result['cleared'] == 0
+    assert result['buffers'] == result['retainedBuffers']
+
+
+@pytest.mark.parametrize('influences', [4, 8])
+def test_asset_gpu_skinning_preserves_weights_normals_parts_and_release(module_page, influences):
+    result = module_page.evaluate('''async influences => {
+      const T=await import('three/webgpu');
+      const {createSkinningRuntime}=await import('./js/weight-rig/skinning-runtime.js');
+      const {createWeightRuntimeState}=await import('./js/weight-rig/weight-runtime.js');
+      const cpu=await import('./js/weight-rig/weight-deformation.js');
+      const gpu=await import('./js/mesh/deformation-gpu.js');
+      const renderer=new T.WebGPURenderer();renderer._getFallback=null;
+      try {await renderer.init();} catch {return {unavailable:true};}
+      if (!renderer.backend.isWebGPUBackend || renderer.backend.compatibilityMode) return {unavailable:true};
+      renderer._animation.stop();renderer.setSize(16,16);gpu.setAnimationComputeRenderer(renderer);
+      const errors=[];
+      renderer.backend.device.addEventListener('uncapturederror',event=>errors.push(event.error.message));
+      const geometry=new T.BufferGeometry();
+      geometry.setAttribute('position',new T.Float32BufferAttribute([0,0,0,1,0,0,0,1,0,1,1,0],3));
+      geometry.setAttribute('normal',new T.Float32BufferAttribute([0,0,2,0,0,2,0,1,0,1,0,0],3));
+      geometry.setIndex([0,1,2,1,3,2]);
+      const mesh=new T.Mesh(geometry,new T.MeshBasicNodeMaterial());mesh.frustumCulled=false;
+      const part=new T.Mesh(geometry.clone(),mesh.material);
+      for (const name of ['position','normal']) part.geometry.setAttribute(name,geometry.attributes[name]);
+      mesh.userData.looseParts=[part];
+      const runtime=createWeightRuntimeState(),skin=createSkinningRuntime({...runtime,requestRender:()=>{}});
+      const state=runtime.stateFor(mesh);
+      const baseline=geometry.attributes.position.array.slice(),baseNormals=geometry.attributes.normal.array.slice();
+      Object.assign(state,{loaded:true,baselinePositions:baseline,baselineNormals:baseNormals,
+        influenceCount:influences,boneIds:[101,207,509],
+        indices:Uint32Array.from({length:4*influences},(_,index)=>[101,207,509,101][index%4]),
+        weights:Float32Array.from({length:4*influences},(_,index)=>[.2,.3,.1,.15][index%4]),
+        poseActiveVertices:new Uint32Array([0,2,3]),poseTransforms:new Map(),poseRotations:new Map()});
+      const raw=geometry.attributes.position.array,rawNormal=geometry.attributes.normal.array;
+      const scene=new T.Scene();
+      const camera=new T.PerspectiveCamera(60,1,.1,100);camera.position.z=10;
+      renderer.render(scene,camera);
+      const retainedBuffers=renderer.info.memory.storageAttributes+renderer.info.memory.attributes;
+      scene.add(mesh);renderer.render(scene,camera);
+      const expected=[],actual=[];
+      const read=async attribute=>[...new Float32Array(await renderer.getArrayBufferAsync(attribute.data))];
+      for (const angle of [.2,.4,.8]) {
+        const rotation=new T.Quaternion().setFromAxisAngle(new T.Vector3(0,0,1),angle);
+        state.poseTransforms.set(101,new T.Matrix4().makeRotationFromQuaternion(rotation)
+          .scale(new T.Vector3(1.2,.8,1.1)).setPosition(1,2,3));
+        state.poseRotations.set(101,rotation);
+        state.poseTransforms.set(207,new T.Matrix4().makeTranslation(-1,.5,0));
+        state.poseRotations.set(207,new T.Quaternion());
+        const positions=baseline.slice(),normals=baseNormals.slice();
+        cpu.applyWeightedTransformDeformationInto(positions,baseline,state.indices,state.weights,influences,
+          state.poseTransforms,state.poseActiveVertices);
+        cpu.applyWeightedNormalDeformationInto(normals,baseNormals,state.indices,state.weights,influences,
+          state.poseRotations,state.poseActiveVertices);
+        expected.push({positions:[...positions],normals:[...normals]});
+        skin.applyDeformation(mesh,state,{gpu:true,invalidateShadow:false});
+        gpu.withAnimationGpuAccess(()=>renderer.render(scene,camera));
+        actual.push({positions:await read(geometry.attributes.position),normals:await read(geometry.attributes.normal)});
+      }
+      const lazy=raw.every((value,index)=>value===baseline[index]) &&
+        rawNormal.every((value,index)=>value===baseNormals[index]);
+      const shared=part.geometry.attributes.position===geometry.attributes.position;
+      const mirror={positions:[...geometry.attributes.position.array],normals:[...geometry.attributes.normal.array]};
+      state.poseActiveVertices=new Uint32Array();state.poseTransforms=null;state.poseRotations=null;
+      skin.applyDeformation(mesh,state,{invalidateShadow:false});skin.finalizeDeformationGeometry(mesh,state);
+      const restored=[...geometry.attributes.position.array];
+      const released=part.geometry.attributes.position===geometry.attributes.position && !state.animationGpu;
+      skin.disposeMesh(mesh);part.geometry.dispose();geometry.dispose();mesh.material.dispose();
+      await renderer.backend.device.queue.onSubmittedWorkDone();
+      const buffers=renderer.info.memory.storageAttributes+renderer.info.memory.attributes;
+      renderer.dispose();gpu.setAnimationComputeRenderer(null);
+      return {expected,actual,lazy,shared,mirror,restored,released,errors,buffers,retainedBuffers};
+    }''', influences)
+    if result.get('unavailable'):
+        pytest.skip('GPU skinning requires a compatible WebGPU device')
+    assert result['errors'] == []
+    for expected, actual in zip(result['expected'], result['actual'], strict=True):
+        assert actual['positions'] == pytest.approx(expected['positions'], abs=2e-5)
+        assert actual['normals'] == pytest.approx(expected['normals'], abs=2e-5)
+    assert result['lazy'] and result['shared'] and result['released']
+    assert result['mirror']['positions'] == pytest.approx(result['expected'][-1]['positions'])
+    assert result['mirror']['normals'] == pytest.approx(result['expected'][-1]['normals'])
+    assert result['restored'] == [0,0,0,1,0,0,0,1,0,1,1,0]
+    assert result['buffers'] == result['retainedBuffers']
 
 
 def test_environment_backgrounds_are_independent_of_model_geometry_and_clipping(viewer):
@@ -1595,4 +1800,4 @@ def test_weight_rig_collapsed_source_keeps_weights_and_other_physics_then_recove
             arg=participants,
         )
         if errors:
-            assert 'Rig unavailable: no usable faces.' in page.locator('.weight-rig-status').inner_text()
+            assert page.locator('.weight-rig-status').filter(has_text='Rig unavailable: no usable faces.').is_visible()

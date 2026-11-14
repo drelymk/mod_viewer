@@ -670,7 +670,7 @@ function buildAnimationSection(parent) {
 
 function syncAnimation(state = getRigAnimationState()) {
   if (!ui?.animationSelect) return;
-  // Ticks rerun this at 30 Hz; the clip list only changes with the rig or locale.
+  // Ticks rerun this at 60 Hz; the clip list only changes with the rig or locale.
   if (ui.animationClips !== state.clips || ui.animationLocale !== getLocale()) {
     ui.animationClips = state.clips;
     ui.animationLocale = getLocale();

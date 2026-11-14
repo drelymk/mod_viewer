@@ -5,6 +5,7 @@ import { getControlValue, setControlValue, dnfSatisfied } from '../editing/contr
 import { evaluateExpression, evaluateCondition } from '../editing/conditions.js';
 import { invalidateCharacterShadowGeometry, invalidateCharacterShadowMap } from '../scene/shadow-invalidation.js';
 import { requestRender } from '../scene/render-scheduler.js';
+import { createAnimationGpu } from './animation-gpu.js';
 
 const tracks = new Map();
 let rafId = null;
@@ -158,7 +159,7 @@ function gimiMeshActive(meshState) {
   return dnfSatisfied(meshState?.conditions || []);
 }
 
-function applyGimiPose(mesh, meshState, output) {
+function applyGimiPose(mesh, meshState, output, cpuOnly = false) {
   const position = mesh.geometry?.attributes?.position;
   const normal = mesh.geometry?.attributes?.normal;
   const basePositions = meshState.overlay
@@ -171,13 +172,19 @@ function applyGimiPose(mesh, meshState, output) {
   const positionOnly = meshState.positionOnly === true;
   if (!position || !normal || !basePositions || (!baseNormals && !positionOnly)) return false;
 
-  const positions = position.array;
-  const normals = normal.array;
   const shapeWeights = meshState.shapePasses.map((pass, index) => {
     const phase = output.shapePhases[pass.programPass ?? index];
     if (!Number.isFinite(phase)) return 0;
     return evaluateShapeWeight(pass.weightOperation, phase);
   });
+
+  if (!cpuOnly && meshState.gpu) {
+    meshState.gpu.update(output, basePositions, baseNormals, shapeWeights);
+    return true;
+  }
+
+  const positions = position.array;
+  const normals = normal.array;
 
   const hasPose = meshState.poseFrames != null;
   const swapYZNegate = output.coordinateTransform === 'swap_yz_negate';
@@ -341,8 +348,10 @@ function applyGimiPose(mesh, meshState, output) {
     normals[positionOffset + 1] = normalLength > 1e-12 ? outputNormalY / normalLength : 0;
     normals[positionOffset + 2] = normalLength > 1e-12 ? outputNormalZ / normalLength : 0;
   }
-  position.needsUpdate = true;
-  if (!positionOnly) normal.needsUpdate = true;
+  if (!cpuOnly) {
+    position.needsUpdate = true;
+    if (!positionOnly) normal.needsUpdate = true;
+  }
   return true;
 }
 
@@ -373,6 +382,7 @@ function applyGimiTrack(track) {
 function restoreCanonical(mesh) {
   const position = mesh.geometry?.attributes?.position;
   const meshState = mesh.userData?.animationState;
+  meshState?.gpu?.discard();
   const base = meshState?.overlay
     ? mesh.userData?.humanoidRestPositions || mesh.userData?.basePositions
     : mesh.userData?.basePositions;
@@ -659,12 +669,17 @@ function tick(timestamp) {
         continue;
       }
       const advanced = executeGimiProgram(state, now);
-      const geometryInterval = 1000 / 30;
-      const due = state.lastGeometryTime === null || now - state.lastGeometryTime >= geometryInterval;
+      const geometryInterval = 1000 / 60;
+      const elapsed = now - (state.lastGeometryTime ?? now);
+      // Keep the cadence across rounded/jittered RAF timestamps.
+      const due = state.lastGeometryTime === null || elapsed + 0.5 >= geometryInterval;
       if (state.dirty || (advanced && due)) {
         changed = applyGimiTrack(state) || changed;
+        state.lastGeometryTime =
+          state.dirty || state.lastGeometryTime === null
+            ? now
+            : state.lastGeometryTime + Math.max(1, Math.floor((elapsed + 0.5) / geometryInterval)) * geometryInterval;
         state.dirty = false;
-        state.lastGeometryTime = now;
       }
       playing = playing || advanced || state.dirty;
       continue;
@@ -805,6 +820,7 @@ function registerGimiMesh(mesh, animationId, geometry) {
     state.meshes.add(mesh);
     state.meshesByMesh.set(mesh, meshState);
     mesh.userData.animationState = meshState;
+    meshState.gpu = createAnimationGpu(mesh, meshState, (snapshot) => applyGimiPose(mesh, meshState, snapshot, true));
     installAnimationBounds(mesh, geometry.bounds);
     schedule();
     return true;
@@ -903,6 +919,9 @@ export function resetAnimationRuntime() {
     cancelAnimationFrame(rafId);
   }
   rafId = null;
+  for (const state of tracks.values()) {
+    for (const meshState of state.meshesByMesh.values()) meshState.gpu?.dispose();
+  }
   tracks.clear();
   paused = false;
   playbackNow = 0;
