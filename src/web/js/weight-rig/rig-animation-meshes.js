@@ -96,7 +96,9 @@ export function createAnimationMeshSession({
       state.poseTransforms = participant.transforms;
       state.poseRotations = participant.rotations;
       state.poseActiveVertices = participant.vertices;
-      changed = skinningRuntime.applyDeformation(mesh, state, { request: false, invalidateShadow: false }) || changed;
+      changed =
+        skinningRuntime.applyDeformation(mesh, state, { request: false, invalidateShadow: false, gpu: true }) ||
+        changed;
       if (finalize) skinningRuntime.finalizeDeformationGeometry(mesh, state);
     }
     if (changed) invalidateShadow({ request: false });

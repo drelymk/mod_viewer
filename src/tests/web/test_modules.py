@@ -8,6 +8,8 @@ import pytest
 from tests.support.dds_data import uncompressed_dds
 from core.geometry.loose_parts import find_loose_part_groups
 
+from .support import prepare_compute_clock, set_geometry_blob
+
 
 def test_import_partition_matches_separate_by_loose_parts(module_page):
     points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (3, 0, 0), (4, 0, 0),
@@ -1722,55 +1724,6 @@ export function setBloomSuppressedByWireframe() {}
 """))
 
 
-def _set_geometry_blob(page, geometry):
-    page.evaluate("""async bytes => {
-      const {setGeometryBlob} = await import('./js/textures/decode.js');
-      setGeometryBlob(new Uint8Array(bytes).buffer);
-    }""", list(geometry.data))
-
-
-def _prepare_compute_clock(page):
-    page.evaluate("""async () => {
-      const THREE = await import('three/webgpu');
-      window.__animation = await import('./js/mesh/animation-runtime.js');
-      window.__controls = await import('./js/editing/control-state.js');
-      const {setGeometryBlob} = await import('./js/textures/decode.js');
-      let blob = new Uint8Array();
-      const pending = new Map();
-      let serial = 0;
-      window.requestAnimationFrame = callback => {pending.set(++serial, callback); return serial;};
-      window.cancelAnimationFrame = id => pending.delete(id);
-      window.__frame = now => {
-        const id = Math.min(...pending.keys()), callback = pending.get(id);
-        if (!callback) throw new Error('No animation frame scheduled');
-        pending.delete(id); callback(now);
-      };
-      window.__pendingFrames = () => pending.size;
-      window.__appendGeometry = array => {
-        const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
-        const offset = blob.length, next = new Uint8Array(offset + bytes.length);
-        next.set(blob); next.set(bytes, offset); blob = next;
-        setGeometryBlob(blob.buffer);
-        return {offset, length: bytes.length};
-      };
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
-      geometry.setAttribute('normal', new THREE.Float32BufferAttribute([0,0,2, 0,0,2, 0,0,2], 3));
-      geometry.setIndex([0,1,2]);
-      window.__mesh = new THREE.Mesh(geometry);
-      window.__mesh.userData.basePositions = new Float32Array(geometry.attributes.position.array);
-      window.__position = geometry.attributes.position;
-      window.__normal = geometry.attributes.normal;
-      window.__literal = value => ({kind: 'literal', value});
-      window.__variable = variable => ({kind: 'variable', variable});
-      window.__enabled = variable => [{kind: 'compare', op: '==',
-        left: window.__variable(variable), right: window.__literal(1)}];
-      window.__advance = (variable, speed, conditions) => ({op: 'set', variable, conditions,
-        expression: {kind: 'binary', op: '+', left: window.__variable(variable),
-          right: {kind: 'binary', op: '*', left: window.__literal(speed), right: {kind: 'dt'}}}});
-    }""")
-
-
 def test_control_replay_and_refresh_preserve_legal_live_values(module_page):
     result = module_page.evaluate("""async () => {
       const state = await import('./js/editing/control-state.js');
@@ -2622,8 +2575,8 @@ def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page,
         save_sections(ini, sections)
     _, built = load_mod(ini, tmp_path)
     entry = list(built.meshes.values())[-1]
-    _prepare_compute_clock(module_page)
-    _set_geometry_blob(module_page, built.geometry)
+    prepare_compute_clock(module_page)
+    set_geometry_blob(module_page, built.geometry)
     result = module_page.evaluate('''async ({entry, clocks}) => {
       const T = await import('three/webgpu');
       const {decodeF32, decodeU32} = await import('./js/textures/decode.js');
@@ -2695,7 +2648,7 @@ def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page,
 
 
 def test_baked_playback_pause_seek_controls_and_ownership_lifecycle(module_page):
-    _prepare_compute_clock(module_page)
+    prepare_compute_clock(module_page)
     result = module_page.evaluate('''async () => {
       const T = await import('three/webgpu');
       const runtime = window.__animation, controls = window.__controls, mesh = window.__mesh;
@@ -2810,8 +2763,8 @@ def test_shared_compute_program_plays_pauses_resets_and_releases(module_page, tm
     _, built = load_mod(ini, ini.parent)
     entries = list(built.meshes.values())
     assert len(entries) == 2
-    _prepare_compute_clock(module_page)
-    _set_geometry_blob(module_page, built.geometry)
+    prepare_compute_clock(module_page)
+    set_geometry_blob(module_page, built.geometry)
     result = module_page.evaluate("""async entries => {
       const THREE = await import('three/webgpu');
       const {decodeF32} = await import('./js/textures/decode.js');
@@ -2833,6 +2786,8 @@ def test_shared_compute_program_plays_pauses_resets_and_releases(module_page, tm
       const first = positions();
       window.__frame(10);
       const throttled = positions();
+      window.__frame(20);
+      const at60Hz = positions();
       window.__frame(40);
       const advanced = positions();
       const controlState = JSON.stringify(controls.getControlState());
@@ -2858,7 +2813,7 @@ def test_shared_compute_program_plays_pauses_resets_and_releases(module_page, tm
       controls.setControlValue('anime_state', '1'); runtime.wakeAnimationRuntime(); window.__frame(9040);
       const reset = positions(), trigger = controls.getControlValue('anime_state');
       runtime.resetAnimationRuntime();
-      return {registered, first, throttled, advanced, paused, resumed, continued, reset, trigger, sleeping,
+      return {registered, first, throttled, at60Hz, advanced, paused, resumed, continued, reset, trigger, sleeping,
         viewerPaused,viewerResumed,viewerSleeping,unchangedControls,noFrames,
         viewerOwned,viewerReleased,releasedSleeping,
         stable: meshes.every((mesh, index) =>
@@ -2889,6 +2844,7 @@ def test_shared_compute_program_plays_pauses_resets_and_releases(module_page, tm
             for value in (cosine * x - sine * y, sine * x + cosine * y + .1, 0)]
     assert result["first"][0] == pytest.approx(positions(0, .25, 0), abs=1e-5)
     assert result["throttled"] == result["first"]
+    assert result["at60Hz"][0] == pytest.approx(positions(.002, .35, .2))
     assert result["advanced"][0] == pytest.approx(positions(.004, .45, .4))
     assert result["paused"] == result["resumed"] == result["advanced"]
     assert result["continued"][0] == pytest.approx(positions(.008, .65, .8))
@@ -2908,8 +2864,8 @@ def test_branched_compute_children_play_separately_together_and_keep_missing_ver
     target.write_bytes(target.read_bytes()[:target_size])
     _, built = load_mod(ini, ini.parent)
     entry = next(iter(built.meshes.values()))
-    _prepare_compute_clock(module_page)
-    _set_geometry_blob(module_page, built.geometry)
+    prepare_compute_clock(module_page)
+    set_geometry_blob(module_page, built.geometry)
     result = module_page.evaluate("""async entry => {
       const {decodeF32} = await import('./js/textures/decode.js');
       const runtime = window.__animation, controls = window.__controls, mesh = window.__mesh;
@@ -2996,7 +2952,7 @@ def test_shared_condition_compiler_and_runtime_agree(module_page, source, values
 
 
 def test_sparse_compute_overlay_retains_rest_geometry_and_independent_pass_state(module_page):
-    _prepare_compute_clock(module_page)
+    prepare_compute_clock(module_page)
     result = module_page.evaluate("""() => {
       const runtime = window.__animation, controls = window.__controls, mesh = window.__mesh;
       const append = window.__appendGeometry, variable = window.__variable;

@@ -383,11 +383,15 @@ of documentation, comments and tests; use portable fixtures instead.
   dependency model. Tracks from one program share program state while retaining
   independent output identities; visibility and control changes wake existing
   tracks rather than rebuilding meshes.
-- Mutate stable position/normal attributes from an immutable canonical baseline.
+- Deform stable position/normal buffers from an immutable canonical baseline.
   Sparse WWMI output overlays shape/rest state; disabled passes freeze without
   erasing other passes. Rig/Physics temporarily suspends animation ownership;
   release restores canonical geometry and bounds before resuming. Advance program
-  time at render cadence but cap expensive compute-geometry application at 30 Hz.
+  time at render cadence but cap compute-geometry application at 60 Hz. Use TSL
+  compute with shared GPU vertex buffers for shapes and dual-quaternion skinning;
+  CPU tools evaluate the last applied pose lazily, without per-frame readback.
+  Declare shared outputs as storage-capable vertex attributes before any draw,
+  including frames rendered before the first compute dispatch.
 - Visible active animation starts playback automatically. Viewer playback pause
   freezes runtime time without changing INI controls;
   control changes still evaluate compute programs with zero dt. Paused playback
@@ -918,6 +922,9 @@ of documentation, comments and tests; use portable fixtures instead.
   without rebuilding it. Prepare visible playback meshes lazily and reuse per-mesh
   transform maps and quaternion objects across frames; pause/seek may finalize
   hidden compatible meshes without changing their visibility.
+  Asset clip skinning uses TSL with each mesh's exact palette and all authored
+  influences; upload bone transforms rather than deformed vertices each frame.
+  Keep CPU geometry lazy for tools and finalize bounds on pause/seek/release.
   Secondary-layer conversion requires an explicit authored bone mask, a verified
   shared skeleton and reference-pose local additive metadata. CUE4Parse bakes
   those layers to absolute local transforms. Game extraction may align complete,

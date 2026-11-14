@@ -281,3 +281,52 @@ def wait_texture(page, index=0, role='diffuse'):
     page.wait_for_function("""({index, role}) =>
       !!window.__getTexture(window.modViewer.activeMeshes[index]?.material, role)?.image
     """, arg={'index': index, 'role': role})
+
+
+def set_geometry_blob(page, geometry):
+    page.evaluate("""async bytes => {
+      const {setGeometryBlob} = await import('./js/textures/decode.js');
+      setGeometryBlob(new Uint8Array(bytes).buffer);
+    }""", list(geometry.data))
+
+
+def prepare_compute_clock(page):
+    page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      window.__animation = await import('./js/mesh/animation-runtime.js');
+      window.__controls = await import('./js/editing/control-state.js');
+      const {setGeometryBlob} = await import('./js/textures/decode.js');
+      let blob = new Uint8Array();
+      const pending = new Map();
+      let serial = 0;
+      window.requestAnimationFrame = callback => {pending.set(++serial, callback); return serial;};
+      window.cancelAnimationFrame = id => pending.delete(id);
+      window.__frame = now => {
+        const id = Math.min(...pending.keys()), callback = pending.get(id);
+        if (!callback) throw new Error('No animation frame scheduled');
+        pending.delete(id); callback(now);
+      };
+      window.__pendingFrames = () => pending.size;
+      window.__appendGeometry = array => {
+        const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+        const offset = blob.length, next = new Uint8Array(offset + bytes.length);
+        next.set(blob); next.set(bytes, offset); blob = next;
+        setGeometryBlob(blob.buffer);
+        return {offset, length: bytes.length};
+      };
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+      geometry.setAttribute('normal', new THREE.Float32BufferAttribute([0,0,2, 0,0,2, 0,0,2], 3));
+      geometry.setIndex([0,1,2]);
+      window.__mesh = new THREE.Mesh(geometry);
+      window.__mesh.userData.basePositions = new Float32Array(geometry.attributes.position.array);
+      window.__position = geometry.attributes.position;
+      window.__normal = geometry.attributes.normal;
+      window.__literal = value => ({kind: 'literal', value});
+      window.__variable = variable => ({kind: 'variable', variable});
+      window.__enabled = variable => [{kind: 'compare', op: '==',
+        left: window.__variable(variable), right: window.__literal(1)}];
+      window.__advance = (variable, speed, conditions) => ({op: 'set', variable, conditions,
+        expression: {kind: 'binary', op: '+', left: window.__variable(variable),
+          right: {kind: 'binary', op: '*', left: window.__literal(speed), right: {kind: 'dt'}}}});
+    }""")

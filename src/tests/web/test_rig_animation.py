@@ -29,6 +29,10 @@ def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_p
       let prepared = 0;
       let filtered = false;
       let failPrepare = false;
+      let scheduled = null;
+      window.requestAnimationFrame = callback => {scheduled=callback;return 1;};
+      window.cancelAnimationFrame = () => {scheduled=null;};
+      Object.defineProperty(performance,'now',{value:()=>0});
       const runtime = createRigAnimation({getRig:()=>rig,
         loadClip:()=>new Promise(r=>{resolve=r;}),applyPose:p=>{latest=p;if(!p)filtered=false;},
         suspendPhysics:v=>{suspended=v;},prepare:()=>{
@@ -40,6 +44,10 @@ def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_p
       const stale = !runtime.snapshot().selected && latest===null && !suspended && prepared===0;
       const second = runtime.select('clip01');resolve(response);await second;
       const started=runtime.snapshot().playing&&suspended&&prepared===1;
+      scheduled(16.6);
+      const firstFrame=runtime.snapshot().time;
+      scheduled(33.4);
+      const secondFrame=runtime.snapshot().time;
       runtime.setPlaying(false);runtime.seek(.5);
       const paused=runtime.snapshot();
       const posed=latest instanceof Map;
@@ -57,12 +65,14 @@ def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_p
         t(runtime.snapshot().errorKey)!==runtime.snapshot().error;
       runtime.stop();
       URL.revokeObjectURL(url);
-      return {point,endpoint,stale,started,paused,posed,stopped,recovered,translatedError};
+      return {point,endpoint,stale,started,firstFrame,secondFrame,paused,posed,stopped,recovered,translatedError};
     }''')
     assert result['point'] == pytest.approx([1, 2, 0], abs=1e-6)
     assert result['endpoint'] == pytest.approx([0, 0, 0], abs=1e-6)
     assert result['stale'] and result['started'] and result['posed'] and result['stopped'] and result['recovered']
     assert result['translatedError']
+    assert result['firstFrame'] == pytest.approx(.0166)
+    assert result['secondFrame'] == pytest.approx(.0334)
     assert not result['paused']['playing'] and result['paused']['time'] == .5
 
 
@@ -127,7 +137,9 @@ def test_animation_mesh_preparation_is_lazy_and_frame_maps_are_reused(module_pag
 
 @pytest.mark.parametrize('kind', ['asset', 'mod'])
 @pytest.mark.parametrize('partial', [False, True])
-def test_animation_panel_and_weight_rig_model_lifecycle(viewer, kind, partial):
+def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, partial):
+    from tests.support.animations import compute_mod, load_mod
+
     payload, weights = weighted_payload()
     if partial:
         _, weights = weighted_payload(include_third_member=True)
@@ -150,7 +162,15 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, kind, partial):
                               + [2, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1]))
     clip = dict(status='ok', clip=dict(id='clip01', name='Clip 01', skeleton_id='rig01',
         frame_count=2, bone_count=2, duration=1, data=dict(length=len(data))))
-    page = viewer({'model01': payload, 'model02': model_payload(), 'fixture-weights': weights})
+    ini = compute_mod(tmp_path / 'mod')
+    parsed, built = load_mod(ini, ini.parent)
+    replacement = model_payload()
+    replacement['meshes'] = built.meshes
+    replacement['_fixture_blob'] = bytes(built.geometry.data)
+    replacement['state']['defaults'] = parsed.defaults
+    page = viewer({'model01': payload, 'model02': replacement, 'fixture-weights': weights})
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
     def load_clip(_source):
         clip['clip']['data']['url'] = server.publish_geometry(data, replace=False)
         return clip
@@ -200,6 +220,16 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, kind, partial):
         }''')
     page.locator('.rig-animation-select').select_option('clip01')
     page.wait_for_function('window.__animationApi.getRigAnimationState().playing')
+    page.wait_for_function('''async () => {
+      const {weightRigSkinningRuntime:skin}=await import('./js/weight-rig/weight-rig-core.js');
+      return !!skin.getSkinningState(window.modViewer.activeMeshes[0])?.animationGpu;
+    }''')
+    assert page.evaluate('''async () => {
+      const mesh=window.modViewer.activeMeshes[0],raw=mesh.geometry.attributes.position.array;
+      const snapshot=raw.slice();
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      return raw.every((value,index)=>Object.is(value,snapshot[index]));
+    }''')
     if partial:
         assert page.evaluate('window.modViewer.activeMeshes.map(mesh=>mesh.visible)') == [True, False, False, False]
         assert page.evaluate('window.modViewer.activeMeshes[2].userData.looseParts.every(part=>!part.visible)')
@@ -280,6 +310,14 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, kind, partial):
     page.wait_for_function('window.__animationApi.getRigAnimationState().playing')
     open_model(page, 'model02')
     wait_loaded(page)
+    page.wait_for_function('window.modViewer.activeMeshes[0].userData.animationState?.gpu != null')
+    assert page.evaluate('''async () => {
+      const raw=window.modViewer.activeMeshes[0].geometry.attributes.position.array,snapshot=raw.slice();
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      return raw.every((value,index)=>Object.is(value,snapshot[index]));
+    }''')
+    assert page.locator('#renderer-error').is_hidden()
+    assert errors == []
     assert page.evaluate('''() => {
       const state = window.__animationApi.getRigAnimationState();
       return !state.playing && !state.loading && !state.selected && state.clips.length===0 &&

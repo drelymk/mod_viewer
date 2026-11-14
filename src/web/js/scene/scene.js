@@ -13,6 +13,7 @@ import { createViewportRenderPipeline } from './viewport-render-pipeline.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
 import { createPhysicsDragController } from './physics-drag-controller.js';
 import { t } from '../i18n/index.js';
+import { setAnimationComputeRenderer, withAnimationGpuAccess } from '../mesh/deformation-gpu.js';
 
 const container = document.getElementById('canvas-container');
 const openButton = document.getElementById('open-btn');
@@ -227,7 +228,7 @@ function renderFrame() {
   cameraFrame.updateClipping();
   updateOutlineProjectionScale(camera, controls.target, renderer.domElement.clientHeight, renderer.getPixelRatio());
   viewGizmoController.updateAxes();
-  viewportRenderPipeline.render();
+  withAnimationGpuAccess(() => viewportRenderPipeline.render());
   renderCount += 1;
   if (snapActive) requestRender();
 }
@@ -240,6 +241,7 @@ export const rendererReady = initializeRenderer()
     if (!isRendererAvailable()) {
       throw new Error('The renderer is not using the required WebGPU core backend.');
     }
+    setAnimationComputeRenderer(renderer);
     requestRender();
     openButton.disabled = !isRendererAvailable();
     void environmentController.prepare().catch((error) => {

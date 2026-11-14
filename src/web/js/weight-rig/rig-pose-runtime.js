@@ -411,7 +411,7 @@ export function createRigPoseRuntime({
         rig.poseSourceBoneIdsByMesh.set(mesh, boneKey);
         if (shown(mesh)) shownMeshes.push([mesh, stateForMesh]);
       });
-      const physicsRig = sourceRig.physicsRig;
+      const physicsRig = rig.animationTransforms ? null : sourceRig.physicsRig;
       if (physicsRig?.physicsState) {
         physicsRuntime.refreshParticipantDerivedState(
           [...physicsRig.meshes][0],
@@ -430,6 +430,7 @@ export function createRigPoseRuntime({
               request: false,
               invalidateShadow: false,
               skipHidden: false,
+              gpu: !!rig.animationTransforms,
             }) || changed;
         }
       }
