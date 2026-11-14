@@ -101,7 +101,12 @@ def list_meshes(client, folder, cancel):
     try:
         return client.search("", "SkeletalMesh", folder)
     except SearchTruncated:
-        packages = []
+        # Child recursion cannot recover direct packages omitted by a broad search.
+        # A truncated direct search must fail the build, never publish a partial index.
+        try:
+            packages = client.search("", "SkeletalMesh", folder, recursive=False)
+        except SearchTruncated as error:
+            raise SearchTruncated("The game index is incomplete: a folder exceeds the native search limit.") from error
         for name in client.folders(folder):
             packages += list_meshes(client, folder + "/" + name, cancel)
         return packages
@@ -127,9 +132,10 @@ def build(client, game_folder, progress, cancel):
                 shapes = pipeline.section_shapes(file) if file else None
             except (ValueError, TypeError, AttributeError, OSError):
                 shapes = None
+            if shapes is None or any(type(number) is not int for shape in shapes for number in shape):
+                raise ValueError("The game index is incomplete: mesh metadata could not be read. Existing index data was preserved.")
             if shapes:
-                meshes[package] = sorted([vertices, indices] for vertices, indices in shapes
-                                         if type(vertices) is int and type(indices) is int)
+                meshes[package] = sorted([vertices, indices] for vertices, indices in shapes)
     progress("index", len(packages), len(packages))
     payload = json.dumps(dict(format=FORMAT, fingerprint=current, meshes=meshes), separators=(",", ":")).encode("utf-8")
     if len(payload) > MAX_BYTES:

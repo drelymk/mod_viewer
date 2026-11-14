@@ -422,7 +422,9 @@ rows, each with `Select folder`); the saved WWMI folder is prefilled here.
 Choose a folder: a character's mesh, skeleton and secondary animations can span
 several archives.
 
-The first run downloads a pinned, checksum-verified extraction tool. The viewer
+The application bundles the pinned extraction helper and checksum-verified
+WuWa AES keys during packaging. Extraction works offline; a game update may
+require a new Mod Viewer release with updated keys or parser support. The viewer
 verifies the matching mesh against the Asset's captured positions, UVs and
 weights before saving `Rig.json`, `Animation`, and `RigExtraction.json` inside
 the Asset. It imports compatible skeletal clips from the character's game

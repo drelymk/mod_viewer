@@ -10,7 +10,7 @@ from app.settings import paths
 
 
 PARSER_COMMIT = "cb909733773daea9015a67f6955d6f2ec24d3629"
-VERSION = "direct-1-" + PARSER_COMMIT[:12]
+VERSION = "direct-2-" + PARSER_COMMIT[:12]
 MAX_RESPONSE = 32 * 1024 * 1024
 
 
@@ -37,7 +37,7 @@ def ensure_runtime(cancel, bundle=None):
             raise ValueError("Unsupported extraction runtime version.")
         files = record.get("files", {})
         required = {executable.name, "CUE4Parse.dll", "CUE4Parse-Conversion.dll", "CUE4Parse-Natives.dll",
-                    "oodle-data-shared.dll", "zlib-ng2.dll", "ModViewer.GameExtract.deps.json", "ModViewer.GameExtract.runtimeconfig.json"}
+                    "oodle-data-shared.dll", "zlib-ng2.dll", "keys.json", "ModViewer.GameExtract.deps.json", "ModViewer.GameExtract.runtimeconfig.json"}
         if not isinstance(files, dict) or not required.issubset(files) or len(files) > 2000:
             raise ValueError("Incomplete extraction runtime manifest.")
         for relative, digest in files.items():
@@ -113,7 +113,7 @@ class Client:
                 raise ValueError("The game extraction response is too large.")
             result = json.loads(output.read_text(encoding="utf-8-sig"))
             if not isinstance(result, dict) or result.get("error"):
-                raise ValueError("Game data could not be extracted. Check that the selected installation is complete and its version is supported.")
+                raise ValueError("Game data could not be extracted. Check that the installation is complete. A game update may require a newer Mod Viewer release with updated bundled keys or parser support.")
             return result
         except (OSError, json.JSONDecodeError) as error:
             self.close()
@@ -124,10 +124,10 @@ class Client:
         finally:
             output.unlink(missing_ok=True)
 
-    def search(self, query, kind, under):
+    def search(self, query, kind, under, *, recursive=True):
         if query and not query[0].isalnum():
             raise ValueError("Use a character name beginning with a letter or number.")
-        result = self.call("search", query=query, type=kind, under=under)
+        result = self.call("search", query=query, type=kind, under=under, recursive=recursive)
         if result.get("truncated"):
             raise SearchTruncated("The game search is too broad. Use a more specific character name.")
         packages = [row["path"] for row in result.get("results", [])]

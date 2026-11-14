@@ -1,6 +1,7 @@
 import hashlib
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import shutil
 import struct
@@ -11,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.assets import index
-from app.assets.game_extract import pipeline, runtime
+from app.assets.game_extract import native, pipeline, runtime
 from app.assets.game_extract.native import capture, read_mesh, match_components, make_rig, humanoid_controls
 from app.assets.rig import validate_rig
 from app.bridge.api import ModViewerAPI
@@ -112,6 +113,88 @@ def fixture(tmp_path, scale=(1, 1, 1)):
                 result[package] = dict(state="completed", rootFiles=[str(file)], failures=[])
             return result
     return root, asset, record, Client(), base_rows
+
+
+@pytest.mark.parametrize("kind", ["metadata", "fmt", "vb", "ib", "mesh", "base", "layer"])
+def test_oversized_extraction_files_are_rejected_before_reading(tmp_path, monkeypatch, kind):
+    root, asset, record, client, _ = fixture(tmp_path)
+    geometry = asset / "11111111"
+    target = {"metadata": geometry / "Metadata.json", "fmt": geometry / "Component 0.fmt",
+              "vb": geometry / "Component 0.vb", "ib": geometry / "Component 0.ib",
+              "base": client.work / "animations/Clip01.psa", "layer": client.work / "animations/Rib_Clip01.psa"}.get(kind)
+    if kind == "mesh":
+        target = client.export("mesh", MESH, client.work / "mesh")[0]
+    before = {file: file.read_bytes() for file in asset.rglob("*") if file.is_file()}
+    original_stat, original_open = Path.stat, Path.open
+
+    def stat(file, *args, **kwargs):
+        result = original_stat(file, *args, **kwargs)
+        if file == target:
+            fields = list(result)
+            fields[6] = 1024 ** 4
+            return os.stat_result(fields)
+        return result
+
+    def open_file(file, mode="r", *args, **kwargs):
+        if file == target and "r" in mode:
+            pytest.fail("Oversized input was opened for reading.")
+        return original_open(file, mode, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "stat", stat)
+        patch.setattr(Path, "open", open_file)
+        if kind in ("base", "layer"):
+            if kind == "base":
+                with pytest.raises(ValueError, match="Native animation exceeds its size limit"):
+                    pipeline.build(client, str(root), record, tmp_path / "output", "Character01", lambda *_: None, threading.Event())
+            else:
+                result, _ = pipeline.build(client, str(root), record, tmp_path / "output", "Character01", lambda *_: None, threading.Event())
+                assert result["secondary"] == 0 and result["skipped_layers"] == 1
+        else:
+            with pytest.raises(ValueError, match="size limit"):
+                read_mesh(target) if kind == "mesh" else capture(str(root), record)
+    assert before == {file: file.read_bytes() for file in asset.rglob("*") if file.is_file()}
+
+
+@pytest.mark.parametrize("attribute,count", [
+    ("VERTICES", native.MAX_VERTICES + 1), ("INDICES", native.MAX_INDICES + 1),
+    ("WEIGHTS", native.MAX_VERTICES * native.MAX_INFLUENCES + 1),
+    ("TEXCOORDS", native.MAX_VERTICES + 1), ("TEXCOORDS", 4), ("WEIGHTS", 9),
+])
+def test_native_geometry_counts_are_bounded_before_decoding(tmp_path, attribute, count):
+    _, _, _, client, _ = fixture(tmp_path)
+    file = client.export("mesh", MESH, client.work / "mesh")[0]
+    data = file.read_bytes()
+    reader = native.Reader(data)
+    reader.take(8)
+    reader.string()
+    reader.take(1)
+    reader.string()
+    reader.string()
+    reader.take(1)
+    header = data[:reader.tell()]
+    outer = reader.attributes()
+    levels = native.Reader(outer["LODS"])
+    levels.integer()
+    name = levels.string()
+    level = levels.attributes()
+    if attribute == "WEIGHTS" and count == 9:
+        payload = b"".join(struct.pack("<Hif", 0, 0, 0.1) for _ in range(count))
+    else:
+        payload = b""  # Counts must fail before decoding any declared records.
+    level[attribute] = ((struct.pack("<i", 1) + string("UV0")) if attribute == "TEXCOORDS" else b"") + struct.pack("<i", count) + payload
+    outer["LODS"] = struct.pack("<i", 1) + string(name) + attributes(level)
+    file.write_bytes(header + attributes(outer))
+    with pytest.raises(ValueError, match="limit|influences"):
+        read_mesh(file)
+
+
+def test_native_mesh_decompression_is_bounded(tmp_path):
+    file = tmp_path / "mesh.uemodel"
+    file.write_bytes(b"UEFORMAT" + string("UEMODEL") + b"\x0a" + string("Model01") + string(MESH)
+                     + b"\x01" + string("GZIP") + struct.pack("<i", native.MAX_MESH_BYTES + 1))
+    with pytest.raises(ValueError, match="count exceeds its limit"):
+        read_mesh(file)
 
 
 def test_mesh_name_is_tried_first_then_captured_geometry(tmp_path):
@@ -577,6 +660,11 @@ def test_install_transaction_rolls_back_every_sidecar(tmp_path, monkeypatch):
 
 def test_job_picker_authorization_cancellation_revision_and_save_lifecycle(tmp_path, monkeypatch):
     root, asset, record, _, _ = fixture(tmp_path)
+    (asset / "Rig.json").write_bytes(b"existing rig")
+    (asset / "Animation").mkdir()
+    (asset / "Animation/manifest.json").write_bytes(b"existing animation")
+    (asset / "RigExtraction.json").write_bytes(b"existing report")
+    original = {file: file.read_bytes() for file in asset.rglob("*") if file.is_file()}
     monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
     game = tmp_path / "game/Client/Content/Paks"
     game.mkdir(parents=True)
@@ -619,7 +707,8 @@ def test_job_picker_authorization_cancellation_revision_and_save_lifecycle(tmp_p
     assert "error" in service.start(selected, picked["token"])
     assert service.cancel(job)["cancelled"]
     resume.set()
-    assert finish(job)["status"] == "cancelled" and not (asset / "Rig.json").exists()
+    assert finish(job)["status"] == "cancelled"
+    assert original == {file: file.read_bytes() for file in asset.rglob("*") if file.is_file()}
     entered.clear()
     resume.clear()
     job = service.start(selected, picked["token"])["job_id"]
@@ -685,7 +774,7 @@ def test_bundled_runtime_pin_integrity_and_containment(tmp_path):
     bundle = tmp_path / "bundle"
     bundle.mkdir()
     required = ("ModViewer.GameExtract.exe", "CUE4Parse.dll", "CUE4Parse-Conversion.dll", "CUE4Parse-Natives.dll",
-                "oodle-data-shared.dll", "zlib-ng2.dll", "ModViewer.GameExtract.deps.json", "ModViewer.GameExtract.runtimeconfig.json")
+                "oodle-data-shared.dll", "zlib-ng2.dll", "keys.json", "ModViewer.GameExtract.deps.json", "ModViewer.GameExtract.runtimeconfig.json")
     files = {}
     for name in required:
         (bundle / name).write_bytes(b"synthetic runtime")
@@ -694,6 +783,16 @@ def test_bundled_runtime_pin_integrity_and_containment(tmp_path):
     manifest = bundle / "runtime.json"
     manifest.write_text(json.dumps(record))
     assert runtime.ensure_runtime(threading.Event(), bundle) == bundle / required[0]
+    (bundle / "keys.json").write_bytes(b"modified keys")
+    with pytest.raises(ValueError, match="checksum"):
+        runtime.ensure_runtime(threading.Event(), bundle)
+    (bundle / "keys.json").write_bytes(b"synthetic runtime")
+    key_digest = files.pop("keys.json")
+    manifest.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="Incomplete"):
+        runtime.ensure_runtime(threading.Event(), bundle)
+    files["keys.json"] = key_digest
+    manifest.write_text(json.dumps(record))
     (bundle / required[0]).write_bytes(b"modified")
     with pytest.raises(ValueError, match="checksum"):
         runtime.ensure_runtime(threading.Event(), bundle)
@@ -749,6 +848,8 @@ def test_native_session_reuse_redaction_and_cancellation(tmp_path, monkeypatch):
     for _ in range(2):
         assert client.search("name with spaces", "SkeletalMesh", "Client/Content/Aki") == [MESH]
     assert len(calls) == 1 and requests[0]["query"] == "name with spaces"
+    assert client.search("", "SkeletalMesh", "Client/Content/Aki", recursive=False) == [MESH]
+    assert requests[-1]["recursive"] is False and len(calls) == 1
     assert calls[0][0] == [str(tmp_path / "tool.exe"), "--paks", str(game), "--work", str(work)]
     assert "shell" not in calls[0][1] and not (work / "games.json").exists()
     response = {"error": "synthetic-private-token"}

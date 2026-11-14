@@ -18,8 +18,12 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / "native/game-extract"
 PARSER_COMMIT = "cb909733773daea9015a67f6955d6f2ec24d3629"
-VERSION = "direct-1-" + PARSER_COMMIT[:12]
+VERSION = "direct-2-" + PARSER_COMMIT[:12]
 PINS = {
+    "keys": (
+        "https://raw.githubusercontent.com/yarik0chka/wuwa-keys/21757cc025d5c7660fa4ad485411f4c5e35aa025/keys.json",
+        "a7c1e540b93e14b829967c2c5cb7e46d57d6a701cb7087e904ebe1c3f67679b5",
+    ),
     "parser": (
         f"https://codeload.github.com/FabianFG/CUE4Parse/zip/{PARSER_COMMIT}",
         "c9e44e1c2ce76d4332d97e75b2d16fb99120a7c521ca24b88c0361402842792f",
@@ -197,6 +201,7 @@ def build(dotnet="dotnet", *, update_locks=False, verify_format=False):
             archive.read("bin/oodle-data-shared.dll")
         )
     (output / "zlib-ng2.dll").write_bytes(gzip.decompress(download("zlib", cache)))
+    (output / "keys.json").write_bytes(download("keys", cache))
     notices = output / "licenses"
     notices.mkdir(exist_ok=True)
     for name, directory in (("CUE4Parse", parser), ("ACL", acl), ("RTM", rtm)):

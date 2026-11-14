@@ -47,7 +47,8 @@ upstream files.
   https://github.com/NotOfficer/Zlib-ng.NET (MIT wrapper; zlib license for zlib-ng).
 - The self-contained .NET runtime and locked NuGet libraries retain their
   upstream licenses. ImageSharp 3.1.12 retains its Six Labors Split License and
-  known upstream advisories; the helper accepts no images and exports no textures.
+  known upstream advisories. The affected image operations are unreachable through
+  the helper's extraction operations; see the [reachability review](../native/game-extract/README.md).
 - The bundled `assets/game-extract/licenses` directory contains source licenses,
   NuGet license texts, package metadata and a package inventory. Dependency pins
   and source archive checksums are maintained in `tools/build_game_extract.py`

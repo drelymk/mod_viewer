@@ -940,8 +940,11 @@ of documentation, comments and tests; use portable fixtures instead.
   picker grants use opaque tokens independent of Mod/Asset folder access. Pin
   and verify the native runtime; run it with argument arrays and hidden consoles.
   Use the bundled direct CUE4Parse helper at its pinned parser revision, with
-  locked build dependencies and verified runtime file hashes. Expose only package
-  search/folders, mesh/property and animation export. Keep one mounted provider
+  locked build dependencies and verified runtime file hashes. Bundle checksum-pinned
+  WuWa AES keys at build time and verify them with the runtime manifest. Extraction
+  needs no network access and never downloads or updates keys at runtime. A game
+  update may require a new viewer build with updated keys or parser support.
+  Expose only package search/folders, mesh/property and animation export. Keep one mounted provider
   per job, export only into private staging, and terminate it before staging
   cleanup on completion, failure or cancellation. Never download executable code
   during extraction or silently select a newer parser.
@@ -981,6 +984,9 @@ of documentation, comments and tests; use portable fixtures instead.
   `Role/*` and `Prop/RoleProp`, keyed by the runtime version plus every archive's
   name, size and mtime. It is an accelerator: native exports still prove each
   mesh, and a missing, stale or invalid index falls back to native searches.
+  A truncated direct-folder search or unreadable mesh metadata fails the index
+  build without publishing partial data. Broad scans include direct packages
+  before recursing into children.
   Building is explicit (Settings confirm dialog or index button) or automatic
   when extracting without a ready index; the extraction Browse pick is saved to
   Settings, and clearing the WWMI folder deletes its index.

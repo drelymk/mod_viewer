@@ -10,8 +10,12 @@ import shutil
 from app.assets.animation_conversion import ReferencePoseMismatch, convert_clip, merge_reference_layer, reference_layer_timing
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
-from .native import capture, make_rig, match_components, read_mesh
+from .native import capture, make_rig, match_components, read_mesh, read_limited
 from .runtime import ExtractionCancelled, check_cancelled
+
+
+# ActorX's 32-byte keys plus skeleton headers for the viewer's 128 MiB clip limit.
+MAX_ANIMATION_BYTES = 160 * 1024 * 1024
 
 
 def document(file, limit=64 * 1024 * 1024):
@@ -511,7 +515,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             continue
         duration = item["Properties"]["SequenceLength"]
         try:
-            frames, binary = convert(file.read_bytes(), item, duration)
+            frames, binary = convert(read_limited(file, MAX_ANIMATION_BYTES, "Native animation"), item, duration)
             if frames != item["Properties"]["NumFrames"]:
                 raise ValueError("Animation frame count differs from its sequence metadata.")
         except (ValueError, KeyError) as error:
@@ -528,11 +532,12 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                 if layer_file is None:
                     raise ValueError("Secondary clip is unavailable.")
                 layer_duration = timing["layer_duration"]
-                layer_frames, layer_binary = convert(layer_file.read_bytes(), sequences[layer_path], layer_duration)
+                layer_data = read_limited(layer_file, MAX_ANIMATION_BYTES, "Native animation")
+                layer_frames, layer_binary = convert(layer_data, sequences[layer_path], layer_duration)
                 if layer_frames != timing["layer_frames"]:
                     raise ValueError("Secondary clip frame count differs from its sequence metadata.")
                 binary = merge_reference_layer(binary, layer_binary, rig, mask, duration=duration, layer_duration=layer_duration)
-                layer_info = dict(source=layer_path, sha256=hashlib.sha256(layer_file.read_bytes()).hexdigest(), bone_ids=mask, timing=timing)
+                layer_info = dict(source=layer_path, sha256=hashlib.sha256(layer_data).hexdigest(), bone_ids=mask, timing=timing)
                 secondary += 1
             except (ValueError, KeyError) as error:
                 reject("layer", layer_path, str(error) if isinstance(error, ValueError) else "Secondary clip data is incomplete.", package)

@@ -1,7 +1,10 @@
 import json
+from pathlib import Path
 import threading
 import time
 from types import SimpleNamespace
+
+import pytest
 
 from app.assets.game_extract import game_index, pipeline, runtime
 from app.assets.game_extract.runtime import SearchTruncated
@@ -27,9 +30,9 @@ class IndexClient:
     def close(self):
         pass
 
-    def search(self, query, kind, under):
+    def search(self, query, kind, under, *, recursive=True):
         self.searches.append(under)
-        if under == pipeline.ROLE_ROOT:
+        if under == pipeline.ROLE_ROOT and recursive:
             raise SearchTruncated("too broad")
         return {pipeline.ROLE_ROOT + "/BodyType01": [MESH, MESH + "Other"]}.get(under, [])
 
@@ -81,6 +84,51 @@ def test_index_replaces_native_mesh_lookup_without_changing_the_result(tmp_path)
     result, _ = pipeline.build(client, str(root), record, tmp_path / "output", "Unrelated Name", lambda *_: None, threading.Event(), index)
     assert result["bones"] == 2 and result["unmatched_components"] == 0
     assert "SkeletalMesh" not in searched
+
+
+@pytest.mark.parametrize("failure", ["search", "export", "metadata"])
+def test_incomplete_index_never_becomes_ready_and_preserves_native_discovery(tmp_path, monkeypatch, failure):
+    monkeypatch.setattr(paths, "asset_index_dir", lambda: str(tmp_path / "asset-index"))
+    root, _, record, client, _ = fixture(tmp_path)
+    game, _ = game_folder(tmp_path)
+    search = client.search
+    index_client = IndexClient(client.work)
+    indexed_search = index_client.search
+
+    def direct_search(query, kind, under, *, recursive=True):
+        if under == pipeline.ROLE_ROOT and not recursive:
+            return [MESH + "Direct"]
+        return indexed_search(query, kind, under, recursive=recursive)
+
+    index_client.search = direct_search
+    assert MESH + "Direct" in game_index.list_meshes(index_client, pipeline.ROLE_ROOT, threading.Event())
+
+    def incomplete_search(query, kind, under, *, recursive=True):
+        if under == pipeline.ROLE_ROOT + "/BodyType01":
+            raise SearchTruncated("Incomplete direct game search.")
+        return direct_search(query, kind, under, recursive=recursive)
+
+    if failure == "search":
+        index_client.search = incomplete_search
+    else:
+        batch = index_client.batch
+
+        def incomplete_batch(kind, packages, destination):
+            files = batch(kind, packages, destination)
+            if failure == "export":
+                files[MESH] = dict(state="failed", rootFiles=[], failures=["Export failed."])
+            else:
+                Path(files[MESH]["rootFiles"][0]).write_text("{invalid metadata")
+            return files
+
+        index_client.batch = incomplete_batch
+    with pytest.raises(ValueError, match="[Ii]ncomplete"):
+        game_index.ensure(index_client, game, lambda *_: None, threading.Event())
+    assert game_index.status(game)["state"] == "missing"
+    # Extraction's existing no-index path still proves meshes omitted by the failed scan.
+    client.search = search
+    result, _ = pipeline.build(client, str(root), record, tmp_path / "output", "", lambda *_: None, threading.Event())
+    assert result["bones"] == 2 and result["unmatched_components"] == 0
 
 
 def test_picked_game_updates_settings_and_index_job_uses_it(tmp_path, monkeypatch):

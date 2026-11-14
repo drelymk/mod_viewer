@@ -14,9 +14,27 @@ from app.assets.loader.wwmi import _metadata_paths
 from app.assets.rig import validate_rig, _humanoid_controls as humanoid_hierarchy
 
 
+MAX_MESH_BYTES = 64 * 1024 * 1024
+MAX_VERTICES = 250000
+MAX_INDICES = 1500000
+MAX_UV_VALUES = 1000000
+MAX_INFLUENCES = 8
+
+
+def read_limited(file, limit, label):
+    file = Path(file)
+    if file.stat().st_size > limit:
+        raise ValueError(f"{label} exceeds its size limit.")
+    with file.open("rb") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"{label} exceeds its size limit.")
+    return data
+
+
 class Reader(BytesIO):
     def take(self, size):
-        if not 0 <= size <= 512 * 1024 * 1024:
+        if not 0 <= size <= MAX_MESH_BYTES:
             raise ValueError("Native game resource exceeds its size limit.")
         result = self.read(size)
         if len(result) != size:
@@ -26,7 +44,7 @@ class Reader(BytesIO):
     def integer(self):
         return struct.unpack("<i", self.take(4))[0]
 
-    def count(self, limit=5000000):
+    def count(self, limit):
         value = self.integer()
         if not 0 <= value <= limit:
             raise ValueError("Native game resource count exceeds its limit.")
@@ -41,22 +59,19 @@ class Reader(BytesIO):
             name = self.string()
             if name in result:
                 raise ValueError("Duplicate native game attribute.")
-            result[name] = self.take(self.count(512 * 1024 * 1024))
+            result[name] = self.take(self.count(MAX_MESH_BYTES))
         return result
 
 
 def read_mesh(file):
-    file = Path(file)
-    if file.stat().st_size > 512 * 1024 * 1024:
-        raise ValueError("Native mesh is too large.")
-    reader = Reader(file.read_bytes())
+    reader = Reader(read_limited(file, MAX_MESH_BYTES, "Native mesh"))
     if reader.take(8) != b"UEFORMAT" or reader.string() != "UEMODEL" or reader.take(1) != b"\x0a":
         raise ValueError("Unsupported native mesh format.")
     name, package = reader.string(), reader.string()
     if reader.take(1) == b"\x01":
         codec = reader.string()
-        size = reader.count(512 * 1024 * 1024)
-        packed = reader.take(reader.count(512 * 1024 * 1024))
+        size = reader.count(MAX_MESH_BYTES)
+        packed = reader.take(reader.count(MAX_MESH_BYTES))
         if codec != "GZIP":
             raise ValueError("Unsupported native mesh compression.")
         with gzip.GzipFile(fileobj=BytesIO(packed)) as stream:
@@ -79,30 +94,37 @@ def read_mesh(file):
         bones.append(dict(name=bone_name, parent=parent, translation=list(values[:3]),
                           rotation=list(values[3:7]), scale=list(values[7:])))
     vertices = Reader(level["VERTICES"])
-    positions = [struct.unpack("<3f", vertices.take(12)) for _ in range(vertices.count())]
+    positions = [struct.unpack("<3f", vertices.take(12)) for _ in range(vertices.count(MAX_VERTICES))]
     if not positions or not all(math.isfinite(v) for row in positions for v in row):
         raise ValueError("Native positions are invalid.")
     source = Reader(level["INDICES"])
-    indices = [source.integer() for _ in range(source.count(15000000))]
+    indices = [source.integer() for _ in range(source.count(MAX_INDICES))]
     if any(not 0 <= index < len(positions) for index in indices):
         raise ValueError("Native mesh indices are invalid.")
     source = Reader(level["TEXCOORDS"])
     uv = []
     for _ in range(source.count(16)):
         source.string()
-        uv.append([struct.unpack("<2f", source.take(8)) for _ in range(source.count())])
+        count = source.count(MAX_VERTICES)
+        if count != len(positions) or (len(uv) + 1) * count > MAX_UV_VALUES:
+            raise ValueError("Native texture coordinates exceed their geometry limits.")
+        uv.append([struct.unpack("<2f", source.take(8)) for _ in range(count)])
     source = Reader(level["MATERIALS"])
     sections = []
     for _ in range(source.count(4096)):
         source.string()
         source.string()
-        sections.append((source.integer(), source.count(5000000) * 3))
+        sections.append((source.integer(), source.count(MAX_INDICES // 3) * 3))
     weights = [[] for _ in positions]
     source = Reader(level["WEIGHTS"])
-    for _ in range(source.count(40000000)):
+    influences = bytearray(len(positions))
+    for _ in range(source.count(MAX_VERTICES * MAX_INFLUENCES)):
         bone, vertex, weight = struct.unpack("<Hif", source.take(10))
         if not 0 <= vertex < len(positions) or bone >= len(bones) or not math.isfinite(weight) or not 0 <= weight <= 1:
             raise ValueError("Native mesh weights are invalid.")
+        if influences[vertex] == MAX_INFLUENCES:
+            raise ValueError("Native mesh has too many influences per vertex.")
+        influences[vertex] += 1
         quantized = round(weight * 255)
         if quantized:
             weights[vertex].append((bone, quantized))
@@ -117,8 +139,9 @@ def capture(root, record):
         if not metadata_file:
             raise ValueError("Asset geometry metadata is unavailable.")
         metadata_file = Path(metadata_file)
-        metadata = json.loads(metadata_file.read_text(encoding="utf-8-sig"))
-        files[str(metadata_file)] = hashlib.sha256(metadata_file.read_bytes()).hexdigest()
+        data = read_limited(metadata_file, 4 * 1024 * 1024, "Captured metadata")
+        metadata = json.loads(data.decode("utf-8-sig"))
+        files[str(metadata_file)] = hashlib.sha256(data).hexdigest()
         for ordinal, component in enumerate(metadata["components"]):
             resources = {}
             for extension in ("fmt", "vb", "ib"):
@@ -127,9 +150,8 @@ def capture(root, record):
                 safe = paths.safe_asset_path(root, relative_file) if relative_file else None
                 if not safe:
                     raise ValueError("Rig extraction requires every captured component buffer.")
-                data = Path(safe).read_bytes()
-                if len(data) > 128 * 1024 * 1024:
-                    raise ValueError("Captured component exceeds its size limit.")
+                limit = 1024 * 1024 if extension == "fmt" else 128 * 1024 * 1024
+                data = read_limited(safe, limit, "Captured component")
                 files[str(file)] = hashlib.sha256(data).hexdigest()
                 resources[extension] = data if extension != "fmt" else parse_fmt(file)
             components.append(dict(geometry_hash=metadata["vb0_hash"], component_ordinal=ordinal,

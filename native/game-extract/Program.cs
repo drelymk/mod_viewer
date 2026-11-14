@@ -26,6 +26,7 @@ internal static class Program
         if (args is ["--self-test"])
         {
             Contract.Verify();
+            _ = GameSession.LoadKeys();
             if (!CUE4ParseNatives.IsFeatureAvailable("ACL\0"u8)) throw new InvalidOperationException("ACL decoder is missing.");
             Console.WriteLine("Extraction contract checks passed.");
             return 0;
@@ -61,6 +62,20 @@ internal sealed class GameSession(string paks, string work) : IDisposable
     private string[] packages = [];
     private readonly Dictionary<string, string[]> types = new(StringComparer.OrdinalIgnoreCase);
 
+    internal static List<KeyValuePair<FGuid, FAesKey>> LoadKeys()
+    {
+        using var keyReader = File.OpenText(Path.Combine(AppContext.BaseDirectory, "keys.json"));
+        var text = new char[1024 * 1024 + 1];
+        var length = keyReader.ReadBlock(text);
+        if (length == text.Length) throw new InvalidDataException();
+        var keys = JObject.Parse(new string(text, 0, length));
+        var main = new FAesKey((string?)keys["mainKey"] ?? throw new InvalidDataException());
+        var keyPairs = new List<KeyValuePair<FGuid, FAesKey>> { new(default, main) };
+        foreach (var key in keys["dynamicKeys"] ?? new JArray())
+            keyPairs.Add(new(new FGuid((string?)key["guid"] ?? ""), new FAesKey((string?)key["key"] ?? "")));
+        return keyPairs;
+    }
+
     private async Task Mount()
     {
         if (provider is not null) return;
@@ -69,20 +84,8 @@ internal sealed class GameSession(string paks, string work) : IDisposable
             if (!File.Exists(Path.Combine(AppContext.BaseDirectory, name))) throw new FileNotFoundException();
         await OodleHelper.InitializeAsync(Path.Combine(AppContext.BaseDirectory, "oodle-data-shared.dll"));
         await ZlibHelper.InitializeAsync(Path.Combine(AppContext.BaseDirectory, "zlib-ng2.dll"));
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        // Only data from the established public key service; keys never leave memory.
-        using var response = await http.GetAsync("https://yarik0chka.github.io/wuwa-keys/keys.json", HttpCompletionOption.ResponseHeadersRead);
-        response.EnsureSuccessStatusCode();
-        using var stream = await response.Content.ReadAsStreamAsync();
-        using var keyReader = new StreamReader(stream);
-        var text = new char[1024 * 1024 + 1];
-        var length = await keyReader.ReadBlockAsync(text);
-        if (length == text.Length) throw new InvalidDataException();
-        var keys = JObject.Parse(new string(text, 0, length));
-        var main = new FAesKey((string?)keys["mainKey"] ?? throw new InvalidDataException());
-        var keyPairs = new List<KeyValuePair<FGuid, FAesKey>> { new(default, main) };
-        foreach (var key in keys["dynamicKeys"] ?? new JArray())
-            keyPairs.Add(new(new FGuid((string?)key["guid"] ?? ""), new FAesKey((string?)key["key"] ?? "")));
+        var keyPairs = LoadKeys();
+        var main = keyPairs[0].Value;
         var mounted = new DefaultFileProvider(paks, SearchOption.AllDirectories,
             new VersionContainer(EGame.GAME_WutheringWaves), StringComparer.OrdinalIgnoreCase);
         try
@@ -140,8 +143,10 @@ internal sealed class GameSession(string paks, string work) : IDisposable
         var kind = (string?)request["type"];
         if (kind is not ("SkeletalMesh" or "AnimSequence")) throw new InvalidDataException();
         var prefix = Contract.Package((string?)request["under"]) + "/";
+        var recursive = (bool?)request["recursive"] ?? true;
         var terms = ((string?)request["query"] ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var candidates = packages.Where(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            && (recursive || !path[prefix.Length..].Contains('/'))
             && terms.All(term => path.Contains(term, StringComparison.OrdinalIgnoreCase)));
         var hits = new List<object>();
         var scanned = 0;

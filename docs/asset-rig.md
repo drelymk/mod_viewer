@@ -39,8 +39,11 @@ the extractor. It has no MCP server or general-purpose tool interface. Its
 build uses checksum-pinned sources and locked dependencies, includes licenses
 and the .NET runtime, and verifies bundled file hashes before extraction.
 One private process mounts the selected installation read-only with
-`GAME_WutheringWaves` and the public WuWa key endpoint for the whole job.
-Extraction never downloads executable code or requires an installed .NET SDK.
+`GAME_WutheringWaves` and bundled WuWa AES keys for the whole job. The build
+downloads the keys from a fixed revision, verifies their SHA-256 checksum and
+includes them in the runtime manifest. Extraction works offline and requires
+no installed .NET SDK. A game update may require a new Mod Viewer release with
+updated keys or parser support; there are no runtime downloads or key updates.
 No keys, native logs or private tool configuration are forwarded to the browser
 or written into an Asset. Process arguments use an argument list, not a shell;
 Windows processes run without opening a console window.
