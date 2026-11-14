@@ -20,6 +20,7 @@ export function modelRigSnapshot(modelSkinningRig, { quaternionIsIdentity, matri
   const components = (modelSkinningRig.components || []).map(componentSnapshot);
   const joints = (modelSkinningRig.joints || []).map((joint) => ({
     jointId: joint.jointId,
+    ...(joint.name ? { name: joint.name } : {}),
     restCenter: [...(joint.restCenter || [0, 0, 0])],
     restPivot: [...(joint.restPivot || joint.restCenter || [0, 0, 0])],
   }));

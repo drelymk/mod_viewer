@@ -4,9 +4,24 @@ import math
 import ntpath
 import os
 import posixpath
+import re
 import struct
 import time
 from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True, slots=True)
+class WwmiBlendRemap:
+    """Verified stock proxy maps; decoded IDs use the full shared palette."""
+
+    reverse_file: str
+    forward_file: str
+    remap_id: int
+    bone_count: int
+    compact_count: int
+    vertex_count: int
+    reverse_width: int = 2
+    forward_width: int = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +39,8 @@ class SkinningSource:
     vertex_vg_file: str | None = None
     vertex_vg_stride: int = 16
     bone_id_namespace: str = "model"
+    bone_id_domain: str = "model"
+    blend_remap: WwmiBlendRemap | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,12 +51,15 @@ class SkinningManifestEntry:
     skinning_source: SkinningSource
     used_vertices: tuple[int, ...]
     vertex_count: int
+    asset_binding: object | None = None
+    merged_layout: tuple = ()
 
     @classmethod
-    def from_vertices(cls, mesh_key, skinning_source, used_vertices):
+    def from_vertices(cls, mesh_key, skinning_source, used_vertices, *,
+                      asset_binding=None, merged_layout=()):
         compact = (used_vertices if isinstance(used_vertices, tuple)
                    else tuple(used_vertices))
-        return cls(mesh_key, skinning_source, compact, len(compact))
+        return cls(mesh_key, skinning_source, compact, len(compact), asset_binding, merged_layout)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +105,7 @@ def normalize_skinning_source_file(value):
 
 
 def skinning_source_key(source_file, bone_id_offset=0, vertex_vg_file=None,
-                        bone_id_namespace="model"):
+                        bone_id_namespace="model", bone_id_domain=None):
     """Build the case-insensitive identity for one decoded skin namespace."""
     normalized = normalize_skinning_source_file(source_file)
     if normalized is None:
@@ -101,8 +121,14 @@ def skinning_source_key(source_file, bone_id_offset=0, vertex_vg_file=None,
     key = f"{normalized.casefold()}|offset={offset}"
     remap = normalize_skinning_source_file(vertex_vg_file)
     namespace = str(bone_id_namespace or "model")
-    if remap and namespace != "model":
+    if namespace == "wwmi_merged":
+        key += "|namespace=wwmi_merged"
+    elif remap and namespace != "model":
         key += f"|namespace={namespace}|vertex-vg={remap.casefold()}"
+    if bone_id_domain is not None:
+        if not isinstance(bone_id_domain, str) or not re.fullmatch(r"[0-9a-f]{64}", bone_id_domain):
+            return None
+        key += f"|domain={bone_id_domain}"
     return key
 
 
@@ -118,7 +144,8 @@ def skinning_source_descriptor(source):
     except (TypeError, ValueError):
         return None
     key = skinning_source_key(
-        file, offset, source.vertex_vg_file, source.bone_id_namespace)
+        file, offset, source.vertex_vg_file, source.bone_id_namespace,
+        source.bone_id_domain if source.bone_id_domain != "model" else None)
     if key is None:
         return None
     descriptor = {
@@ -127,6 +154,15 @@ def skinning_source_descriptor(source):
         "bone_id_offset": offset,
         "bone_ids_model_wide": skinning_bone_ids_model_wide(source),
     }
+    if source.bone_id_namespace == "wwmi_merged" or source.blend_remap:
+        descriptor.update(bone_id_namespace=source.bone_id_namespace,
+                          bone_id_domain=source.bone_id_domain)
+    if source.bone_id_namespace == "wwmi_merged":
+        descriptor.update(legacy_source_key=skinning_source_key(file, offset),
+                          legacy_bone_id_offset=offset)
+    elif source.blend_remap:
+        descriptor.update(legacy_source_key=skinning_source_key(file, offset, source.vertex_vg_file, source.bone_id_namespace),
+                          legacy_bone_id_offset=0)
     if source.vertex_vg_file and source.bone_id_namespace != "model":
         descriptor.update({
             "bone_id_namespace": source.bone_id_namespace,
@@ -142,6 +178,7 @@ def skinning_bone_ids_model_wide(source):
         return False
     return bool(
         source.encoding == "wwmi_u16_8"
+        or source.bone_id_namespace == "wwmi_merged"
         or (source.vertex_vg_file
             and source.bone_id_namespace == "wwmi_vertex_vg"))
 
@@ -266,7 +303,8 @@ def _zero_record(indices, weights, offset, influence_count):
         struct.pack_into("<f", weights, offset + influence * 4, 0.0)
 
 
-def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
+def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None, *,
+                    reverse_map_data=None, forward_map_data=None):
     """Decode and compact one supported Blend stream.
 
     Malformed records are represented as safe zero-influence records and are
@@ -293,6 +331,27 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
                 or source.vertex_vg_stride != expected_stride):
             raise ValueError("Invalid VertexVG remap descriptor.")
         vertex_vg_data = bytes(vertex_vg_data or b"")
+    remap = source.blend_remap
+    checked_ids = set()
+    if remap:
+        # The remapper dispatches custom_vertex_count threads; reads past the
+        # buffers return zero and writes are dropped, so an overstated count
+        # leaves every real vertex remapped. A short count would not.
+        vertices = len(raw_data) // source.stride if source.stride else 0
+        if (not source.vertex_vg_file or remap.bone_count not in (512, 1024)
+                or not 1 <= remap.compact_count <= 256
+                or not 0 <= remap.remap_id < 1024
+                or not 1 <= remap.vertex_count <= 10_000_000
+                or remap.reverse_width not in (2, 4) or remap.forward_width not in (2, 4)
+                or not 1 <= vertices <= remap.vertex_count
+                or len(raw_data) != vertices * source.stride
+                or len(vertex_vg_data) != vertices * source.vertex_vg_stride):
+            raise SkinningPreviewError("invalid_blend_remap", "The WWMI blend-remap layout is invalid.")
+        reverse_map_data = bytes(reverse_map_data or b"")
+        forward_map_data = bytes(forward_map_data or b"")
+        for data, width in ((reverse_map_data, remap.reverse_width), (forward_map_data, remap.forward_width)):
+            if len(data) < (remap.remap_id + 1) * remap.bone_count * width or len(data) % width:
+                raise SkinningPreviewError("invalid_blend_remap", "The WWMI blend-remap table is truncated.")
     count = len(used_vertices)
     item_bytes = source.influence_count * 4
     index_bytes = bytearray(count * item_bytes)
@@ -375,10 +434,25 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
             zero_weight += 1
         for influence, (raw_bone, weight) in enumerate(
                 zip(decoded_indices, values)):
+            if remap and weight > 0:
+                shared = int(remapped_indices[influence])
+                if shared not in checked_ids:
+                    if shared >= remap.bone_count:
+                        raise SkinningPreviewError("invalid_blend_remap", "A WWMI vertex-group ID exceeds its remap table.")
+                    base = remap.remap_id * remap.bone_count
+                    compact = struct.unpack_from("<H" if remap.reverse_width == 2 else "<I", reverse_map_data,
+                                                 (base + shared) * remap.reverse_width)[0]
+                    if compact >= remap.compact_count:
+                        raise SkinningPreviewError("invalid_blend_remap", "A WWMI compact ID exceeds its palette.")
+                    restored = struct.unpack_from("<H" if remap.forward_width == 2 else "<I", forward_map_data,
+                                                  (base + compact) * remap.forward_width)[0]
+                    if restored != shared:
+                        raise SkinningPreviewError("invalid_blend_remap", "The WWMI forward and reverse maps disagree.")
+                    checked_ids.add(shared)
             bone = (int(remapped_indices[influence])
                     if remapped_indices is not None
                     else (int(raw_bone)
-                          if source.encoding == "wwmi_u16_8"
+                          if source.encoding == "wwmi_u16_8" or source.bone_id_namespace == "wwmi_merged"
                           else int(raw_bone) + int(source.bone_id_offset)))
             struct.pack_into("<I", index_bytes,
                              output_offset + influence * 4, bone)
@@ -453,6 +527,22 @@ def _error_for_draw(draw):
     return None
 
 
+def read_blend_remap_tables(source, resolve, exists, buffers):
+    """Read verified proxy tables only through the caller's resource sandbox."""
+    if not source.blend_remap:
+        return {}
+    result = {}
+    for key, file in (("reverse_map_data", source.blend_remap.reverse_file),
+                      ("forward_map_data", source.blend_remap.forward_file)):
+        path = resolve(file)
+        if not path or not exists(path):
+            raise SkinningPreviewError("invalid_blend_remap", "A WWMI blend-remap table is unavailable.")
+        result[key] = buffers.raw(path)
+        if len(result[key]) > 8 * 1024 * 1024:
+            raise SkinningPreviewError("invalid_blend_remap", "A WWMI blend-remap table is too large.")
+    return result
+
+
 def build_skinning_preview(draw, group, mod_dir, *, buffers,
                            default_streams, default_index_size,
                            geometry_convention, timing=None, source=None):
@@ -496,7 +586,7 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
         draw.skinning_source, buffers.raw(source_path),
         prepared.used_vertices,
         (buffers.raw(remap_path) if draw.skinning_source.vertex_vg_file
-         else None))
+         else None), **read_blend_remap_tables(draw.skinning_source, resolve, exists, buffers))
     if timing is not None:
         timing["decode_skinning_seconds"] += (
             time.perf_counter() - decode_started)
@@ -516,6 +606,6 @@ __all__ = [
     "SkinningPreviewError",
     "normalize_skinning_source_file", "skinning_source_key",
     "skinning_source_descriptor", "skinning_bone_ids_model_wide",
-    "resolve_skinning_source",
+    "resolve_skinning_source", "WwmiBlendRemap", "read_blend_remap_tables",
     "decode_skinning", "build_skinning_preview",
 ]

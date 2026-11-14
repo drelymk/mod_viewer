@@ -84,16 +84,17 @@ export function buildJointSignatureIndex(modelRig) {
   const resolvedBySignature = new Map();
   const ambiguousSignatures = new Set();
   for (const joint of modelRig?.joints || []) {
-    const signature = signatureValue(joint?.signature);
     const jointId = Number(joint?.jointId);
-    if (!signature || !Number.isInteger(jointId)) continue;
-    if (ambiguousSignatures.has(signature)) continue;
-    if (resolvedBySignature.has(signature)) {
-      resolvedBySignature.delete(signature);
-      ambiguousSignatures.add(signature);
-      continue;
+    if (!Number.isInteger(jointId)) continue;
+    for (const signature of new Set([joint?.signature, joint?.legacySignature].map(signatureValue).filter(Boolean))) {
+      if (ambiguousSignatures.has(signature)) continue;
+      if (resolvedBySignature.has(signature)) {
+        resolvedBySignature.delete(signature);
+        ambiguousSignatures.add(signature);
+        continue;
+      }
+      resolvedBySignature.set(signature, jointId);
     }
-    resolvedBySignature.set(signature, jointId);
   }
   return { resolvedBySignature, ambiguousSignatures, index: resolvedBySignature };
 }

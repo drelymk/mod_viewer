@@ -27,7 +27,11 @@ import { buildPresentPanel } from '../panels/present-panel.js';
 import { alertDialog, confirmDialog } from '../ui/dialogs.js';
 import { setGeometryBlob } from '../textures/decode.js';
 import { refreshHealthReport, setAssetResolution, setHealthLoader, setHealthReport } from '../panels/health-report.js';
-import { setPendingHumanoidRigMetadata, setPendingRigMetadata } from '../weight-rig/weight-rig-feature.js';
+import {
+  setPendingHumanoidRigMetadata,
+  setPendingRigMetadata,
+  setWeightRigAssetContext,
+} from '../weight-rig/weight-rig-feature.js';
 import { setIniEditorContext } from '../editing/ini-editor.js';
 import { setOutlineSuppressedByDebug } from '../scene/outline-renderer.js';
 import { beginLoadBenchmark, finishLoadBenchmark, measureAsyncLoadStage, measureLoadStage } from './load-benchmark.js';
@@ -262,6 +266,9 @@ export async function displayMeshPayload(
     setSourceUi('asset');
   }
   const modelPath = assetMode ? null : viewerState.currentModPath;
+  setWeightRigAssetContext(
+    assetMode && payload.metadata?.asset?.rig_session ? { token: payload.metadata.asset.rig_session } : null,
+  );
   setPendingRigMetadata(assetMode ? null : payload.metadata?.rig);
   setPendingHumanoidRigMetadata(assetMode ? null : payload.metadata?.rig);
   viewerState.lastToggles = controls.toggles || {};

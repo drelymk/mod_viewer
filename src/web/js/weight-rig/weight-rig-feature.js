@@ -12,10 +12,16 @@ let corePromise = null;
 let skinning = null;
 let pendingRigMetadata = null;
 let pendingHumanoidRigMetadata = null;
+let pendingAssetRigContext = null;
 const pendingSkinningMeshes = new Set();
 
 export function getLoadedWeightRigFeature() {
   return feature;
+}
+
+export function setWeightRigAssetContext(context) {
+  pendingAssetRigContext = context || null;
+  coreModule?.setWeightRigAssetContext(pendingAssetRigContext);
 }
 
 export function setPendingRigMetadata(metadata) {
@@ -86,6 +92,7 @@ export async function loadWeightRigFeature() {
 async function loadCore() {
   corePromise ||= import('./weight-rig-core.js').then((core) => {
     coreModule = core;
+    core.setWeightRigAssetContext(pendingAssetRigContext);
     skinning = core.weightRigSkinningRuntime;
     for (const mesh of pendingSkinningMeshes) core.registerWeightRigMesh(mesh);
     core.weightRigApi.setRigMetadata(pendingRigMetadata);

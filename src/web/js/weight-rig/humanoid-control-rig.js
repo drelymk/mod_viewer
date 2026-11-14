@@ -449,7 +449,23 @@ export function resolveHumanoidControlMappings({ savedOverrides, modelRig } = {}
       rejectedControlKeys.add(controlKey);
       return;
     }
-    if (builderVersion !== MODEL_RIG_BUILDER_VERSION) {
+    const identity = savedOverrides?.model_rig_identity;
+    if (identity !== undefined && (typeof identity !== 'string' || !/^[0-9a-f]{64}$/.test(identity))) {
+      rejectedControlKeys.add(controlKey);
+      return;
+    }
+    if ((identity || null) !== (modelRig?.gameRigId || null)) {
+      if (!validSemantic(raw.semantic)) rejectedControlKeys.add(controlKey);
+      return;
+    }
+    // Authored IDs are source skeleton indices, stable across viewer builders
+    // when the full skeleton fingerprint still matches.
+    const stableAuthoredMapping =
+      modelRig?.gameRigId &&
+      Number.isInteger(builderVersion) &&
+      builderVersion >= 4 &&
+      builderVersion < MODEL_RIG_BUILDER_VERSION;
+    if (builderVersion !== MODEL_RIG_BUILDER_VERSION && !stableAuthoredMapping) {
       // Discard IDs from older builders, but keep valid saved positions eligible
       // for the normal point-to-point binding. Unknown provenance stays unbound.
       if (
@@ -516,7 +532,7 @@ export function applyHumanoidControlRigOverrides({
     result.controls[controlKey].position = vector3(pivot);
     const semantic = humanoidControlPositionToSemantic(pivot, result);
     if (semantic) result.controls[controlKey].semantic = semantic;
-    result.controls[controlKey].source = 'manual_model_joint';
+    result.controls[controlKey].source = mapping.authored ? 'authored_skeleton' : 'manual_model_joint';
   });
   rebuildHumanoidControlPaths(result);
   return result;

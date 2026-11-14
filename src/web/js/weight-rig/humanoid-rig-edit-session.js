@@ -63,6 +63,7 @@ function normalizeOverrides(value) {
     model_rig_builder_version: Number.isInteger(raw.model_rig_builder_version) ? raw.model_rig_builder_version : null,
     controls,
   };
+  if (Object.hasOwn(raw, 'model_rig_identity')) normalized.model_rig_identity = raw.model_rig_identity;
   return normalized;
 }
 
@@ -347,7 +348,12 @@ export function createHumanoidRigEditSession({
       if (!sameSemantic(semantic, automatic.controls?.[key]?.semantic) || entry.joint_id !== undefined)
         controls[key] = entry;
     });
-    return { version: HUMANOID_CONTROL_RIG_VERSION, model_rig_builder_version: MODEL_RIG_BUILDER_VERSION, controls };
+    return {
+      version: HUMANOID_CONTROL_RIG_VERSION,
+      model_rig_builder_version: MODEL_RIG_BUILDER_VERSION,
+      ...(modelRig.gameRigId ? { model_rig_identity: modelRig.gameRigId } : {}),
+      controls,
+    };
   }
 
   function queueWrite(operation) {

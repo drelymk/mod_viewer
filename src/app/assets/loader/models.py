@@ -45,6 +45,7 @@ class AssetMeshPart:
     metadata_path: str | None = None
     metadata_entry: int | None = None
     texture_range: int = 0
+    skinning: object | None = None
 
     @property
     def asset_source(self):
@@ -122,6 +123,7 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
         component = component_labels.get(
             (base_component, part.geometry_hash), base_component)
         entry = {
+            "skinning_available": part.skinning is not None and not asset_fill,
             "pos": geometry.add(part.positions),
             "idx": geometry.add(part.indices),
             "uv": geometry.add(part.uvs) if part.uvs else None,

@@ -172,6 +172,7 @@ function mappedControlEntries(controlMappings) {
     .map(([key, mapping]) => ({
       controlKey: mapping?.controlKey || key,
       jointId: numberId(mapping?.jointId),
+      authored: mapping?.authored === true,
     }))
     .sort((left, right) => CONTROL_ORDER.indexOf(left.controlKey) - CONTROL_ORDER.indexOf(right.controlKey));
   const byJointId = new Map();
@@ -397,6 +398,23 @@ export function buildHumanoidDriverFrames(controlRig, posedControls = null) {
     const start = controlPoint(controlRig, segment.start, posedControls);
     const end = controlPoint(controlRig, segment.end, posedControls);
     const frame = frameForSegment(start, end, controlRig);
+    if (frame && posedControls && controlRig?.source === 'authored_skeleton' && segment.role !== 'torso') {
+      const rest = frameForSegment(
+        controlPoint(controlRig, segment.start),
+        controlPoint(controlRig, segment.end),
+        controlRig,
+      );
+      if (rest) {
+        // Preserve rest roll through the semantic-forward singularity. Rebuilding
+        // a projected world-up frame there would flip the limb's skin by 180°.
+        const swing = new THREE.Quaternion().setFromUnitVectors(
+          rest.end.clone().sub(rest.start).normalize(),
+          end.clone().sub(start).normalize(),
+        );
+        const rotation = new THREE.Quaternion().setFromRotationMatrix(rest.matrix).premultiply(swing);
+        frame.matrix.compose(start, rotation, new THREE.Vector3(1, 1, 1));
+      }
+    }
     if (frame) result.set(segment.id, { ...segment, ...frame });
   });
   return result;
@@ -424,12 +442,21 @@ export function buildHumanoidRigBinding({ controlRig, modelRig, controlMappings 
   const mapped = mappedControlEntries(controlMappings);
 
   // Phase A: explicit mappings claim only their exact ModelJoint.
-  mapped.forEach(({ controlKey, jointId }) => {
+  mapped.forEach(({ controlKey, jointId, authored }) => {
     const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
     if (!drivers.has(driverId) || !restJointWorldMatrix(modelRig, jointId)) {
       return;
     }
-    directOwnerByJointId.set(jointId, directOwnerFor(controlKey, 'mapped', 'manual_control_mapping', null, jointId));
+    directOwnerByJointId.set(
+      jointId,
+      directOwnerFor(
+        controlKey,
+        authored ? 'authored' : 'mapped',
+        authored ? 'authored_control_mapping' : 'manual_control_mapping',
+        null,
+        jointId,
+      ),
+    );
     const state = controlState.get(controlKey);
     state.source = 'mapped';
     state.anchorJointId = jointId;

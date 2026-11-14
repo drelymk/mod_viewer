@@ -3,8 +3,114 @@
 import { createPreferencePersistence } from './preference-persistence.js';
 import { closeHeaderPopovers } from './header-popovers.js';
 import { initAppearanceControls } from './appearance.js';
+import { bridgeReady } from '../app/bridge.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { initGameIndexDialog } from '../panels/game-index-dialog.js';
 
 const $ = (id) => document.getElementById(id);
+
+function initGameFolders(root) {
+  const error = root.querySelector('.settings-game-error');
+  if (!error) return;
+  const rows = [...root.querySelectorAll('.settings-game-row')];
+  const indexDialog = initGameIndexDialog();
+  const indexStates = new Map();
+  let support = {};
+  let supportFailed = false;
+  let current = {};
+  const showIndex = () => {
+    for (const row of rows) {
+      const kind = row.dataset.gameKind;
+      const path = current[kind] || '';
+      const capability = support[kind];
+      const button = row.querySelector('.settings-game-index');
+      const status = root.querySelector(`.settings-game-index-status[data-game-kind="${kind}"]`);
+      const state = indexStates.get(kind);
+      button.hidden = !path;
+      button.disabled = !capability?.index;
+      status.hidden = false;
+      status.textContent = !capability
+        ? t(supportFailed ? 'gameExtract.supportFailed' : 'common.loading')
+        : !capability.index
+          ? t('gameExtract.unavailable')
+          : state && path
+            ? t('gameIndex.status.' + state.state, state)
+            : t('gameExtract.available');
+    }
+  };
+  const refreshIndex = async (kind) => {
+    if (!support[kind]?.index) return showIndex();
+    try {
+      const state = await (await bridgeReady()).get_game_index_status(kind);
+      indexStates.set(kind, state && ['ready', 'missing', 'stale'].includes(state.state) ? state : null);
+    } catch {
+      indexStates.delete(kind);
+    }
+    showIndex();
+  };
+  const offerIndex = async (kind) => {
+    if (!support[kind]?.index) return;
+    await indexDialog.open(kind);
+    await refreshIndex(kind);
+  };
+  const show = (folders) => {
+    current = folders || {};
+    for (const row of rows) {
+      const kind = row.dataset.gameKind;
+      const path = current[kind] || '';
+      const input = row.querySelector('.settings-game-path');
+      input.value = path;
+      input.title = path;
+      input.placeholder = t('settings.notSet');
+      input.setAttribute('aria-label', t('settings.gameDirectoryFor', { game: kind }));
+      row.querySelector('.settings-game-clear').hidden = !path;
+    }
+    showIndex();
+  };
+  const apply = (result) => {
+    error.hidden = !result?.error;
+    error.textContent = result?.error || '';
+    if (result?.value) show(result.value);
+  };
+  const run = async (row, method) => {
+    const kind = row.dataset.gameKind;
+    const buttons = row.querySelectorAll('button');
+    const before = current[kind];
+    buttons.forEach((button) => (button.disabled = true));
+    let result;
+    try {
+      result = await (await bridgeReady())[method](kind);
+      apply(result);
+    } catch (failure) {
+      apply({ error: failure.message });
+    } finally {
+      buttons.forEach((button) => (button.disabled = false));
+      showIndex();
+    }
+    if (method === 'clear_game_directory') indexStates.delete(kind);
+    await refreshIndex(kind);
+    const after = result?.value?.[kind];
+    if (method === 'select_game_directory' && after && after !== before) await offerIndex(kind);
+  };
+  for (const row of rows) {
+    row.querySelector('.settings-game-index').addEventListener('click', () => offerIndex(row.dataset.gameKind));
+    row.querySelector('.settings-game-select').addEventListener('click', () => run(row, 'select_game_directory'));
+    row.querySelector('.settings-game-clear').addEventListener('click', () => run(row, 'clear_game_directory'));
+  }
+  window.addEventListener(LANGUAGE_CHANGED, () => show(current));
+  bridgeReady()
+    .then(async (api) => {
+      const [folders, capabilities] = await Promise.allSettled([
+        api.get_game_folders(),
+        api.get_game_extraction_support(),
+      ]);
+      supportFailed = capabilities.status === 'rejected';
+      support = capabilities.status === 'fulfilled' ? capabilities.value : {};
+      apply(folders.status === 'fulfilled' ? folders.value : { error: folders.reason.message });
+      await Promise.all(rows.map((row) => refreshIndex(row.dataset.gameKind)));
+    })
+    .catch((failure) => apply({ error: failure.message }));
+}
 let autoRestoreMissingAssetParts = false;
 let persistence = null;
 
@@ -32,6 +138,7 @@ export function initSettingsDialog() {
     autoRestoreMissingAssetParts = checkbox.checked;
     persistence.change('autoRestoreMissingAssetParts', checkbox.checked);
   });
+  initGameFolders(backdrop);
 
   const close = () => {
     backdrop.classList.remove('show');
@@ -52,7 +159,11 @@ export function initSettingsDialog() {
   document.addEventListener(
     'keydown',
     (event) => {
-      if (!backdrop.classList.contains('show') || document.querySelector('.dialog-backdrop.show')) return;
+      if (
+        !backdrop.classList.contains('show') ||
+        document.querySelector('.dialog-backdrop.show, #game-index-backdrop.show')
+      )
+        return;
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();

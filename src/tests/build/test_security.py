@@ -1,12 +1,34 @@
 """Security contracts for build-time downloaded and extracted inputs."""
 
 import io
+import hashlib
+import importlib.util
 import os
+from pathlib import Path
 import tarfile
 
 import pytest
 
 import build
+
+
+def test_game_key_build_download_checksums_and_cache(tmp_path, monkeypatch):
+    script = Path(__file__).resolve().parents[3] / "tools/build_game_extract.py"
+    spec = importlib.util.spec_from_file_location("game_extract_build", script)
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    data = b'{"mainKey":"synthetic key","dynamicKeys":[]}'
+    url = "https://example.invalid/fixed-revision/keys.json"
+    monkeypatch.setattr(builder, "PINS", {"keys": (url, hashlib.sha256(data).hexdigest())})
+    requests = []
+    monkeypatch.setattr(builder, "urlopen", lambda url, **_: requests.append(url) or io.BytesIO(data))
+    assert builder.download("keys", tmp_path) == data and requests == [url]
+    assert builder.download("keys", tmp_path) == data and requests == [url]
+    (tmp_path / "keys.download").write_bytes(b"tampered cache")
+    monkeypatch.setattr(builder, "urlopen", lambda *_args, **_kwargs: io.BytesIO(b"modified key response"))
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        builder.download("keys", tmp_path)
+    assert (tmp_path / "keys.download").read_bytes() == b"tampered cache"
 
 
 class _Response:

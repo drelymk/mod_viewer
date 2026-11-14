@@ -19,6 +19,52 @@ class _Access:
         return path
 
 
+def test_modern_proxy_preview_uses_retained_program_and_retries_invalid_maps(tmp_path, monkeypatch):
+    from core.ini.sections import parse_sections
+    from tests.support.wwmi_skeleton import modern_merged_skeleton_ini
+
+    text = modern_merged_skeleton_ini(remapped=True, influences=8, map_size=1024)
+    sections = parse_sections("source-01.ini", text=text)
+    groups = build_draw_groups(sections, extract_resources(sections))
+    (tmp_path / "mesh.pos").write_bytes(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
+    (tmp_path / "mesh.idx").write_bytes(struct.pack("<6I", 0, 1, 2, 0, 2, 1))
+    (tmp_path / "mesh.uv").write_bytes(bytes(16 * 3))
+    (tmp_path / "mesh.vec").write_bytes(bytes(8 * 3))
+    raw = bytes([0] * 8 + [128, 127] + [0] * 6) * 3
+    (tmp_path / "mesh.blend").write_bytes(raw)
+    (tmp_path / "full-vg.buf").write_bytes(struct.pack("<8H", 0, 256, 0, 0, 0, 0, 0, 0) * 3)
+    reverse, forward = [0] * 2048, [0] * 2048
+    reverse[1024 + 256] = 1
+    forward[1024 + 1] = 256
+    (tmp_path / "reverse.buf").write_bytes(struct.pack("<2048H", *reverse))
+    forward_bytes = struct.pack("<2048H", *forward)
+    (tmp_path / "forward.buf").write_bytes(forward_bytes)
+    rendered = build_mesh_result(groups, str(tmp_path), geometry_only=True)
+    assert len(rendered.skinning_manifest) == 2
+    assert all(entry.skinning_source.blend_remap for entry in rendered.skinning_manifest.values())
+    context = SimpleNamespace(mod_dir=str(tmp_path), metadata={}, asset_folders=[])
+    preview = ModPreview(_Access())
+    preview._skinning_manifests[str(tmp_path)] = rendered.skinning_manifest
+    monkeypatch.setattr(preview, "authoritative_context", lambda _path: (str(tmp_path), {}, context))
+    monkeypatch.setattr("app.bridge.mod_preview.server.publish_geometry", lambda *_args, **_kwargs: "/geometry/fixture")
+    monkeypatch.setattr("core.geometry.packing._prepare_draw_vertices",
+                        lambda *_args, **_kwargs: pytest.fail("Weight must reuse the loaded manifest"))
+    first = preview.get_model_skinning_preview(str(tmp_path))
+    assert first["status"] == "ok"
+    assert all(entry["bone_ids"] == [0, 256] for entry in first["meshes"].values())
+    damaged = bytearray(forward_bytes)
+    struct.pack_into("<H", damaged, (1024 + 1) * 2, 255)
+    (tmp_path / "forward.buf").write_bytes(damaged)
+    failed = preview.get_model_skinning_preview(str(tmp_path))
+    assert failed["status"] == "error"
+    assert all(entry["code"] == "invalid_blend_remap" for entry in failed["meshes"].values())
+    (tmp_path / "forward.buf").write_bytes(forward_bytes)
+    restored = preview.get_model_skinning_preview(str(tmp_path))
+    assert restored["status"] == "ok"
+    assert all(entry["bone_ids"] == [0, 256] for entry in restored["meshes"].values())
+    assert (tmp_path / "mesh.blend").read_bytes() == raw
+
+
 def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatch):
     ini = write_gimi_skinning_mod(tmp_path)
     sections = merge_sections([str(ini)])

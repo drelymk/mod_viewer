@@ -1442,6 +1442,23 @@ def test_rig_overlay_pick_and_control_carry_preserve_navigation_and_magnetic_exc
 
 
 @pytest.mark.parametrize('orthographic', [False, True])
+def test_rig_overlay_bulk_pose_updates_do_not_select_joint_zero(module_page, orthographic):
+    _prepare_rig_overlay(module_page, orthographic)
+    result = module_page.evaluate("""() => {
+      const ctx=window.__overlay, {controller,snapshot}=ctx;
+      snapshot.selectedJointId=null; ctx.notify();
+      window.dispatchEvent(new CustomEvent('mod-viewer-model-rig-pose-changed',
+        {detail:{jointId:null,jointIds:[0,1]}}));
+      window.dispatchEvent(new CustomEvent('mod-viewer-model-rig-pose-changed',
+        {detail:{jointId:null,jointIds:[0,1]}}));
+      const state=controller.getDebugState();
+      controller.dispose();
+      return state.selectedJointIndicatorVisible;
+    }""")
+    assert result is False
+
+
+@pytest.mark.parametrize('orthographic', [False, True])
 def test_rig_overlay_projection_and_pick_ties_are_deterministic(module_page, orthographic):
     _prepare_rig_overlay(module_page, orthographic)
     result = module_page.evaluate("""async () => {
@@ -2090,6 +2107,19 @@ def test_reconciliation_preserves_exact_sources_and_stable_rebuild(reconciliatio
     assert result['mapped'] == [0, 0]
     assert result['stable'] and result['rebuilt']
     assert result['separateCount'] == 2
+
+
+def test_reconciliation_requires_matching_shared_palette_domains(reconciliation_page):
+    result = reconciliation_page.evaluate("""async () => {
+      const a=window.__sourceRig('stream-01',[[1,[0,0,0],null]],true);
+      const b=window.__sourceRig('stream-02',[[1,[10,0,0],null]],true);
+      a.boneIdDomain=b.boneIdDomain='palette01';
+      const shared=await window.__buildRig([a,b]);
+      b.boneIdDomain='palette02';
+      const different=await window.__buildRig([a,b],{modelReferenceRadius:1});
+      return {shared:shared.joints.length,different:different.joints.length};
+    }""")
+    assert result == {'shared': 1, 'different': 2}
 
 
 def test_reconciliation_skips_unneeded_vertex_work_and_completes_strict_chains(reconciliation_page):

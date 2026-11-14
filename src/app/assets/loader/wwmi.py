@@ -13,6 +13,7 @@ from core.textures.profiles import texture_profile_for
 
 from app.assets import paths as asset_paths
 from app.assets import textures as asset_textures
+from app.assets.skinning import capture_skinning
 from ..package_format import FORMAT
 from ..metadata import texture_role, authored_range, authored_role
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
@@ -202,7 +203,7 @@ def _remap(positions, normals, uvs, indices, vertex_count):
 
     from core.geometry.migoto_dump import pack_indices
     return select(positions, 12), select(normals, 12), select(uvs, 8), \
-        pack_indices(remapped)
+        pack_indices(remapped), tuple(unique)
 
 
 def _component_texture_candidates(files, root, ordinal, texture_source):
@@ -357,7 +358,7 @@ def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
                     for position in range(0, len(indices) - 2, 3):
                         indices[position + 1], indices[position + 2] = \
                             indices[position + 2], indices[position + 1]
-                pos, normal, uv, packed_indices = _remap(
+                pos, normal, uv, packed_indices, used_vertices = _remap(
                     positions, normals, uvs, indices, vertex_count)
             except (AssetLoadError, MigotoFormatError, OSError, struct.error) as error:
                 warnings.append(_warning(
@@ -384,7 +385,8 @@ def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
                 component_ordinal=ordinal, first_index=first_index,
                 index_count=index_count, positions=pos, indices=packed_indices,
                 uvs=uv, normals=normal, textures=textures, texture_candidates=candidates,
-                metadata_path=metadata_relative, metadata_entry=ordinal))
+                metadata_path=metadata_relative, metadata_entry=ordinal,
+                skinning=capture_skinning(root, files["vb"], layout, used_vertices)))
     if not parts:
         raise AssetLoadError("WWMI Asset contains no renderable components.")
     return AssetAdapterResult(tuple(parts), tuple(warnings))

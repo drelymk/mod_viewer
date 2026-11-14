@@ -1,6 +1,7 @@
 """Mod preview orchestration behind the JavaScript bridge facade."""
 
 import os
+import hashlib
 import time
 import traceback
 import threading
@@ -11,7 +12,7 @@ from core.geometry.buffers import BufferStore
 from core.geometry.mesh_builder import GeometryBlob
 from core.geometry.skinning import (
     SkinningPreviewError, decode_skinning,
-    skinning_source_descriptor,
+    skinning_source_descriptor, read_blend_remap_tables,
 )
 from core.resource_paths import safe_resource_path
 from core.textures import encode_texture_file
@@ -19,10 +20,12 @@ from core.mod_discovery import discover_ini_paths
 from core.mod_source import ModSourceError, mod_source_for_path
 from core.ini.health import analyze_mod
 from app.mods.analysis import build_mod_ini_snapshot
+from app.assets.animations import AnimationSessions
 from app.mods.texture_save.service import save_texture_color
 from core.textures.profiles import texture_profile_for
 
 from app.assets import folders as asset_folders
+from app.assets.rig import resolve_game_rig
 from app.mods import loader as mod_loader
 from app.bridge import mesh_edit
 from app.mods import metadata
@@ -34,6 +37,7 @@ from app.session import edit as edit_session
 class ModPreview:
     def __init__(self, access):
         self._access = access
+        self._animations = AnimationSessions()
         self._active_mesh_keys = {}
         self._skinning_manifests = {}
         self._current_model_folder = None
@@ -127,6 +131,7 @@ class ModPreview:
             self._last_weight_blob_bytes = 0
         for url in pending:
             server.release_geometry(url)
+        self._animations.clear()
 
     @staticmethod
     def _stale_skinning_preview():
@@ -397,9 +402,15 @@ class ModPreview:
                     "meshes": {},
                     "error": "Load the model before requesting skin weights.",
                 }
+            saved_bones = self._migrate_merged_weight_selection(saved_bones, manifest)
             requested = set(active_mesh_keys) if active_mesh_keys is not None else set(manifest)
             selected_items = {key: manifest[key] for key in requested if key in manifest}
             meshes = {}
+            game_rigs = {}
+            rig_cache = {}
+            enabled_roots = {os.path.normcase(item["path"]) for item in
+                             asset_folders.enabled_entries_for_type(
+                                 context.asset_folders, "WWMI")}
             pieces = []
             offset = 0
             buffers = BufferStore(
@@ -414,6 +425,30 @@ class ModPreview:
                         selected, context.mod_dir, buffers, timing,
                         source=getattr(context, "source", None))
                     entry, blob = self._skin_entry(decoded, selected.skinning_source, offset)
+                    skin_file = selected.skinning_source.file
+                    digest_key = ("blend", skin_file)
+                    if selected.asset_binding is not None and digest_key not in rig_cache:
+                        skin_path = (context.source.resolve_resource(skin_file)
+                                     if context.source is not None else
+                                     safe_resource_path(context.mod_dir, skin_file))
+                        rig_cache[digest_key] = hashlib.sha256(buffers.raw(skin_path)).hexdigest()
+                    game_rig = resolve_game_rig(
+                        selected.asset_binding, selected.skinning_source,
+                        decoded.bone_ids, enabled_roots, rig_cache,
+                        blend_sha256=rig_cache.get(digest_key),
+                        merged_layout=selected.merged_layout)
+                    if game_rig:
+                        rig_id = game_rig["id"]
+                        if rig_id not in game_rigs:
+                            game_rigs[rig_id] = {
+                                "id": rig_id, "bones": game_rig["bones"],
+                                "humanoid_controls": game_rig["humanoid_controls"],
+                                **self._animations.catalog(
+                                    selected.asset_binding.root, selected.asset_binding.asset, game_rig,
+                                    lambda: self._model_generation == request_generation),
+                            }
+                        entry["game_rig_id"] = rig_id
+                        entry["game_bone_map"] = game_rig["bone_map"]
                 except SkinningPreviewError as error:
                     meshes[mesh_key] = {
                         "status": "error",
@@ -458,6 +493,7 @@ class ModPreview:
                 "saved_bones": saved_bones,
                 "data": {"url": url, "length": len(blob)},
                 "meshes": meshes,
+                "game_rigs": game_rigs,
             }
         except Exception:
             return self._semantic_read_error()
@@ -486,6 +522,33 @@ class ModPreview:
             },
         }
 
+    def get_animation(self, token, clip_id):
+        return self._animations.load(token, clip_id)
+
+    @staticmethod
+    def _migrate_merged_weight_selection(saved_bones, manifest):
+        """Translate legacy offset IDs only for loaded, verified shared sources."""
+        migrations, active_keys = {}, set()
+        for entry in manifest.values():
+            descriptor = skinning_source_descriptor(entry.skinning_source)
+            if not descriptor:
+                continue
+            active_keys.add(descriptor["key"])
+            legacy = descriptor.get("legacy_source_key")
+            if legacy:
+                migrations.setdefault(legacy, {})[descriptor["key"]] = descriptor
+        result = []
+        for record in saved_bones:
+            old_key = record["source_key"]
+            if old_key not in migrations or old_key in active_keys:
+                result.append(record)
+            for key, descriptor in migrations.get(old_key, {}).items():
+                ids = [bone - descriptor["legacy_bone_id_offset"] for bone in record["bone_ids"]
+                       if bone >= descriptor["legacy_bone_id_offset"]]
+                if ids:
+                    result.append({**record, "source_key": key, "bone_ids": ids})
+        return metadata.weight_selected_bones(data={"weight": {"selected_bones": result}})
+
     @staticmethod
     def _decode_skinning_manifest_entry(entry, mod_dir, buffers, timing,
                                         source=None):
@@ -508,7 +571,8 @@ class ModPreview:
         decode_started = time.perf_counter()
         decoded = decode_skinning(
             skin_source, buffers.raw(source_path), entry.used_vertices,
-            buffers.raw(remap_path) if remap_path else None)
+            buffers.raw(remap_path) if remap_path else None,
+            **read_blend_remap_tables(skin_source, resolve, exists, buffers))
         timing["decode_skinning_seconds"] += (
             time.perf_counter() - decode_started)
         if decoded.vertex_count != entry.vertex_count:

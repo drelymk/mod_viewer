@@ -423,6 +423,38 @@
   </div>
 </div>
 
+<div id="rig-extract-backdrop" class="modal-backdrop">
+  <section class="modal panel-surface" role="dialog" aria-modal="true" aria-labelledby="rig-extract-title">
+    <h4 id="rig-extract-title" data-i18n="rigExtract.title">Extract Rig/Animation</h4>
+    <div id="rig-extract-error" class="modal-error" role="alert"></div>
+    <form id="rig-extract-form">
+      <label class="modal-field">
+        <span data-i18n="rigExtract.asset">Asset destination</span>
+        <input id="rig-extract-asset" type="text" readonly />
+      </label>
+      <label class="modal-field">
+        <span data-i18n="rigExtract.game">Game folder</span>
+        <div class="asset-folder-path-field">
+          <input id="rig-extract-game" type="text" readonly aria-describedby="rig-extract-hint" />
+          <button id="rig-extract-browse" type="button" data-i18n="modal.browse">Browse</button>
+        </div>
+        <span id="rig-extract-hint" class="modal-field-hint" data-i18n="rigExtract.hint"></span>
+      </label>
+      <label class="modal-field">
+        <span data-i18n="rigExtract.character">Character name</span>
+        <input id="rig-extract-query" type="text" required maxlength="100" autocomplete="off" />
+      </label>
+      <p class="modal-field-hint" data-i18n="rigExtract.destinationHint"></p>
+      <p id="rig-extract-availability" class="modal-field-hint" role="status"></p>
+      <p id="rig-extract-progress" class="modal-field-hint" role="status" aria-live="polite"></p>
+      <div class="modal-actions">
+        <button id="rig-extract-cancel" type="button" data-i18n="common.cancel">Cancel</button>
+        <button id="rig-extract-ok" type="submit" data-i18n="common.ok">OK</button>
+      </div>
+    </form>
+  </section>
+</div>
+
 <div id="asset-folder-modal-backdrop" class="modal-backdrop">
   <div class="modal panel-surface" role="dialog" aria-modal="true" aria-labelledby="afm-title">
     <h4 id="afm-title" data-i18n="folder.addAsset">Add Asset Folder</h4>
@@ -659,9 +691,51 @@
       <input id="settings-auto-restore" type="checkbox" role="switch" aria-labelledby="settings-auto-restore-label"
              aria-describedby="settings-auto-restore-description">
     </label>
+    <section class="settings-game-folders" aria-labelledby="settings-game-folders-title">
+      <h5 id="settings-game-folders-title" class="settings-option-title" data-i18n="settings.gameFolders">Game directory</h5>
+      <p class="modal-field-hint" data-i18n="settings.gameFoldersHint">Saved folders prefill the game folder when extracting.</p>
+      <div class="settings-game-row" data-game-kind="GIMI">
+        <span class="settings-game-name">GIMI</span>
+        <input class="settings-game-path" type="text" readonly aria-label="GIMI game directory" placeholder="Not set">
+        <button class="ui-button settings-game-index" type="button" hidden data-i18n-title="gameIndex.button" data-i18n-aria-label="gameIndex.button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-rebuild"></use></svg></button>
+        <button class="ui-button settings-game-select" type="button" title="Select folder" aria-label="Select folder" data-i18n-title="settings.selectFolder" data-i18n-aria-label="settings.selectFolder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
+        <button class="ui-button settings-game-clear" type="button" title="Clear" aria-label="Clear" data-i18n-title="settings.clearFolder" data-i18n-aria-label="settings.clearFolder" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+      </div>
+      <p class="settings-game-index-status modal-field-hint" data-game-kind="GIMI" role="status" hidden></p>
+      <div class="settings-game-row" data-game-kind="ZZMI">
+        <span class="settings-game-name">ZZMI</span>
+        <input class="settings-game-path" type="text" readonly aria-label="ZZMI game directory" placeholder="Not set">
+        <button class="ui-button settings-game-index" type="button" hidden data-i18n-title="gameIndex.button" data-i18n-aria-label="gameIndex.button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-rebuild"></use></svg></button>
+        <button class="ui-button settings-game-select" type="button" title="Select folder" aria-label="Select folder" data-i18n-title="settings.selectFolder" data-i18n-aria-label="settings.selectFolder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
+        <button class="ui-button settings-game-clear" type="button" title="Clear" aria-label="Clear" data-i18n-title="settings.clearFolder" data-i18n-aria-label="settings.clearFolder" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+      </div>
+      <p class="settings-game-index-status modal-field-hint" data-game-kind="ZZMI" role="status" hidden></p>
+      <div class="settings-game-row" data-game-kind="WWMI">
+        <span class="settings-game-name">WWMI</span>
+        <input class="settings-game-path" type="text" readonly aria-label="WWMI game directory" placeholder="Not set">
+        <button class="ui-button settings-game-index" type="button" hidden data-i18n-title="gameIndex.button" data-i18n-aria-label="gameIndex.button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-rebuild"></use></svg></button>
+        <button class="ui-button settings-game-select" type="button" title="Select folder" aria-label="Select folder" data-i18n-title="settings.selectFolder" data-i18n-aria-label="settings.selectFolder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
+        <button class="ui-button settings-game-clear" type="button" title="Clear" aria-label="Clear" data-i18n-title="settings.clearFolder" data-i18n-aria-label="settings.clearFolder" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+      </div>
+      <p class="settings-game-index-status modal-field-hint" data-game-kind="WWMI" role="status" hidden></p>
+      <p class="settings-game-error modal-field-hint" role="alert" hidden></p>
+    </section>
     <p id="settings-hint" class="modal-field-hint" data-i18n="settings.hint">Changes are saved automatically.</p>
     <div class="modal-actions">
       <button id="settings-done" class="ui-button ui-button-primary" type="button" data-i18n="common.close">Close</button>
+    </div>
+  </section>
+</div>
+
+<div id="game-index-backdrop" class="modal-backdrop">
+  <section class="modal panel-surface" role="dialog" aria-modal="true" aria-labelledby="game-index-title">
+    <h4 id="game-index-title" data-i18n="gameIndex.title">Index game files</h4>
+    <div id="game-index-error" class="modal-error" role="alert"></div>
+    <p id="game-index-message" class="modal-field-hint" data-i18n="gameIndex.confirm"></p>
+    <p id="game-index-progress" class="modal-field-hint" role="status" aria-live="polite"></p>
+    <div class="modal-actions">
+      <button id="game-index-cancel" type="button" data-i18n="common.cancel">Cancel</button>
+      <button id="game-index-ok" type="button" data-i18n="gameIndex.start">Index</button>
     </div>
   </section>
 </div>

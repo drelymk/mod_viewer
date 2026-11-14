@@ -32,3 +32,28 @@ r185 under the same MIT license.
 This application vendors the minified no-conflict Ace core, INI mode,
 Tomorrow Night theme, and search-box extension without modifying those
 upstream files.
+
+## Game extraction helper
+
+- Mod Viewer builds a minimal helper directly against CUE4Parse revision
+  `cb909733773daea9015a67f6955d6f2ec24d3629` (Apache-2.0), preserving the parser
+  revision previously used by the extractor. Source: https://github.com/FabianFG/CUE4Parse
+- ACL `414689d5cff4286a7898487a46dc5e48005d38da` and RTM
+  `d7982f2b2524feeb322f424b29cf43df30b5d5b7` use MIT licenses.
+- Oodle decompression uses the same pinned OodleUE 2026-06-04-1357 binary selected
+  by that parser, from https://github.com/WorkingRobot/OodleUE. Oodle is an
+  Epic Games/RAD Game Tools component; its upstream terms apply.
+- zlib-ng uses the pinned decoder distributed by Zlib-ng.NET 1.0.0,
+  https://github.com/NotOfficer/Zlib-ng.NET (MIT wrapper; zlib license for zlib-ng).
+- The self-contained .NET runtime and locked NuGet libraries retain their
+  upstream licenses. ImageSharp 3.1.12 retains its Six Labors Split License and
+  known upstream advisories. The affected image operations are unreachable through
+  the helper's extraction operations; see the [reachability review](../native/game-extract/README.md).
+- The bundled `assets/game-extract/licenses` directory contains source licenses,
+  NuGet license texts, package metadata and a package inventory. Dependency pins
+  and source archive checksums are maintained in `tools/build_game_extract.py`
+  and `native/game-extract/locks/`.
+
+The helper runs only for explicit game extraction/index jobs and writes native
+mesh/property/animation data into private staging. CUE4Parse-MCP is no longer
+distributed or invoked.

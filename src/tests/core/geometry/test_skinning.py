@@ -72,6 +72,22 @@ def test_decode_wwmi_four_influences_divides_bytes_by_255():
         (128 / 255, 64 / 255, 63 / 255, 0.))
 
 
+def test_verified_shared_ids_do_not_receive_the_component_offset():
+    from core.geometry.skinning import skinning_bone_ids_model_wide
+
+    source = SkinningSource("stream.blend", 8, 4, "wwmi_u8_4", 79,
+                            bone_id_namespace="wwmi_merged", bone_id_domain="a" * 64)
+    raw = bytes([101, 45, 0, 0, 128, 127, 0, 0])
+    decoded = decode_skinning(source, raw, (0,))
+    assert unpack_values(decoded.indices, "4I") == (101, 45, 0, 0)
+    assert decoded.bone_ids == (45, 101)
+    descriptor = skinning_source_descriptor(source)
+    assert skinning_bone_ids_model_wide(source)
+    assert descriptor["key"] == "stream.blend|offset=79|namespace=wwmi_merged|domain=" + "a" * 64
+    assert descriptor["legacy_source_key"] == "stream.blend|offset=79"
+    assert descriptor["legacy_bone_id_offset"] == 79
+
+
 def test_decode_wwmi_wide_keeps_all_eight_influences():
     source = SkinningSource("blend.buf", 16, 8, "wwmi_u8_8")
     raw = wwmi_u8_eight()
