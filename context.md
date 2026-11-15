@@ -744,7 +744,7 @@ of documentation, comments and tests; use portable fixtures instead.
   them for Asset/no-diffuse meshes. Reset Color clears only the preview.
 - CPU save and GPU preview share normalization and order: optional target tint,
   then hue, saturation, brightness, contrast and RGB channels in editor-sRGB
-  while preserving alpha. Brightness is 0–4 with a nonlinear slider centered at
+  while preserving alpha. Brightness is 0â€“4 with a nonlinear slider centered at
   100%. Convert only at shader boundaries; picker hex is already sRGB. Update
   stable material nodes without recreating textures.
 - Save to Texture has separate confirmation and immediately writes one mod-owned
@@ -899,6 +899,18 @@ of documentation, comments and tests; use portable fixtures instead.
   checksummed frame-major local translation/quaternion float32 tracks in Asset
   coordinates. Use endpoint-inclusive timing, normalized quaternion interpolation,
   original parent hierarchy and animated-world times inverse-rest-world deltas.
+  Optional native morphs append named frame-major weights to the clip binary
+  and use a contained, checksummed sparse-target sidecar. Validate ranges,
+  finite values and captured VB/IB fingerprints before publication. Original
+  Assets use their compact vertex mapping. Compatible mods assume original
+  faces: match rest positions within 0.0001, then complete topology/UV identity,
+  or unique UV triangles for rigid split/reshaped components. Preserve the mod's
+  rest shape, source winding/V conversions and verified bone palette. Reject
+  ambiguous/conflicting UV assignments; new UVs remain unmapped. Share one
+  bounded reference decode per component during Weight access, and retain morph
+  inputs only for WWMI bindings. Keep matching out of playback. Apply morphs
+  before skinning, upload only weights and restore the baseline on release.
+  Extraction samples linear, constant and unweighted cubic matching curves.
   Only exact compatible authored rigs expose the library, including matching mods.
   Catalogs and clips use opaque loaded-session IDs, contained paths and lazy blob
   transport; clear publications on replacement and reject stale loads. Playback

@@ -265,7 +265,30 @@ binary's `sha256`. Binary records contain seven little-endian float32 values:
 local translation XYZ followed by normalized quaternion XYZW, in frame-major
 then Rig.json bone order. Reference scales come from the rig. Playback interpolates
 translation and rotation across endpoint-inclusive samples over the source duration.
-No curve, morph, event, or game physics tracks are included.
+Optional `morphs` metadata adds named, frame-major float32 weights after the bone
+records in the same checksummed binary. Its `names` fixes the weight order;
+`file`, `sha256` and `components` describe a contained shared sparse-target binary.
+Each component carries the exact captured VB/IB SHA-256 fingerprints and vertex
+count. Each named target supplies a byte offset and record count; records contain
+a little-endian uint32 captured vertex index followed by position XYZ and normal
+XYZ float32 deltas. All ranges, indices, weights and checksums are validated before
+publication. Clips without `morphs` retain their original layout.
+
+Game extraction preserves curves matching exported native morph targets, sampling
+linear, constant and unweighted cubic source keys at the clip's frame times.
+Re-extract an existing library to add these channels. Facial morph playback is
+available for original Asset geometry and compatible mods. Mods assume unchanged
+original faces, matching rest positions to their bound captured component within
+0.0001; reordered or duplicated mod vertices share the original deltas.
+If some positions differ, a complete topology and primary-UV match with the same
+vertex count can recover their original indices while retaining the mod's rest
+shape. This fallback is checked during Weight loading, with no extra per-frame
+work. Other unmatched vertices receive no morph delta.
+Rigid facial components can additionally match unique UV triangles when vertices
+were split, reordered, or reshaped. Ambiguous or conflicting matches and new UVs
+remain unmapped; shared UV corners inherit an established, unique source.
+Morphs apply before skinning on the GPU and Stop restores the baseline.
+Events and game physics are not included.
 
 Opening Weight/Rig loads weights and the animation catalog first, then builds
 the rig automatically. Animation controls become available when activation
@@ -331,4 +354,4 @@ alone or stretch a secondary clip to fit a different body sequence.
 The resulting clip keeps the ordinary viewer format and records the selected
 layer checksum and bone mask in optional `reference_layer` metadata. Playback
 needs no special character logic. This includes authored secondary motion;
-facial curves and runtime cloth/collision simulation remain outside this format.
+runtime cloth/collision simulation remains outside this format.

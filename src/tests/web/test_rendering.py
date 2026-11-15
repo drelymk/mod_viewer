@@ -162,9 +162,9 @@ def test_compute_animation_gpu_matches_cpu_and_preserves_tool_geometry(module_pa
     assert result['buffers'] == result['retainedBuffers']
 
 
-@pytest.mark.parametrize('influences', [4, 8])
-def test_asset_gpu_skinning_preserves_weights_normals_parts_and_release(module_page, influences):
-    result = module_page.evaluate('''async influences => {
+@pytest.mark.parametrize('influences,morph', [(4, False), (8, False), (8, True)])
+def test_asset_gpu_skinning_preserves_weights_normals_parts_and_release(module_page, influences, morph):
+    result = module_page.evaluate('''async ({influences,morph}) => {
       const T=await import('three/webgpu');
       const {createSkinningRuntime}=await import('./js/weight-rig/skinning-runtime.js');
       const {createWeightRuntimeState}=await import('./js/weight-rig/weight-runtime.js');
@@ -192,6 +192,8 @@ def test_asset_gpu_skinning_preserves_weights_normals_parts_and_release(module_p
         indices:Uint32Array.from({length:4*influences},(_,index)=>[101,207,509,101][index%4]),
         weights:Float32Array.from({length:4*influences},(_,index)=>[.2,.3,.1,.15][index%4]),
         poseActiveVertices:new Uint32Array([0,2,3]),poseTransforms:new Map(),poseRotations:new Map()});
+      if (morph) state.animationMorph={ranges:new Float32Array([0,0,0,1,1,2,2,2]),
+        entries:new Float32Array([0,0,0,2,0,1,0, 0,0,0,1,0,0,1]),weights:new Float32Array(1)};
       const raw=geometry.attributes.position.array,rawNormal=geometry.attributes.normal.array;
       const scene=new T.Scene();
       const camera=new T.PerspectiveCamera(60,1,.1,100);camera.position.z=10;
@@ -207,10 +209,20 @@ def test_asset_gpu_skinning_preserves_weights_normals_parts_and_release(module_p
         state.poseRotations.set(101,rotation);
         state.poseTransforms.set(207,new T.Matrix4().makeTranslation(-1,.5,0));
         state.poseRotations.set(207,new T.Quaternion());
-        const positions=baseline.slice(),normals=baseNormals.slice();
-        cpu.applyWeightedTransformDeformationInto(positions,baseline,state.indices,state.weights,influences,
+        const basePosition=baseline.slice(),baseNormal=baseNormals.slice();
+        if (morph) {
+          state.animationMorph.weights[0]=angle;
+          basePosition[5]+=2*angle;basePosition[8]+=angle;
+          baseNormal[4]+=angle;baseNormal[8]+=angle;
+          for(const vertex of [1,2]) {
+            const offset=vertex*3,length=Math.hypot(...baseNormal.slice(offset,offset+3));
+            for(let axis=0;axis<3;axis++)baseNormal[offset+axis]/=length;
+          }
+        }
+        const positions=basePosition.slice(),normals=baseNormal.slice();
+        cpu.applyWeightedTransformDeformationInto(positions,basePosition,state.indices,state.weights,influences,
           state.poseTransforms,state.poseActiveVertices);
-        cpu.applyWeightedNormalDeformationInto(normals,baseNormals,state.indices,state.weights,influences,
+        cpu.applyWeightedNormalDeformationInto(normals,baseNormal,state.indices,state.weights,influences,
           state.poseRotations,state.poseActiveVertices);
         expected.push({positions:[...positions],normals:[...normals]});
         skin.applyDeformation(mesh,state,{gpu:true,invalidateShadow:false});
@@ -221,7 +233,7 @@ def test_asset_gpu_skinning_preserves_weights_normals_parts_and_release(module_p
         rawNormal.every((value,index)=>value===baseNormals[index]);
       const shared=part.geometry.attributes.position===geometry.attributes.position;
       const mirror={positions:[...geometry.attributes.position.array],normals:[...geometry.attributes.normal.array]};
-      state.poseActiveVertices=new Uint32Array();state.poseTransforms=null;state.poseRotations=null;
+      state.poseActiveVertices=new Uint32Array();state.poseTransforms=null;state.poseRotations=null;state.animationMorph=null;
       skin.applyDeformation(mesh,state,{invalidateShadow:false});skin.finalizeDeformationGeometry(mesh,state);
       const restored=[...geometry.attributes.position.array];
       const released=part.geometry.attributes.position===geometry.attributes.position && !state.animationGpu;
@@ -230,7 +242,7 @@ def test_asset_gpu_skinning_preserves_weights_normals_parts_and_release(module_p
       const buffers=renderer.info.memory.storageAttributes+renderer.info.memory.attributes;
       renderer.dispose();gpu.setAnimationComputeRenderer(null);
       return {expected,actual,lazy,shared,mirror,restored,released,errors,buffers,retainedBuffers};
-    }''', influences)
+    }''', {'influences': influences, 'morph': morph})
     if result.get('unavailable'):
         pytest.skip('GPU skinning requires a compatible WebGPU device')
     assert result['errors'] == []

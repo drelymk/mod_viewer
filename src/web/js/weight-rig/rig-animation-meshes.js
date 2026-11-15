@@ -2,6 +2,7 @@ import { Quaternion } from 'three';
 import { t } from '../i18n/index.js';
 import { isGameRigSkeleton } from './game-rig.js';
 import { getLooseParts } from '../mesh/loose-parts.js';
+import { bindAnimationMorphs } from './animation-morphs.js';
 
 // Playback bindings stay per mesh; they never promote inferred model joints to game bones.
 export function buildAnimationMeshBinding(meshes, states) {
@@ -55,6 +56,19 @@ export function createAnimationMeshSession({
 }) {
   const participants = new Map();
   const rotations = new Map();
+  let morphSource = null;
+  const morphStates = new Set();
+  function setMorphs(binding, morphs) {
+    if (morphSource === morphs) return;
+    for (const state of morphStates) state.animationMorph = null;
+    morphStates.clear();
+    morphSource = morphs;
+    for (const mesh of binding?.meshes.keys() || []) {
+      const state = states.get(mesh);
+      state.animationMorph = bindAnimationMorphs(state, morphs);
+      if (state.animationMorph) morphStates.add(state);
+    }
+  }
   function prepare(binding, { deform = false } = {}) {
     if (!binding) return;
     if (deform) {
@@ -105,6 +119,9 @@ export function createAnimationMeshSession({
     requestRender();
   }
   function stop() {
+    for (const state of morphStates) state.animationMorph = null;
+    morphStates.clear();
+    morphSource = null;
     let changed = false;
     for (const [mesh, { state, vertices }] of participants) {
       if (!vertices) continue;
@@ -120,5 +137,5 @@ export function createAnimationMeshSession({
     if (changed) invalidateShadow({ request: false });
     requestRender();
   }
-  return { prepare, apply, stop };
+  return { prepare, apply, stop, setMorphs };
 }

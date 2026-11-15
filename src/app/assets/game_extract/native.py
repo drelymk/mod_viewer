@@ -128,8 +128,28 @@ def read_mesh(file):
         quantized = round(weight * 255)
         if quantized:
             weights[vertex].append((bone, quantized))
+    morphs = {}
+    if "MORPHTARGETS" in level:
+        source = Reader(level["MORPHTARGETS"])
+        total = 0
+        for _ in range(source.count(256)):
+            morph_name = source.string()
+            count = source.count(MAX_VERTICES)
+            total += count
+            if not morph_name or morph_name in morphs or total > MAX_VERTICES * MAX_INFLUENCES:
+                raise ValueError("Native morph targets exceed their limits.")
+            rows, seen = [], set()
+            for _ in range(count):
+                values = struct.unpack("<6fI", source.take(28))
+                vertex = values[-1]
+                if (vertex >= len(positions) or vertex in seen
+                        or any(not math.isfinite(v) or abs(v) > 1e6 for v in values[:6])):
+                    raise ValueError("Native morph target is invalid.")
+                seen.add(vertex)
+                rows.append(values)
+            morphs[morph_name] = rows
     return dict(name=name, package=package, bones=bones, positions=positions,
-                indices=indices, uv=uv, sections=sections, weights=weights)
+                indices=indices, uv=uv, sections=sections, weights=weights, morphs=morphs)
 
 
 def capture(root, record):

@@ -5,6 +5,10 @@ import json
 import math
 import os
 import re
+import struct
+from itertools import product
+
+from core.geometry.migoto_format import parse_fmt
 
 from . import paths
 
@@ -198,8 +202,174 @@ def _json(path):
         return json.load(stream)
 
 
+def _morph_reference(directory, reference_dir, palette, cache):
+    """Read each contained reference layout/vertex buffer once during Weight loading."""
+    key = "morph-reference", reference_dir, palette["component_ordinal"]
+    if key not in cache:
+        cache[key] = None
+        files = [paths.safe_asset_path(directory, os.path.relpath(os.path.join(
+            reference_dir, f"Component {palette['component_ordinal']}.{extension}"), directory))
+            for extension in ("fmt", "vb", "ib")]
+        if not all(files) or os.path.getsize(files[0]) > 1024 * 1024:
+            return None
+        layout = parse_fmt(files[0])
+        if layout.stride <= 0 or os.path.getsize(files[1]) > 64 * 1024 * 1024:
+            return None
+        with open(files[1], "rb") as stream:
+            data = stream.read(64 * 1024 * 1024 + 1)
+        if len(data) > 64 * 1024 * 1024 or len(data) % layout.stride:
+            return None
+        cache[key] = dict(layout=layout, vertices=data, count=len(data) // layout.stride, index_file=files[2])
+    return cache[key]
+
+
+def _reference_morph_topology(reference, palette):
+    """Share one canonical topology/UV decode between exact and triangle matching."""
+    if "topology" not in reference:
+        reference["topology"] = None
+        layout, vertices = reference["layout"], reference["vertices"]
+        uv = layout.semantic("TEXCOORD", 0)
+        uv_format = {"R16G16_FLOAT": "<2e", "R32G32_FLOAT": "<2f"}.get(
+            uv.format.removeprefix("DXGI_FORMAT_")) if uv else None
+        index_format = {"R16_UINT": "<3H", "R32_UINT": "<3I"}.get(layout.index_format.removeprefix("DXGI_FORMAT_"))
+        if (not uv_format or not index_format or uv.offset < 0
+                or uv.offset + struct.calcsize(uv_format) > layout.stride
+                or os.path.getsize(reference["index_file"]) > 64 * 1024 * 1024):
+            return None
+        with open(reference["index_file"], "rb") as stream:
+            raw_indices = stream.read(64 * 1024 * 1024 + 1)
+        if (len(raw_indices) > 64 * 1024 * 1024
+                or len(raw_indices) != palette["index_count"] * struct.calcsize(index_format) // 3):
+            return None
+        topology_hash, uvs = hashlib.sha256(), bytearray()
+        for a, b, c in struct.iter_unpack(index_format, raw_indices):
+            if max(a, b, c) >= reference["count"]:
+                return None
+            topology_hash.update(struct.pack("<3I", a, c, b))
+        for offset in range(0, len(vertices), layout.stride):
+            u, v = struct.unpack_from(uv_format, vertices, offset + uv.offset)
+            if not math.isfinite(u) or not math.isfinite(v):
+                return None
+            uvs.extend(struct.pack("<2f", u, 1 - v))
+        reference["topology"] = raw_indices, bytes(uvs)
+        reference["index_format"] = index_format
+        reference["signature"] = topology_hash.hexdigest(), hashlib.sha256(uvs).hexdigest()
+    return reference["topology"]
+
+
+def _mod_morph_uv_triangles(reference, vertex_count, topology):
+    """Recover split/reordered rigid vertices from unambiguous UV triangles."""
+    indices, uvs = topology
+    if (vertex_count > 100000 or reference["count"] > 100000
+            or not indices or len(indices) % 12 or len(indices) > 1200000
+            or len(uvs) != vertex_count * 8 or len(reference["topology"][0]) > 1200000):
+        return None
+    if "triangles" not in reference:
+        original_indices, original_uvs = reference["topology"]
+        points = [original_uvs[offset:offset + 8] for offset in range(0, len(original_uvs), 8)]
+        unique = {}
+        for index, point in enumerate(points):
+            unique[point] = None if point in unique else index
+        triangles = {}
+        for a, b, c in struct.iter_unpack(reference["index_format"], original_indices):
+            ids = (a, c, b)
+            for shift in range(3):
+                row = ids[shift:] + ids[:shift]
+                triangle = tuple(points[index] for index in row)
+                if triangle not in triangles:
+                    triangles[triangle] = row
+                elif triangles[triangle] != row:
+                    triangles[triangle] = None
+        reference["triangles"], reference["unique_uvs"] = triangles, unique
+    triangles, unique = reference["triangles"], reference["unique_uvs"]
+    points = [uvs[offset:offset + 8] for offset in range(0, len(uvs), 8)]
+    mapping, conflicts = [-1] * vertex_count, set()
+    for row in struct.iter_unpack("<3I", indices):
+        if max(row) >= vertex_count:
+            return None
+        source = triangles.get(tuple(points[index] for index in row))
+        if source is None:
+            continue
+        for index, target in zip(row, source):
+            if mapping[index] not in (-1, target):
+                conflicts.add(index)
+            mapping[index] = target
+    for index in conflicts:
+        mapping[index] = -1
+    proven = {points[index] for index, target in enumerate(mapping) if target >= 0}
+    for index, point in enumerate(points):
+        if mapping[index] < 0 and index not in conflicts and point in proven and unique.get(point) is not None:
+            mapping[index] = unique[point]
+    return mapping
+
+
+def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, signature=(), topology=()):
+    """Map rest positions first, then use proven topology for reshaped faces."""
+    if not positions or len(positions) % 12:
+        return None
+    try:
+        reference = _morph_reference(directory, reference_dir, palette, cache)
+        if reference is None:
+            return None
+        if "buckets" not in reference:
+            reference["buckets"] = None
+            layout, data = reference["layout"], reference["vertices"]
+            element = layout.semantic("POSITION")
+            if (not element or element.format.removeprefix("DXGI_FORMAT_") != "R32G32B32_FLOAT"
+                    or element.offset < 0 or element.offset + 12 > layout.stride):
+                return None
+            buckets = {}
+            for index in range(reference["count"]):
+                point = struct.unpack_from("<3f", data, index * layout.stride + element.offset)
+                if not all(math.isfinite(value) for value in point):
+                    return None
+                cell = tuple(math.floor(value * 10000) for value in point)
+                bucket = buckets.setdefault(cell, {})
+                bucket.setdefault(point, index)
+                if len(bucket) > 64:
+                    return None
+            reference["buckets"] = buckets
+        buckets = reference["buckets"]
+        if buckets is None:
+            return None
+        vertices = []
+        for point in struct.iter_unpack("<3f", positions):
+            if not all(math.isfinite(value) for value in point):
+                vertices.append(-1)
+                continue
+            cell = tuple(math.floor(value * 10000) for value in point)
+            exact = buckets.get(cell, {}).get(point)
+            if exact is not None:
+                vertices.append(exact)
+                continue
+            best, distance = -1, 1e-8
+            for delta in product((-1, 0, 1), repeat=3):
+                for reference_point, index in buckets.get(tuple(a + b for a, b in zip(cell, delta)), {}).items():
+                    squared = sum((a - b) ** 2 for a, b in zip(point, reference_point))
+                    if squared < distance:
+                        best, distance = index, squared
+            vertices.append(best)
+        exact_topology = len(signature) == 2 and len(vertices) == reference["count"]
+        uv_triangles = len(topology) == 2 and len(palette["bone_map"]) == 1
+        if -1 in vertices and (exact_topology or uv_triangles):
+            try:
+                reference_topology = _reference_morph_topology(reference, palette)
+            except (OSError, ValueError, TypeError, struct.error):
+                reference_topology = None
+            if reference_topology is not None:
+                if exact_topology and signature == reference["signature"]:
+                    return list(range(len(vertices)))
+                if uv_triangles:
+                    uv_mapping = _mod_morph_uv_triangles(reference, len(vertices), topology)
+                    if uv_mapping is not None:
+                        vertices = [target if target >= 0 else original for target, original in zip(uv_mapping, vertices)]
+        return vertices if any(vertex >= 0 for vertex in vertices) else None
+    except (OSError, ValueError, TypeError, struct.error):
+        return None
+
+
 def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
-                     blend_sha256=None, merged_layout=(), captured_palette=False):
+                     blend_sha256=None, merged_layout=(), captured_palette=False, positions=b"", morph_signature=(), morph_topology=()):
     """Read optional rig data only for a retained exact Asset/range binding.
 
     Unsupported skin namespaces, changed reference geometry and incomplete
@@ -287,7 +457,12 @@ def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
                 return None
         mapping = {str(index + offset): target for index, target
                    in enumerate(bone_map)}
+        morph_binding = {key: palette[key] for key in ("vertex_sha256", "index_sha256")}
+        if not captured_palette:
+            vertices = _mod_morph_vertices(directory, reference_dir, palette, positions, cache, morph_signature, morph_topology)
+            morph_binding = {**morph_binding, "vertices": vertices} if vertices is not None else None
         return dict(id=rig["id"], bones=rig["bones"], bone_map=mapping,
-                    humanoid_controls=rig.get("humanoid_controls"))
+                    humanoid_controls=rig.get("humanoid_controls"),
+                    morph_binding=morph_binding)
     except (OSError, ValueError, TypeError, KeyError, IndexError, RecursionError):
         return None

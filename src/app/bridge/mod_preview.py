@@ -436,7 +436,8 @@ class ModPreview:
                         selected.asset_binding, selected.skinning_source,
                         decoded.bone_ids, enabled_roots, rig_cache,
                         blend_sha256=rig_cache.get(digest_key),
-                        merged_layout=selected.merged_layout)
+                        merged_layout=selected.merged_layout, positions=selected.positions,
+                        morph_signature=selected.morph_signature, morph_topology=selected.morph_topology)
                     if game_rig:
                         rig_id = game_rig["id"]
                         if rig_id not in game_rigs:
@@ -449,6 +450,8 @@ class ModPreview:
                             }
                         entry["game_rig_id"] = rig_id
                         entry["game_bone_map"] = game_rig["bone_map"]
+                        if game_rig["morph_binding"]:
+                            entry["game_morph_binding"] = game_rig["morph_binding"]
                 except SkinningPreviewError as error:
                     meshes[mesh_key] = {
                         "status": "error",

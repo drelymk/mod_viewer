@@ -325,7 +325,8 @@ const rigAnimation = createRigAnimation({
     animationMeshes.prepare(getAnimationBinding(), { deform: !modelSkinningRig?.gameRig });
   },
   suspendPhysics: (value) => rigPoseRuntime.setHumanoidEditPhysicsSuspended(value),
-  applyPose: (transforms, { finalize = false } = {}) => {
+  applyPose: (transforms, { finalize = false, morphs = null } = {}) => {
+    animationMeshes.setMorphs(getAnimationBinding(), morphs);
     if (!transforms) animationMeshes.stop();
     if (!modelSkinningRig?.gameRig && transforms) {
       animationMeshes.apply(transforms, { finalize });

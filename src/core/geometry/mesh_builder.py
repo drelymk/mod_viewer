@@ -1,5 +1,6 @@
 """Public facade for semantic projection and mesh payload construction."""
 
+import hashlib
 import os
 import time
 from dataclasses import dataclass
@@ -219,15 +220,36 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                         buffers=buffers, source=source, geometry=geometry,
                         shared=shared, sparse_shape_cache=sparse_shape_cache)
 
+            publication = cache.publish(packed, geometry)
             if draw.skinning_source is not None:
+                rest_positions, morph_signature, morph_topology = b"", (), ()
+                binding = draw.asset_binding
+                if getattr(binding, "asset_type", None) == "WWMI":
+                    position_range = publication["pos"]
+                    rest_positions = (bytes(geometry.data[position_range["offset"]:
+                                      position_range["offset"] + position_range["length"]])
+                                      if cached is not None else packed.positions)
+                    if "uv" in publication:
+                        morph_signature = tuple(hashlib.sha256(memoryview(geometry.data)[
+                            publication[field]["offset"]:publication[field]["offset"] + publication[field]["length"]
+                        ]).hexdigest() for field in ("idx", "uv"))
+                        palette_sizes = [row[4] for row in draw.skinning_merged_layout
+                                         if row[:3] == (binding.geometry_hash, binding.first_index, binding.index_count)]
+                        if ((not palette_sizes or palette_sizes == [1])
+                                and len(packed.used_vertices) <= 100000
+                                and publication["idx"]["length"] <= 1200000):
+                            morph_topology = tuple(bytes(memoryview(geometry.data)[
+                                publication[field]["offset"]:publication[field]["offset"] + publication[field]["length"]
+                            ]) for field in ("idx", "uv"))
                 skinning_manifest[draw.label] = \
                     SkinningManifestEntry.from_vertices(
                         draw.label, draw.skinning_source,
                         packed.used_vertices, asset_binding=draw.asset_binding,
-                        merged_layout=draw.skinning_merged_layout)
+                        merged_layout=draw.skinning_merged_layout,
+                        positions=rest_positions, morph_signature=morph_signature, morph_topology=morph_topology)
 
             entry: dict = {
-                **cache.publish(packed, geometry),
+                **publication,
                 "skinning_available": draw.skinning_source is not None,
                 "tex_key": None,
                 "normal_map_y_sign": texture_profile.normal_y_sign,

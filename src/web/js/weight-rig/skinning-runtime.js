@@ -11,6 +11,7 @@ import { resumeAnimatedMesh } from '../mesh/animation-runtime.js';
 import { syncLoosePartMaterial } from '../mesh/loose-parts.js';
 import { createAnimationSkinningGpu } from './animation-skinning-gpu.js';
 import { invalidateCharacterShadowGeometry } from '../scene/shadow-invalidation.js';
+import { morphBaseline } from './animation-morphs.js';
 
 function typedView(buffer, descriptor, Type, typeName) {
   if (!descriptor || descriptor.type !== typeName) {
@@ -140,11 +141,16 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     const finalRotations = physicsActive ? composedRotations : state.poseRotations;
     const previousVertices = state.combinedActiveVertices || EMPTY_ACTIVE_VERTICES;
     const activeVertices = combinedActiveVerticesForState(state);
-    if (gpu && !physicsActive && activeVertices.length && finalTransforms) {
+    if (state.animationGpu && state.animationGpu.morph !== (state.animationMorph || null)) {
+      state.animationGpu.dispose();
+      state.animationGpu = null;
+    }
+    if (gpu && !physicsActive && (activeVertices.length || state.animationMorph) && finalTransforms) {
       state.animationGpu ??= createAnimationSkinningGpu(mesh, state);
       if (state.animationGpu) {
         mesh.userData.animationSuspended = true;
         state.animationGpu.update(finalTransforms, finalRotations, activeVertices);
+        state.morphApplied = !!state.animationMorph;
         markFinalBoundsDirty(mesh, state);
         if (shouldInvalidateShadow) invalidateCharacterShadowGeometry({ request });
         else if (request) requestRender();
@@ -157,28 +163,41 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
       state.animationGpu = null;
     }
     const position = mesh.geometry.attributes.position;
-    const takingOwnership = Boolean(activeVertices.length || state.deformationMode || state.physicsEnabled);
+    const baseline = morphBaseline(state);
+    const morphChanged = !!state.animationMorph || state.morphApplied;
+    if (morphChanged) {
+      position.array.set(baseline.positions);
+      const normal = mesh.geometry.attributes.normal;
+      if (normal && baseline.normals) {
+        normal.array.set(baseline.normals);
+        normal.needsUpdate = true;
+      }
+    }
+    state.morphApplied = !!state.animationMorph;
+    const takingOwnership = Boolean(
+      activeVertices.length || state.animationMorph || state.deformationMode || state.physicsEnabled,
+    );
     const wasSuspended = mesh.userData.animationSuspended === true;
     if (takingOwnership && mesh.userData.animationSuspended !== true) {
       // Animation may have written a baked frame since the last deformation
       // pass. Start the deformation owner from the canonical/rest geometry so
       // the first pose does not mix two unrelated vertex spaces.
-      position.array.set(state.baselinePositions);
+      position.array.set(baseline.positions);
       const normal = mesh.geometry.attributes.normal;
       if (normal && state.baselineNormals && normal.array.length === state.baselineNormals.length) {
-        normal.array.set(state.baselineNormals);
+        normal.array.set(baseline.normals);
         normal.needsUpdate = true;
       }
       position.needsUpdate = true;
     }
     mesh.userData.animationSuspended = takingOwnership;
     const removedVertices = vertexDifference(previousVertices, activeVertices);
-    if (removedVertices.length) restorePoseVertices(mesh, state, removedVertices);
+    if (removedVertices.length && !morphChanged) restorePoseVertices(mesh, state, removedVertices);
     let deformedVertices = 0;
     if (activeVertices.length && finalTransforms) {
       deformedVertices = applyWeightedTransformDeformationInto(
         position.array,
-        state.baselinePositions,
+        baseline.positions,
         state.indices,
         state.weights,
         state.influenceCount,
@@ -189,7 +208,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
       if (normal && state.baselineNormals && normal.array.length === state.baselineNormals.length && finalRotations) {
         applyWeightedNormalDeformationInto(
           normal.array,
-          state.baselineNormals,
+          baseline.normals,
           state.indices,
           state.weights,
           state.influenceCount,
@@ -199,7 +218,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
         normal.needsUpdate = true;
       }
     }
-    const changed = removedVertices.length > 0 || deformedVertices > 0;
+    const changed = removedVertices.length > 0 || deformedVertices > 0 || morphChanged;
     state.finalBoundsDirty = state.finalBoundsDirty || changed;
     if (changed) markFinalBoundsDirty(mesh, state);
     position.needsUpdate = changed || activeVertices.length > 0;
@@ -346,6 +365,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     state.diagnostics = entry.diagnostics || null;
     state.weightBoneStats = weightBoneStats;
     state.gameRig = entry.game_rig ? { ...entry.game_rig, boneMap: entry.game_bone_map || {} } : null;
+    state.gameMorphBinding = entry.game_morph_binding || null;
     state.loaded = true;
     state.error = null;
     return { state, source };

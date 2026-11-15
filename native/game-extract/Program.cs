@@ -201,7 +201,7 @@ internal sealed class GameSession(string paks, string work) : IDisposable
         var session = new ExportSession { MaxDegreeOfParallelism = 1 };
         session.Add(exporter);
         var options = new ExportOptions(meshFormat: kind == "mesh" ? EMeshFormat.UEFormat : EMeshFormat.ActorX,
-            exportMaterials: false, exportMorphTargets: false);
+            exportMaterials: false, exportMorphTargets: true);
         var results = await session.RunAsync(destination, options);
         if (results.Count == 0 || results.Any(result => !result.Success)) throw new InvalidDataException();
         return results.SelectMany(result => result.DiskFilePaths ?? []).Select(file => Contract.Destination(destination, file)).ToArray();

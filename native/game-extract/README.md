@@ -7,8 +7,8 @@ the parser. No upstream MCP or hosting code is built, invoked or downloaded.
 
 The private protocol supports only WuWa package search (`SkeletalMesh` and
 `AnimSequence`), child folders, property JSON, highest-detail UEFormat skeletal
-meshes and ActorX animations. Mesh exports disable materials, textures and morph
-targets. One provider remains mounted until the extraction job finishes; closing
+meshes with morph targets and ActorX animations. Mesh exports disable materials
+and textures; property exports retain decoded animation curves. One provider remains mounted until the extraction job finishes; closing
 or cancelling the job terminates the process before staging cleanup. Responses
 are atomic files in private staging, with bounded JSON requests and responses.
 The Python client checks the private work directory before each command, during

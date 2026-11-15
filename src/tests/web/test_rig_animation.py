@@ -153,6 +153,8 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
     weights['game_rigs'] = {'rig01': dict(id='rig01', bones=bones, animation_session='session01',
         animations=[dict(id='clip01', name='Clip 01', duration=1)])}
     weights['meshes']['mesh-00'].update(game_rig_id='rig01', game_bone_map={'0': 0, '1': 1})
+    weights['meshes']['mesh-00']['game_morph_binding'] = dict(vertex_sha256='a' * 64, index_sha256='b' * 64,
+                                                               vertices=[2, 0, 1])
     if partial:
         weights['game_rigs']['rig02'] = dict(id='rig02', bones=bones, animations=[])
         weights['meshes']['mesh-02'].update(game_rig_id='rig02', game_bone_map={'4': 0, '5': 1})
@@ -162,6 +164,12 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
                               + [2, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1]))
     clip = dict(status='ok', clip=dict(id='clip01', name='Clip 01', skeleton_id='rig01',
         frame_count=2, bone_count=2, duration=1, data=dict(length=len(data))))
+    morph_data = struct.pack('<I6f', 2, 0, 0, 2, 0, 0, 0)
+    data += struct.pack('<2f', 0, 1)
+    clip['clip']['data']['length'] = len(data)
+    clip['clip']['morphs'] = dict(names=['Shape01'], data=dict(length=len(morph_data)), components=[
+        dict(vertex_sha256='a' * 64, index_sha256='b' * 64, vertex_count=3,
+             targets=[dict(name='Shape01', offset=0, count=1)])])
     ini = compute_mod(tmp_path / 'mod')
     parsed, built = load_mod(ini, ini.parent)
     replacement = model_payload()
@@ -173,6 +181,7 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
     page.on('pageerror', lambda error: errors.append(str(error)))
     def load_clip(_source):
         clip['clip']['data']['url'] = server.publish_geometry(data, replace=False)
+        clip['clip']['morphs']['data']['url'] = server.publish_geometry(morph_data, replace=False)
         return clip
     page.expose_binding('__animationClip', load_clip)
     page.evaluate('''() => {
@@ -267,7 +276,7 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
         assert page.evaluate('''window.modViewer.activeMeshes.slice(1).every((mesh,index)=>
           [...mesh.geometry.attributes.position.array].every((v,i)=>Object.is(v,window.__unsupportedBaselines[index][i])))''')
     assert seek_report['minimum'] == pytest.approx(1), seek_report
-    assert seek_report['values'] == pytest.approx([v + (1 if i % 3 == 0 else 0)
+    assert seek_report['values'] == pytest.approx([v + (1 if i % 3 == 0 else 0) + (1 if i == 2 else 0)
         for i,v in enumerate(seek_report['baseline'])], abs=1e-5), seek_report
     assert page.evaluate('''async () => {
       const {weightRigSkinningRuntime:skin}=await import('./js/weight-rig/weight-rig-core.js');
@@ -340,3 +349,45 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
       const rig=window.__animationApi.getModelRigState();
       return result.stale && !rig.loading && !rig.loaded && !window.__animationApi.getRigAnimationState().clips.length;
     }''')
+
+
+def test_morph_compaction_interpolation_cpu_skinning_and_release(module_page):
+    result = module_page.evaluate('''async () => {
+      const T=await import('three');
+      const {bindAnimationMorphs,sampleMorphWeights}=await import('./js/weight-rig/animation-morphs.js');
+      const {createSkinningRuntime}=await import('./js/weight-rig/skinning-runtime.js');
+      const {createWeightRuntimeState}=await import('./js/weight-rig/weight-runtime.js');
+      const runtime=createWeightRuntimeState(),skin=createSkinningRuntime({...runtime,requestRender:()=>{}});
+      const geometry=new T.BufferGeometry();
+      geometry.setAttribute('position',new T.Float32BufferAttribute([1,0,0,0,1,0,1,1,0],3));
+      geometry.setAttribute('normal',new T.Float32BufferAttribute([0,0,1,0,0,1,0,0,1],3));
+      const mesh=new T.Mesh(geometry,new T.MeshBasicMaterial()),state=runtime.stateFor(mesh);
+      const baseline=geometry.attributes.position.array.slice();
+      Object.assign(state,{loaded:true,baselinePositions:baseline,baselineNormals:geometry.attributes.normal.array.slice(),
+        indices:new Uint32Array([7,7,7]),weights:new Float32Array([1,1,1]),influenceCount:1,
+        gameMorphBinding:{vertex_sha256:'vb01',index_sha256:'ib01',vertices:[2,0,2]}});
+      const buffer=new ArrayBuffer(28),view=new DataView(buffer);
+      view.setUint32(0,2,true);view.setFloat32(4,2,true);view.setFloat32(20,1,true);
+      const morphs={names:['Shape01'],weights:new Float32Array(1),buffer,
+        components:[{vertex_sha256:'vb01',index_sha256:'ib01',vertex_count:3,
+          targets:[{name:'Shape01',offset:0,count:1}]}]};
+      const wrong=bindAnimationMorphs({...state,gameMorphBinding:{...state.gameMorphBinding,vertex_sha256:'other'}},morphs);
+      const mod=bindAnimationMorphs({...state,gameMorphBinding:null},morphs);
+      state.animationMorph=bindAnimationMorphs(state,morphs);
+      const clip={frame_count:2,bone_count:1,duration:1,morphs},values=new Float32Array(16);
+      values[15]=1;sampleMorphWeights(clip,values,.5);
+      const rotation=new T.Quaternion().setFromAxisAngle(new T.Vector3(0,0,1),Math.PI/2);
+      state.poseTransforms=new Map([[7,new T.Matrix4().makeRotationFromQuaternion(rotation)]]);
+      state.poseRotations=new Map([[7,rotation]]);state.poseActiveVertices=new Uint32Array([0,1,2]);
+      skin.applyDeformation(mesh,state,{invalidateShadow:false});
+      const positions=[...geometry.attributes.position.array],normals=[...geometry.attributes.normal.array];
+      state.animationMorph=null;state.poseTransforms=null;state.poseRotations=null;state.poseActiveVertices=new Uint32Array();
+      skin.applyDeformation(mesh,state,{invalidateShadow:false});skin.finalizeDeformationGeometry(mesh,state);
+      const restored=[...geometry.attributes.position.array];skin.disposeMesh(mesh);geometry.dispose();mesh.material.dispose();
+      return {positions,normals,restored,weight:morphs.weights[0],wrong:wrong===null,mod:mod===null};
+    }''')
+    assert result['positions'] == pytest.approx([0,2,0,-1,0,0,-1,2,0], abs=1e-6)
+    assert result['normals'] == pytest.approx([-.5 / 1.25 ** .5,0,1 / 1.25 ** .5,0,0,1,
+                                             -.5 / 1.25 ** .5,0,1 / 1.25 ** .5], abs=1e-6)
+    assert result['restored'] == [1,0,0,0,1,0,1,1,0]
+    assert result['weight'] == .5 and result['wrong'] and result['mod']
