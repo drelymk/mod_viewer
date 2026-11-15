@@ -1,5 +1,6 @@
 """Discovery of selected INI files from a directory or virtual archive."""
 
+import json
 import os
 import re
 
@@ -11,6 +12,27 @@ _MAX_INI_FILES = 10
 _MAX_INI_DEPTH = 2
 _DRAW_RE = re.compile(r"^drawindexed\s*=", re.I)
 _IB_RE = re.compile(r"^ib\s*=", re.I)
+
+
+def removed_ini_names(source):
+    """Read viewer-only exclusions as case-insensitive mod-relative identities."""
+    try:
+        data = json.loads(source.read_text(
+            source.resolve_resource(".mod_viewer.json")))
+    except (OSError, ValueError, TypeError, UnicodeError, ModSourceError):
+        return set()
+    names = data.get("removed_inis", []) if isinstance(data, dict) else []
+    if not isinstance(names, list):
+        return set()
+    return {name.replace("\\", "/").casefold()
+            for name in names if isinstance(name, str)}
+
+
+def filter_removed_ini_paths(paths, source, *, removed=None):
+    """Filter paths without resolving metadata entries as filesystem paths."""
+    removed = removed_ini_names(source) if removed is None else removed
+    return [path for path in paths
+            if source.logical_path(path).casefold() not in removed]
 
 
 def _selected(name, *, disabled=False):
@@ -73,12 +95,16 @@ def discover_ini_paths(mod_dir, *, disabled=False, source=None,
     are never combined.
     """
     source = source or mod_source_for_path(mod_dir)
+    removed = removed_ini_names(source)
+    def visible(paths):
+        return filter_removed_ini_paths(paths, source, removed=removed)
+
     if source.virtual:
-        return [
+        return visible([
             source.document_path(logical)
             for logical in source.list_files()
             if _selected(logical.rsplit("/", 1)[-1], disabled=disabled)
-        ]
+        ])
 
     direct = _ini_names(mod_dir if not source.virtual else "",
                         source, disabled=disabled)
@@ -94,9 +120,11 @@ def discover_ini_paths(mod_dir, *, disabled=False, source=None,
             return False
 
     if not any(has_geometry(path) for path in direct):
-        return direct
+        return visible(direct)
 
-    found = list(direct)
+    # Excluded roots still anchor the same bounded mod selection. Removing one
+    # must not make its surviving nested INIs disappear or consume their cap.
+    found = visible(direct)
     if len(found) >= _MAX_INI_FILES:
         return found
     if not source.virtual:
@@ -106,7 +134,7 @@ def discover_ini_paths(mod_dir, *, disabled=False, source=None,
             dirs[:] = sorted(dirs) if depth < _MAX_INI_DEPTH else []
             if depth == 0:
                 continue
-            for path in _ini_names(base, source, disabled=disabled):
+            for path in visible(_ini_names(base, source, disabled=disabled)):
                 found.append(path)
                 if len(found) >= _MAX_INI_FILES:
                     return found

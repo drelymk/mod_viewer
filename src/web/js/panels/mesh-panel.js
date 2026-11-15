@@ -62,6 +62,15 @@ function groupByComponent(names, meshes) {
   return grouped;
 }
 
+function groupByIni(names, meshes) {
+  const grouped = {};
+  for (const name of names) {
+    const ini = meshes[name]?.identity?.source || '';
+    (grouped[ini] ||= []).push(name);
+  }
+  return grouped;
+}
+
 function createComponentDescriptor(groupName, names, meshes, src, modPath, options) {
   const texturePicker = options.texturePicker || null;
   const poolIds = new Set(names.map((name) => meshes[name].texture_pool_id).filter(Boolean));
@@ -201,82 +210,110 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   const multiSource = usesSourceSections(bySource);
 
   for (const src of sources) {
+    const byIni = options.iniSections ? groupByIni(bySource[src], meshes) : { '': bySource[src] };
+    const inis = Object.keys(byIni);
+    const sourceLabel = src || (options.iniSections && inis.length === 1 ? inis[0] : '');
     const container =
-      multiSource && src
-        ? buildSourceSection(src, list, {
+      (multiSource && src) || sourceLabel
+        ? buildSourceSection(sourceLabel, list, {
             headerClass: 'mesh-src-hdr',
             itemsClass: 'mesh-src-items',
           })
         : list;
     const sourceHeader = container === list ? null : container.previousElementSibling;
     if (sourceHeader) {
-      const button = buildGroupVisibilityButton(src, () => sourceMeshes(sourceHeader), 'source-visibility-btn');
-      sourceHeader.insertBefore(button, sourceHeader.querySelector('.group-name'));
+      if (multiSource && src) {
+        const button = buildGroupVisibilityButton(src, () => sourceMeshes(sourceHeader), 'source-visibility-btn');
+        sourceHeader.insertBefore(button, sourceHeader.querySelector('.group-name'));
+      }
       if (options.assetSections?.[src] && options.onRemoveAssetSection) {
         sourceHeader.addEventListener('contextmenu', (event) => {
           event.preventDefault();
           event.stopPropagation();
           showMeshContextMenu(event, [{ key: 'asset.removeSection', run: () => options.onRemoveAssetSection(src) }]);
         });
+      } else if (inis.length === 1 && inis[0] && options.onRemoveIni && options.canPersistMetadata !== false) {
+        sourceHeader.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          showMeshContextMenu(event, [{ key: 'mesh.removeIni', run: () => options.onRemoveIni(inis[0]) }]);
+        });
       }
     }
 
-    for (const [groupName, names] of Object.entries(groupByComponent(bySource[src], meshes))) {
-      const itemsWrap = document.createElement('div');
-      itemsWrap.className = 'group-items';
-      itemsWrap.id = `mesh-group-${++meshSectionId}`;
-
-      const itemCbs = [];
-      const componentDescriptor = createComponentDescriptor(groupName, names, meshes, src, modPath, options);
-      const itemObjs = componentDescriptor.meshes;
-      const { hdr, visibilityButton, syncLabels, syncEditState } = buildGroupHeader(
-        groupName,
-        itemsWrap,
-        componentDescriptor,
-      );
-      componentDescriptor.header = hdr;
-      componentDescriptor.syncEditState = syncEditState;
-      container.append(hdr, itemsWrap);
-
-      for (const name of names) {
-        const mesh = liveMeshes?.get?.(name) || liveMeshes?.[name];
-        if (!mesh) throw new Error(`Missing live mesh for ${name}`);
-        mesh.userData.componentDescriptor = componentDescriptor;
-        itemObjs.push(mesh);
-        const { wrap } = buildDrawRow(name, groupName, meshes[name], mesh, itemCbs);
-        itemsWrap.appendChild(wrap);
-        const inspectorRecord = {
-          component: componentDescriptor,
-          entry: meshes[name],
-          label: mesh.userData.displayName || name,
-        };
-        registerInspectorMesh(mesh, inspectorRecord);
-        meshPanelContexts.set(mesh, {
-          name,
-          groupName,
-          entry: meshes[name],
-          inspectorRecord,
-          modPath,
-          onToggleChange: options.onToggleChange,
+    for (const [ini, iniNames] of Object.entries(byIni)) {
+      const iniContainer =
+        inis.length > 1 && ini
+          ? buildSourceSection(ini, container, {
+              headerClass: 'mesh-src-hdr mesh-ini-hdr',
+              itemsClass: 'mesh-src-items mesh-ini-items',
+            })
+          : container;
+      if (iniContainer !== container && options.onRemoveIni && options.canPersistMetadata !== false) {
+        iniContainer.previousElementSibling.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          showMeshContextMenu(event, [{ key: 'mesh.removeIni', run: () => options.onRemoveIni(ini) }]);
         });
       }
-      recomputeAutomaticTextureBoundaries(itemObjs);
-      recomputeTextureRuns(itemObjs);
-      registerTextureRunGroup(itemObjs);
+      for (const [groupName, names] of Object.entries(groupByComponent(iniNames, meshes))) {
+        const itemsWrap = document.createElement('div');
+        itemsWrap.className = 'group-items';
+        itemsWrap.id = `mesh-group-${++meshSectionId}`;
 
-      groupsUI.push({
-        visibilityButton,
-        itemCbs,
-        itemObjs,
-        componentDescriptor,
-        header: componentDescriptor.header,
-        itemsWrap,
-        sourceContainer: container === list ? null : container,
-        sourceHeader,
-        syncLabels,
-        assetFill: names.every((name) => meshes[name]?.asset_fill === true),
-        assetResolution: options.assetResolution || null,
-      });
+        const itemCbs = [];
+        const componentDescriptor = createComponentDescriptor(groupName, names, meshes, src, modPath, options);
+        componentDescriptor.ini = ini;
+        const itemObjs = componentDescriptor.meshes;
+        const { hdr, visibilityButton, syncLabels, syncEditState } = buildGroupHeader(
+          groupName,
+          itemsWrap,
+          componentDescriptor,
+        );
+        componentDescriptor.header = hdr;
+        componentDescriptor.syncEditState = syncEditState;
+        iniContainer.append(hdr, itemsWrap);
+
+        for (const name of names) {
+          const mesh = liveMeshes?.get?.(name) || liveMeshes?.[name];
+          if (!mesh) throw new Error(`Missing live mesh for ${name}`);
+          mesh.userData.componentDescriptor = componentDescriptor;
+          itemObjs.push(mesh);
+          const { wrap } = buildDrawRow(name, groupName, meshes[name], mesh, itemCbs);
+          itemsWrap.appendChild(wrap);
+          const inspectorRecord = {
+            component: componentDescriptor,
+            entry: meshes[name],
+            label: mesh.userData.displayName || name,
+          };
+          registerInspectorMesh(mesh, inspectorRecord);
+          meshPanelContexts.set(mesh, {
+            name,
+            groupName,
+            entry: meshes[name],
+            inspectorRecord,
+            modPath,
+            onToggleChange: options.onToggleChange,
+          });
+        }
+        recomputeAutomaticTextureBoundaries(itemObjs);
+        recomputeTextureRuns(itemObjs);
+        registerTextureRunGroup(itemObjs);
+
+        groupsUI.push({
+          visibilityButton,
+          itemCbs,
+          itemObjs,
+          componentDescriptor,
+          header: componentDescriptor.header,
+          itemsWrap,
+          sourceContainer: container === list ? null : container,
+          sourceHeader,
+          syncLabels,
+          assetFill: names.every((name) => meshes[name]?.asset_fill === true),
+          assetResolution: options.assetResolution || null,
+        });
+      }
     }
   }
 

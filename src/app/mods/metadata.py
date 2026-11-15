@@ -54,6 +54,20 @@ from .metadata_present import (
 MESH_COLOR_ADJUSTMENTS_KEY = "mesh_color_adjustments"
 
 
+def save_removed_ini(folder_path, ini_name):
+    """Persist an already-authorized INI identity without changing source files."""
+    with _LOCK:
+        data = load(folder_path)
+        names = data.get("removed_inis", [])
+        names = [name for name in names if isinstance(name, str)] \
+            if isinstance(names, list) else []
+        if ini_name.casefold() not in {
+                name.replace("\\", "/").casefold() for name in names}:
+            names.append(ini_name)
+        data["removed_inis"] = names
+        return _save(folder_path, data)
+
+
 def _legacy_mesh_key(name, entry):
     component = entry.get("component")
     if not component:

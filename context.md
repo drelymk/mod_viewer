@@ -1084,6 +1084,11 @@ of documentation, comments and tests; use portable fixtures instead.
 
 ## Frontend ownership
 
+- Mod INI-header Remove persists a mod-relative `removed_inis` entry in
+  `.mod_viewer.json` and reloads without that INI's meshes or controls. Keep
+  source files and staged documents intact. Exclusions apply to discovery and
+  active editor targets; sibling INIs with the same basename stay independent.
+  Compressed mods cannot persist these exclusions.
 - Manual textures persist as viewer metadata: undefined is automatic, null is
   none, a key is sticky. Clearing restores the immutable draw default; automatic
   highlighting follows the live resolved key.

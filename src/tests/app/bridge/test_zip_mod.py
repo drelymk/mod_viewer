@@ -55,6 +55,8 @@ def test_zip_present_lifecycle_stages_ini_without_metadata_or_archive_write(
 
     try:
         edit_session.load_documents(mod_dir, paths, source=source)
+        assert "compressed mods" in api.remove_ini(
+            mod_dir, "deep/variant/mod.ini")["error"]
         snapshot = {"deep/variant/mod.ini": {"Input41": "0"}}
 
         added = present_api.add_present(mod_dir, "p", "shift p", snapshot)

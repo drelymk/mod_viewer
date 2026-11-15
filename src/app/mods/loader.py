@@ -230,7 +230,12 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
     except (ModSourceError, ValueError) as error:
         return _structured_payload(error=str(error))
     context.skinning_manifest = {}
+    removed = context.metadata.get("removed_inis")
+    has_removed_inis = isinstance(removed, list) and any(
+        isinstance(name, str) and name.lower().endswith(".ini") for name in removed)
     if not context.ini_paths:
+        if has_removed_inis:
+            return _structured_payload(source=context.source)
         health = _failure_health(context)
         return _structured_payload(
             health=health,
@@ -240,6 +245,11 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
     try:
         parsed = analyze_mod_inis(context.ini)
         if not parsed.groups:
+            if has_removed_inis:
+                return _structured_payload(
+                    present=parsed.present,
+                    state_rules=parsed.state_rules, state_defaults=parsed.defaults,
+                    game=parsed.game, source=context.source)
             health = _failure_health(context)
             return _structured_payload(
                 health=health,

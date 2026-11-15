@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from copy import deepcopy
 
 from core.ini.document import IniDocument, load_ini_document
+from core.mod_discovery import filter_removed_ini_paths
 from core.mod_source import mod_source_for_path
 
 
@@ -304,14 +305,16 @@ def list_documents(mod_dir):
     """Active INI basenames in stable load order."""
     if not _same_mod(mod_dir):
         return []
-    return list(_session.docs)
+    active = set(document_paths(mod_dir))
+    return [key for key, doc in _session.docs.items() if doc.path in active]
 
 
 def document_paths(mod_dir):
-    """Absolute paths for the active INIs already loaded in this session."""
+    """Active paths, retaining excluded documents internally for staged Export."""
     if not _same_mod(mod_dir):
         return []
-    return [doc.path for doc in _session.docs.values()]
+    return filter_removed_ini_paths(
+        [doc.path for doc in _session.docs.values()], _session.source)
 
 
 def source_for(mod_dir):
@@ -366,7 +369,7 @@ def document(mod_dir, ini_name):
         raise KeyError("no INI session is loaded for this mod")
     key = str(ini_name or "").replace("\\", "/")
     if (not key or os.path.isabs(key) or key.startswith("../")
-            or "/../" in f"/{key}/" or key not in _session.docs):
+            or "/../" in f"/{key}/" or key not in list_documents(mod_dir)):
         raise KeyError(f"{ini_name!r} is not an active INI in this mod")
     return key, _session.docs[key]
 
@@ -424,7 +427,8 @@ def new_sections_for(mod_dir):
     """Return toggles added this session and not yet exported; wiring is derived separately."""
     if not _same_mod(mod_dir):
         return {}
-    return {k: set(v) for k, v in _session.new_sections.items() if v}
+    active = set(list_documents(mod_dir))
+    return {k: set(v) for k, v in _session.new_sections.items() if v and k in active}
 
 
 def overrides_for(mod_dir):
