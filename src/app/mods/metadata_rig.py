@@ -15,7 +15,7 @@ RIG_METADATA_VERSION = 1
 RIG_PRESET_NAME_MAX_LENGTH = 80
 RIG_SIGNATURE_MAX_LENGTH = 1024
 HUMANOID_CONTROL_RIG_VERSION = 2
-MODEL_RIG_BUILDER_VERSION = 5
+MODEL_RIG_BUILDER_VERSION = 6
 HUMANOID_CONTROL_KEYS = (
     "chest", "pelvis", "neck", "head", "leftShoulder", "leftElbow", "leftHand",
     "rightShoulder", "rightElbow", "rightHand", "leftHip", "leftKnee",

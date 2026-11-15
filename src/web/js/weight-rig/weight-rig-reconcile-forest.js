@@ -1,6 +1,8 @@
 // Model joints, deterministic spanning forests and synchronous root orientation.
-import { EPSILON, evidenceVector, sourceBoneKey, edgeScore, number } from './weight-rig-reconcile-evidence.js';
-import { CROSS_SOURCE_STRICT_DISTANCE } from './weight-rig-reconcile-matching.js';
+import { EPSILON, evidenceVector, sourceBoneKey, edgeScore } from './weight-rig-reconcile-evidence.js';
+
+// Robust rest pivots for sources already proven to share one numeric identity.
+const REST_PIVOT_INLIER_RADIUS_RATIO = 0.04;
 
 class ComponentUnionFind {
   constructor(ids) {
@@ -49,20 +51,7 @@ function medoid(points) {
     .point.clone();
 }
 
-export function buildModelJoints(
-  unionFind,
-  evidenceByKey,
-  strengthByKey,
-  referenceRadius,
-  { clusterOrder = null } = {},
-) {
-  const clusters = [...unionFind.clusters().values()]
-    .map((members) => members.sort())
-    .sort((left, right) =>
-      clusterOrder
-        ? clusterOrder.get(left[0]) - clusterOrder.get(right[0]) || left[0].localeCompare(right[0])
-        : left[0].localeCompare(right[0]),
-    );
+export function buildModelJoints(clusters, evidenceByKey, referenceRadius) {
   const keyToJoint = new Map();
   const joints = clusters.map((memberKeys, jointId) => {
     memberKeys.forEach((key) => keyToJoint.set(key, jointId));
@@ -82,7 +71,7 @@ export function buildModelJoints(
       )
       .filter(Boolean);
     const pivotMedoid = medoid(pivots);
-    const pivotTolerance = referenceRadius * CROSS_SOURCE_STRICT_DISTANCE;
+    const pivotTolerance = referenceRadius * REST_PIVOT_INLIER_RADIUS_RATIO;
     const acceptedPivots = pivotMedoid ? pivots.filter((pivot) => pivot.distanceTo(pivotMedoid) <= pivotTolerance) : [];
     const restPivot = weightedAverage(
       (acceptedPivots.length ? acceptedPivots : pivots).map((point) => ({ point: point.toArray(), weight: 1 })),
@@ -90,7 +79,6 @@ export function buildModelJoints(
     const representative =
       [...members].sort(
         (left, right) =>
-          (strengthByKey.get(right.sourceBoneKey) || 0) - (strengthByKey.get(left.sourceBoneKey) || 0) ||
           right.affectedVertexCount - left.affectedVertexCount ||
           right.totalWeight - left.totalWeight ||
           left.sourceBoneKey.localeCompare(right.sourceBoneKey),
@@ -291,32 +279,6 @@ export function orientModelForest(joints, edges, votes, rootOverrides = new Map(
   return { components, componentByJointId: componentById };
 }
 
-export function orientModelForestWithAttachments(joints, sourceForest, edges) {
-  const accessories = new Set(
-    edges.filter((edge) => edge.relationshipType === 'attachment').map((edge) => edge.accessoryComponentId),
-  );
-  // Accepted attachments have one parent per accessory and decreasing parent
-  // rank. Each resulting tree therefore retains exactly one source host root.
-  const hostRoots = new Map(
-    sourceForest.components
-      .filter((component) => !accessories.has(component.componentId))
-      .map((component) => [component.rootId, 1]),
-  );
-  const forest = accessories.size ? orientModelForest(joints, edges, hostRoots) : sourceForest;
-  forest.components.forEach((component) => {
-    component.edges = [];
-  });
-  // Keep accepted edge order in the published components, independently of
-  // the traversal order used to determine parents and depths.
-  edges.forEach((edge) => {
-    const componentId = forest.componentByJointId.get(edge.jointA);
-    if (componentId === forest.componentByJointId.get(edge.jointB)) {
-      forest.components[componentId].edges.push(edge);
-    }
-  });
-  return forest;
-}
-
 export function orientModelRigForest(joints, edges, rootOverrides = {}) {
   const overrides =
     rootOverrides instanceof Map
@@ -325,10 +287,6 @@ export function orientModelRigForest(joints, edges, rootOverrides = {}) {
           Object.entries(rootOverrides || {}).map(([componentId, jointId]) => [Number(componentId), Number(jointId)]),
         );
   return orientModelForest(joints || [], edges || [], new Map(), overrides);
-}
-
-export function componentSupport(component, joints) {
-  return component.nodeIds.reduce((sum, id) => sum + number(joints[id]?.evidence?.totalWeight, 0), 0);
 }
 
 export function unorderedPairKey(leftId, rightId) {

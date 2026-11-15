@@ -233,10 +233,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                         morph_signature = tuple(hashlib.sha256(memoryview(geometry.data)[
                             publication[field]["offset"]:publication[field]["offset"] + publication[field]["length"]
                         ]).hexdigest() for field in ("idx", "uv"))
-                        palette_sizes = [row[4] for row in draw.skinning_merged_layout
-                                         if row[:3] == (binding.geometry_hash, binding.first_index, binding.index_count)]
-                        if ((not palette_sizes or palette_sizes == [1])
-                                and len(packed.used_vertices) <= 100000
+                        if (len(packed.used_vertices) <= 100000
                                 and publication["idx"]["length"] <= 1200000):
                             morph_topology = tuple(bytes(memoryview(geometry.data)[
                                 publication[field]["offset"]:publication[field]["offset"] + publication[field]["length"]

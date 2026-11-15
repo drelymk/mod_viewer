@@ -11,7 +11,7 @@ from app.assets.animation_conversion import ReferencePoseMismatch, convert_clip,
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
 from .native import capture, make_rig, match_components, read_mesh, read_limited
-from .runtime import ExtractionCancelled, check_cancelled
+from .runtime import ExtractionCancelled, check_cancelled, list_packages
 from .morphs import export_morphs, sample_curves
 
 
@@ -410,7 +410,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     if not skeleton:
         raise ValueError("The matching mesh does not declare a usable source skeleton.")
     progress("animations", 0, 0)
-    packages = client.search("", "AnimSequence", character_root)
+    packages = list_packages(client, "AnimSequence", character_root, cancel)
     if not packages:
         raise ValueError("No character animation sequences were found.")
     metadata_dir = client.work / "animation-metadata"

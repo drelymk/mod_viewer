@@ -459,6 +459,69 @@ def test_companion_extraction_exposes_animation_for_every_preview_source(tmp_pat
         preview.clear_preview()
 
 
+def test_truncated_animation_discovery_preserves_direct_and_nested_clips(tmp_path):
+    root, _, record, client, _ = fixture(tmp_path)
+    search, batch = client.search, client.batch
+    direct = CHARACTER + "/ClipDirect"
+    calls = []
+
+    def search_tree(query, kind, under, *, recursive=True):
+        if kind != "AnimSequence":
+            return search(query, kind, under)
+        calls.append((under, recursive))
+        if recursive and under in (CHARACTER, CHARACTER + "/Skin01"):
+            raise runtime.SearchTruncated("too broad")
+        return {(CHARACTER, False): [direct],
+                (CHARACTER + "/CommonAnim", True): [BASE],
+                (CHARACTER + "/Skin01/RibbonAnim", True): [LAYER]}.get((under, recursive), [])
+
+    def folders(under):
+        return {CHARACTER: ["CommonAnim", "Skin01"], CHARACTER + "/Skin01": ["RibbonAnim"]}[under]
+
+    def export_batch(kind, packages, destination, format=None):
+        result = batch(kind, packages, destination, format)
+        if kind == "json" and direct in packages:
+            metadata = json.loads(Path(result[BASE]["rootFiles"][0]).read_text())
+            metadata[0]["Name"] = "ClipDirect"
+            Path(result[direct]["rootFiles"][0]).write_text(json.dumps(metadata))
+        return result
+
+    client.search, client.folders, client.batch = search_tree, folders, export_batch
+    output = tmp_path / "output"
+    result, _ = pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+    assert result["imported"] == result["clips"] == 2 and result["secondary"] == 1
+    assert {row["source"] for row in result["animations"]} == {direct, BASE}
+    assert result["skipped"] == 0
+    assert calls == [(CHARACTER, True), (CHARACTER, False), (CHARACTER + "/CommonAnim", True),
+                     (CHARACTER + "/Skin01", True), (CHARACTER + "/Skin01", False),
+                     (CHARACTER + "/Skin01/RibbonAnim", True)]
+
+
+@pytest.mark.parametrize("failure", ["direct", "cancel"])
+def test_incomplete_animation_discovery_never_produces_sidecars(tmp_path, failure):
+    root, asset, record, client, _ = fixture(tmp_path)
+    search = client.search
+    cancel = threading.Event()
+
+    def search_tree(query, kind, under, *, recursive=True):
+        if kind != "AnimSequence":
+            return search(query, kind, under)
+        if recursive or failure == "direct":
+            raise runtime.SearchTruncated("too broad")
+        return [BASE]
+
+    def folders(_under):
+        cancel.set()
+        return ["CommonAnim"]
+
+    client.search, client.folders = search_tree, folders
+    output = tmp_path / "output"
+    expected = runtime.SearchTruncated if failure == "direct" else runtime.ExtractionCancelled
+    with pytest.raises(expected, match="folder exceeds|cancelled"):
+        pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, cancel)
+    assert not output.exists() and not (asset / "Rig.json").exists() and not (asset / "Animation").exists()
+
+
 def test_native_proof_and_secondary_pipeline_lifecycle(tmp_path):
     root, asset, record, client, rows = fixture(tmp_path)
     phases = []

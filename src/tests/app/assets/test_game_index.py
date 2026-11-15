@@ -31,6 +31,7 @@ class IndexClient:
         pass
 
     def search(self, query, kind, under, *, recursive=True):
+        assert kind == "SkeletalMesh"
         self.searches.append(under)
         if under == pipeline.ROLE_ROOT and recursive:
             raise SearchTruncated("too broad")
@@ -101,7 +102,7 @@ def test_incomplete_index_never_becomes_ready_and_preserves_native_discovery(tmp
         return indexed_search(query, kind, under, recursive=recursive)
 
     index_client.search = direct_search
-    assert MESH + "Direct" in game_index.list_meshes(index_client, pipeline.ROLE_ROOT, threading.Event())
+    assert MESH + "Direct" in runtime.list_packages(index_client, "SkeletalMesh", pipeline.ROLE_ROOT, threading.Event())
 
     def incomplete_search(query, kind, under, *, recursive=True):
         if under == pipeline.ROLE_ROOT + "/BodyType01":

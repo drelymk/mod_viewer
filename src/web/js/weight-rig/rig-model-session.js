@@ -196,20 +196,6 @@ export function createRigSourceSession({
       restDirectionByBoneId: new Map(),
       restFrameEvidenceByBoneId: new Map(),
       continuationChildByBoneId: new Map(),
-      vertexEvidence: members
-        .map((mesh) => {
-          const state = states.get(mesh);
-          return state?.loaded
-            ? {
-                meshKey: mesh.userData?.semanticKey || '',
-                positions: state.baselinePositions,
-                indices: state.indices,
-                weights: state.weights,
-                influenceCount: state.influenceCount,
-              }
-            : null;
-        })
-        .filter(Boolean),
       structureRevision: 0,
       poseRotationByBoneId: new Map(),
       poseTransforms: new Map(),
