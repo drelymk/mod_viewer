@@ -1,5 +1,6 @@
 """INI discovery keeps active and disabled selections separate."""
 
+import json
 import os
 
 import pytest
@@ -99,3 +100,30 @@ def test_discovery_without_root_geometry_skips_nested_and_tolerates_bad_ini(
 
     assert _relative_paths(tmp_path, paths) == ["Plain.ini", "Unreadable.ini"]
     assert list(documents) == [str(tmp_path / "Plain.ini")]
+
+
+def test_removed_inis_preserve_root_anchor_relative_identity_and_count_cap(tmp_path):
+    _write(tmp_path, "Root.ini", _GEOMETRY_INI)
+    for index in range(12):
+        _write(tmp_path, f"nested/{index:02}.ini")
+    _write(tmp_path, "other/00.ini")
+    _write(tmp_path, "DISABLEDPart.ini")
+    (tmp_path / ".mod_viewer.json").write_text(json.dumps({
+        "removed_inis": ["ROOT.INI", "NESTED\\00.INI", "DISABLEDPart.ini"],
+    }))
+    paths = _relative_paths(tmp_path, discover_ini_paths(tmp_path))
+    assert paths == [f"nested/{index:02}.ini" for index in range(1, 11)]
+    # The duplicate basename in another folder remains independently eligible.
+    (tmp_path / ".mod_viewer.json").write_text(json.dumps({
+        "removed_inis": ["Root.ini", *[f"nested/{index:02}.ini" for index in range(12)]],
+    }))
+    assert _relative_paths(tmp_path, discover_ini_paths(tmp_path)) == ["other/00.ini"]
+    assert _relative_paths(tmp_path, discover_ini_paths(tmp_path, disabled=True)) == ["DISABLEDPart.ini"]
+
+
+@pytest.mark.parametrize("metadata", ["{", "[]", '{"removed_inis": "Root.ini"}',
+                                     '{"removed_inis": [null, 1, {}]}'])
+def test_discovery_ignores_malformed_exclusions(tmp_path, metadata):
+    _write(tmp_path, "Root.ini", _GEOMETRY_INI)
+    (tmp_path / ".mod_viewer.json").write_text(metadata)
+    assert _relative_paths(tmp_path, discover_ini_paths(tmp_path)) == ["Root.ini"]

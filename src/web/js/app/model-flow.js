@@ -302,6 +302,7 @@ export async function displayMeshPayload(
       readOnlySource: assetMode,
       meshEditReadOnly: assetMode || sourceReadOnly,
       canPersistMetadata: !assetMode && !sourceReadOnly,
+      iniSections: !assetMode,
       texturePicker: assetMode
         ? (role) => window.pywebview.api.pick_asset_texture_file(viewerState.currentSource.path, role)
         : null,
@@ -316,6 +317,10 @@ export async function displayMeshPayload(
             requestRender();
           }
         : null,
+      onRemoveIni:
+        !assetMode && !sourceReadOnly
+          ? (source) => removeModIni(source, { onToggleChange, onPresentChange, onMaterialKindChanged, onReload })
+          : null,
       onAllMeshChangesApplied: assetMode ? null : onReload,
     });
   });
@@ -597,6 +602,23 @@ export async function reloadCurrentMod(handlers = {}) {
     } catch (error) {
       showLoading(false);
       await alertDialog(t('errors.unexpectedReload', { detail: error }));
+      return false;
+    }
+  });
+}
+
+async function removeModIni(source, handlers) {
+  return await runModTransition(async () => {
+    const path = viewerState.currentModPath;
+    if (!path || viewerState.currentSource?.kind !== 'mod' || viewerState.currentSource.readOnly) return false;
+    try {
+      if (hasUnappliedMeshChanges() && !(await confirmDialog(t('confirm.unsavedAsset')))) return false;
+      const result = await window.pywebview.api.remove_ini(path, source);
+      if (result?.error || !result?.saved) throw new Error(result?.error || t('mesh.removeIniFailed'));
+      return await loadModAt(path, undefined, handlers);
+    } catch (error) {
+      showLoading(false);
+      await alertDialog(t('errors.removeIni', { detail: error.message || String(error) }));
       return false;
     }
   });
