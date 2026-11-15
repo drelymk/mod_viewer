@@ -53,13 +53,16 @@ class SkinningManifestEntry:
     vertex_count: int
     asset_binding: object | None = None
     merged_layout: tuple = ()
+    positions: bytes = b""
+    morph_signature: tuple = ()
+    morph_topology: tuple = ()
 
     @classmethod
     def from_vertices(cls, mesh_key, skinning_source, used_vertices, *,
-                      asset_binding=None, merged_layout=()):
+                      asset_binding=None, merged_layout=(), positions=b"", morph_signature=(), morph_topology=()):
         compact = (used_vertices if isinstance(used_vertices, tuple)
                    else tuple(used_vertices))
-        return cls(mesh_key, skinning_source, compact, len(compact), asset_binding, merged_layout)
+        return cls(mesh_key, skinning_source, compact, len(compact), asset_binding, merged_layout, positions, morph_signature, morph_topology)
 
 
 @dataclass(frozen=True, slots=True)

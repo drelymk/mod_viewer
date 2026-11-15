@@ -222,13 +222,21 @@ def test_lazy_skin_preview_publishes_verified_rig_without_remapping_weights(tmp_
     blend = bytes([0, 1, 0, 0, 128, 127, 0, 0]) * 3
     (mod / "Meshes" / "Blend.buf").write_bytes(blend)
     raw["skin_bindings"][0]["sha256"] = hashlib.sha256(blend).hexdigest()
+    import struct
+    from .test_loader import _fmt
+
+    reference = struct.pack("<9f", 1, 2, 3, 4, 5, 6, 7, 8, 9)
+    (asset / "10101010/Component 0.vb").write_bytes(reference)
+    _fmt(asset / "10101010/Component 0.fmt", 12, "R16_UINT", [("POSITION", 0, "R32G32B32_FLOAT", 0)])
+    raw["components"][0]["vertex_sha256"] = hashlib.sha256(reference).hexdigest()
     (asset / "Rig.json").write_text(json.dumps(raw))
     context = SimpleNamespace(mod_dir=str(mod), metadata={}, source=None,
                               asset_folders=[{"type": "WWMI", "path": binding.root, "enabled": True}])
     preview = ModPreview(SimpleNamespace())
     preview._skinning_manifests[str(mod)] = {
         "Mesh01": SkinningManifestEntry.from_vertices(
-            "Mesh01", source, (2, 0), asset_binding=binding)}
+            "Mesh01", source, (2, 0, 1), asset_binding=binding,
+            positions=struct.pack("<9f", 7.00001, 8, 9, 1, 2, 3, 20, 20, 20))}
     monkeypatch.setattr(preview, "authoritative_context", lambda _: (str(mod), {}, context))
     monkeypatch.setattr("app.bridge.mod_preview.server.publish_geometry",
                         lambda *_args, **_kwargs: "/geometry/fixture")
@@ -239,9 +247,157 @@ def test_lazy_skin_preview_publishes_verified_rig_without_remapping_weights(tmp_
     assert entry["bone_ids"] == [7, 8]
     assert entry["game_bone_map"] == {"7": 1, "8": 0}
     assert entry["game_rig_id"] in result["game_rigs"]
-    assert entry["vertex_count"] == 2
+    assert entry["vertex_count"] == 3
+    assert entry["game_morph_binding"] == dict(
+        vertex_sha256=hashlib.sha256(reference).hexdigest(),
+        index_sha256=raw["components"][0]["index_sha256"], vertices=[2, 0, -1])
     (mod / "Meshes" / "Blend.buf").write_bytes(blend + bytes(8))
     fallback = preview.get_model_skinning_preview(str(mod))
     assert fallback["status"] == "ok"
     assert fallback["game_rigs"] == {}
     assert fallback["meshes"]["Mesh01"]["bone_ids"] == [7, 8]
+
+
+@pytest.mark.parametrize("case", ["half", "float", "uv", "topology", "count", "missing", "no_uv", "invalid_uv", "truncated",
+                                  "duplicate", "duplicate_missing"])
+def test_morph_topology_fallback_preserves_modified_rest_positions(tmp_path, monkeypatch, case):
+    import struct
+    from unittest.mock import patch
+    from core.geometry.migoto_format import parse_fmt
+    from .test_loader import _fmt
+
+    asset, raw, binding, source, fingerprint = rig_fixture(tmp_path)
+    directory = asset / "10101010"
+    uv_format = "<2f" if case == "float" else "<2e"
+    stride = 12 + struct.calcsize(uv_format)
+    reference = b"".join(struct.pack("<3f", *point) + struct.pack(uv_format, *uv)
+                         for point, uv in [((0, 0, 0), (0, 0)),
+                                           ((0 if case.startswith("duplicate") else 1, 0, 0), (1, 0)),
+                                           ((0, 1, 0), (0, 1))])
+    if case == "invalid_uv":
+        reference = reference[:12] + struct.pack(uv_format, float("nan"), 0) + reference[stride:]
+    indices = struct.pack("<6H" if case == "float" else "<6I", 0, 1, 2, 2, 1, 0)
+    if case == "truncated":
+        indices = indices[:-4]
+    (directory / "Component 0.vb").write_bytes(reference)
+    (directory / "Component 0.ib").write_bytes(indices)
+    elements = [("POSITION", 0, "R32G32B32_FLOAT", 0)]
+    if case != "no_uv":
+        elements.append(("TEXCOORD", 0, "R32G32_FLOAT" if case == "float" else "R16G16_FLOAT", 12))
+    _fmt(directory / "Component 0.fmt", stride, "R16_UINT" if case == "float" else "R32_UINT", elements)
+    raw["components"][0].update(vertex_sha256=hashlib.sha256(reference).hexdigest(),
+                                index_sha256=hashlib.sha256(indices).hexdigest())
+    (asset / "Rig.json").write_text(json.dumps(raw))
+    positions = struct.pack("<9f", 0, 0, 0, 1, .25, 0, 0, 1, 0)
+    if case.startswith("duplicate"):
+        positions = struct.pack("<9f", 0, 0, 0, 0, 0, 0, 0, 1, 0)
+    if case == "count":
+        positions += struct.pack("<3f", -5, -5, 0)
+    mod_indices = struct.pack("<6I", 0, 2, 1, 2, 0, 1)
+    mod_uv = struct.pack("<6f", 0, 1, 1, 1, 0, 0)
+    signature = (hashlib.sha256(mod_indices).hexdigest(), hashlib.sha256(mod_uv).hexdigest())
+    if case == "uv":
+        signature = signature[0], "0" * 64
+    elif case == "topology":
+        signature = "0" * 64, signature[1]
+    elif case in ("missing", "duplicate_missing"):
+        signature = ()
+    cache = {}
+
+    def resolve():
+        return resolve_game_rig(binding, source, (7,), {os.path.normcase(binding.root)}, cache,
+                                blend_sha256=fingerprint, positions=positions, morph_signature=signature)
+
+    with patch("app.assets.rig.parse_fmt", wraps=parse_fmt) as reader:
+        result = resolve()
+    assert reader.call_count == 1
+    expected = [0, 1, 2] if case in ("half", "float", "duplicate") else [0, -1, 2]
+    if case == "duplicate_missing":
+        expected = [-1, -1, 2]
+    if case == "count":
+        expected.append(-1)
+    assert result["morph_binding"]["vertices"] == expected
+    if case == "count":
+        corrected = resolve_game_rig(binding, source, (7,), {os.path.normcase(binding.root)}, cache,
+                                     blend_sha256=fingerprint, positions=positions[:36], morph_signature=signature)
+        assert corrected["morph_binding"]["vertices"] == [0, 1, 2]
+    monkeypatch.setattr("app.assets.rig.parse_fmt", lambda *_: (_ for _ in ()).throw(
+        AssertionError("repeated draws must reuse cached reference geometry")))
+    assert resolve()["morph_binding"] == result["morph_binding"]
+
+
+@pytest.mark.parametrize("case", ["split", "cyclic", "added", "ambiguous", "conflict", "wrong_uv", "invalid_index", "nonrigid",
+                                  "duplicate_positions"])
+def test_morph_uv_triangles_recover_split_vertices_without_guessing_ambiguity(tmp_path, monkeypatch, case):
+    import struct
+    from .test_loader import _fmt
+
+    asset, raw, binding, source, fingerprint = rig_fixture(tmp_path)
+    directory = asset / "10101010"
+    points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
+    uvs = [(0, 1), (1, 1), (0, 0), (1, 0)]
+    triangles = [0, 1, 2, 2, 1, 3]
+    if case == "duplicate_positions":
+        points[1] = points[0]
+    if case == "ambiguous":
+        points += [(10, 0, 0), (11, 0, 0), (10, 1, 0)]
+        uvs += uvs[:3]
+        triangles += [4, 5, 6]
+    elif case == "conflict":
+        points.append((10, 0, 0))
+        uvs.append(uvs[1])
+        triangles = [0, 1, 2, 2, 4, 3]
+    reference = b"".join(struct.pack("<5f", *point, uv[0], 1 - uv[1]) for point, uv in zip(points, uvs))
+    index_data = struct.pack("<" + "I" * len(triangles), *triangles)
+    (directory / "Component 0.vb").write_bytes(reference)
+    (directory / "Component 0.ib").write_bytes(index_data)
+    _fmt(directory / "Component 0.fmt", 20, "R32_UINT", [
+        ("POSITION", 0, "R32G32B32_FLOAT", 0), ("TEXCOORD", 0, "R32G32_FLOAT", 12)])
+    raw["components"][0].update(vertex_sha256=hashlib.sha256(reference).hexdigest(),
+                                index_sha256=hashlib.sha256(index_data).hexdigest(), index_count=len(triangles))
+    if case == "nonrigid":
+        raw["components"][0]["bone_map"] = [0, 1]
+    (asset / "Rig.json").write_text(json.dumps(raw))
+    from dataclasses import replace
+    binding = replace(binding, index_count=len(triangles))
+    metadata_file = directory / "Metadata.json"
+    metadata = json.loads(metadata_file.read_text())
+    metadata["components"][0]["index_count"] = len(triangles)
+    metadata_file.write_text(json.dumps(metadata))
+    mod_uvs = uvs[:4] + [uvs[1]]
+    mod_triangles = [0, 2, 4, 2, 3, 1]
+    if case == "cyclic":
+        mod_triangles[:3] = [2, 4, 0]
+    elif case == "added":
+        mod_uvs += [(.25, .25), uvs[0]]
+        mod_triangles += [0, 2, 5]
+    elif case == "conflict":
+        mod_triangles = [0, 2, 1, 2, 3, 1]
+    elif case == "wrong_uv":
+        mod_uvs = [(u + 2, v) for u, v in mod_uvs]
+    elif case == "invalid_index":
+        mod_triangles[-1] = 999
+    positions = struct.pack("<" + "fff" * len(mod_uvs), *([20, 20, 20] * len(mod_uvs)))
+    if case == "conflict":
+        positions = positions[:12] + struct.pack("<3f", *points[1]) + positions[24:]
+    topology = (struct.pack("<" + "I" * len(mod_triangles), *mod_triangles),
+                b"".join(struct.pack("<2f", *uv) for uv in mod_uvs))
+    cache = {}
+
+    def resolve():
+        return resolve_game_rig(binding, source, (7,), {os.path.normcase(binding.root)}, cache,
+                                blend_sha256=fingerprint, positions=positions, morph_topology=topology)
+
+    result = resolve()
+    mapping = result["morph_binding"]["vertices"] if result["morph_binding"] else None
+    if case in ("wrong_uv", "invalid_index", "nonrigid"):
+        assert mapping is None
+    elif case == "ambiguous":
+        assert mapping == [-1, 1, 2, 3, -1]
+    elif case == "conflict":
+        assert mapping == [0, -1, 2, 3, -1]
+    else:
+        assert mapping == [0, 1, 2, 3, 1] + ([-1, 0] if case == "added" else [])
+    monkeypatch.setattr("app.assets.rig.parse_fmt", lambda *_: (_ for _ in ()).throw(
+        AssertionError("reference UV topology must be cached across draws")))
+    assert resolve()["morph_binding"] == result["morph_binding"]

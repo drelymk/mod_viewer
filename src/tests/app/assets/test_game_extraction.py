@@ -949,3 +949,111 @@ def test_native_batch_rejects_incomplete_or_uncontained_results(tmp_path, respon
     client.call = lambda *_args, **_kwargs: response
     with pytest.raises(ValueError):
         client.batch("json", [MESH], tmp_path)
+
+
+@pytest.mark.parametrize("curve_mode", ["supported", "weighted", "interpolation"])
+def test_morph_extraction_maps_native_vertices_and_upgrades_existing_clips(tmp_path, curve_mode):
+    from app.assets.animations import read_clip
+    from app.assets.animation_morphs import read_morphs
+
+    root, asset, record, client, _ = fixture(tmp_path)
+    geometry = asset / "11111111"
+    vb = (geometry / "Component 0.vb").read_bytes()
+    (geometry / "Component 0.vb").write_bytes(vb[56:] + vb[:56])
+    (geometry / "Component 0.ib").write_bytes(struct.pack("<3H", 1, 2, 0))
+    original_export, original_batch = client.export, client.batch
+    unrelated = CHARACTER + "/CommonAnim/Other01"
+
+    def export(kind, package, destination, format=None):
+        files = original_export(kind, package, destination, format)
+        if kind == "mesh":
+            reader = native.Reader(files[0].read_bytes())
+            reader.take(8)
+            reader.string()
+            reader.take(1)
+            reader.string()
+            reader.string()
+            reader.take(1)
+            header = reader.getvalue()[:reader.tell()]
+            outer = reader.attributes()
+            levels = native.Reader(outer["LODS"])
+            levels.integer()
+            name = levels.string()
+            level = levels.attributes()
+            level["MORPHTARGETS"] = (struct.pack("<i", 1) + string("Shape01") + struct.pack("<i6fI", 1, 0, 0, 2, 0, .5, 0, 2))
+            outer["LODS"] = struct.pack("<i", 1) + string(name) + attributes(level)
+            files[0].write_bytes(header + attributes(outer))
+        return files
+
+    def batch(kind, packages, destination, format=None):
+        result = original_batch(kind, packages, destination, format)
+        if kind == "json" and unrelated in result:
+            Path(result[unrelated]["rootFiles"][0]).write_text(json.dumps([dict(
+                Type="AnimSequence", Name="Other01", Properties=dict(
+                    Skeleton=dict(ObjectPath=CHARACTER + "/Model/OtherSkeleton01.0"), NumFrames=2, SequenceLength=1),
+                CompressedCurveNames=[dict(DisplayName="Shape01")],
+                CompressedCurveData=dict(FloatCurves=[dict(FloatCurve=dict(Keys=[{}]))]))]))
+        if kind == "json" and BASE in result:
+            file = Path(result[BASE]["rootFiles"][0])
+            rows = json.loads(file.read_text())
+            rows[0]["CompressedCurveNames"] = [dict(DisplayName=name) for name in ("Shape01", "Unknown01")]
+            keys = [dict(Time=time, Value=time, ArriveTangent=0, LeaveTangent=0,
+                         InterpMode="RCIM_Linear", TangentWeightMode="RCTWM_WeightedNone") for time in (0, 1)]
+            if curve_mode == "weighted":
+                keys[0]["TangentWeightMode"] = "RCTWM_WeightedBoth"
+            elif curve_mode == "interpolation":
+                keys[0]["InterpMode"] = "RCIM_Unknown"
+            rows[0]["CompressedCurveData"] = dict(FloatCurves=[dict(FloatCurve=dict(Keys=keys))] * 2)
+            file.write_text(json.dumps(rows))
+        return result
+
+    # Upgrade a pre-existing bone-only library without changing its clip identity.
+    output = tmp_path / "before"
+    pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+    shutil.copytree(output / "Animation", asset / "Animation")
+    shutil.copyfile(output / "Rig.json", asset / "Rig.json")
+    client.export, client.batch = export, batch
+    original_search = client.search
+    client.search = lambda query, kind, under: original_search(query, kind, under) + (
+        [unrelated] if kind == "AnimSequence" else [])
+    output = tmp_path / "with-morphs"
+    pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+    rig = validate_rig(json.loads((output / "Rig.json").read_text()))
+    catalog = json.loads((output / "Animation/manifest.json").read_text())
+    assert [entry["id"] for entry in catalog["clips"]] == ["Clip01"]
+    metadata, data = read_clip(str(output / "Animation"), catalog["clips"][0], rig)
+    if curve_mode != "supported":
+        assert "morphs" not in metadata
+        assert data == (tmp_path / "before/Animation/Clip01.bin").read_bytes()
+        return
+    assert metadata["morphs"]["names"] == ["Shape01"]
+    assert struct.unpack("<2f", data[2 * 2 * 28:]) == (0, 1)
+    morphs = read_morphs(str(output / "Animation"), metadata["morphs"])
+    assert struct.unpack("<I6f", morphs) == (0, 0, 0, 2, 0, .5, 0)
+    assert metadata["morphs"]["components"][0]["vertex_sha256"] == hashlib.sha256((geometry / "Component 0.vb").read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("mode,expected", [("RCIM_Linear", .5), ("RCIM_Constant", 0), ("RCIM_Cubic", .75)])
+def test_morph_curves_sample_authored_interpolation(mode, expected):
+    from app.assets.game_extract.morphs import sample_curves
+
+    keys = [dict(Time=time, Value=time, ArriveTangent=0, LeaveTangent=2 if time == 0 else 0,
+                 InterpMode=mode, TangentWeightMode="RCTWM_WeightedNone") for time in (0, 1)]
+    sequence = dict(Properties=dict(NumFrames=3, SequenceLength=1), CompressedCurveNames=[dict(DisplayName="Shape01")],
+                    CompressedCurveData=dict(FloatCurves=[dict(FloatCurve=dict(Keys=keys))]))
+    result = sample_curves(sequence, {"Shape01"})
+    assert struct.unpack("<3f", result["data"]) == pytest.approx((0, expected, 1))
+    keys[0]["TangentWeightMode"] = "RCTWM_WeightedBoth"
+    assert sample_curves(sequence, {"Shape01"}) is None
+    keys[0]["TangentWeightMode"] = "RCTWM_WeightedNone"
+    keys[0]["InterpMode"] = "RCIM_Unknown"
+    assert sample_curves(sequence, {"Shape01"}) is None
+    # Other supported targets survive an unsupported optional curve.
+    sequence["CompressedCurveNames"].append(dict(DisplayName="Shape02"))
+    sequence["CompressedCurveData"]["FloatCurves"].append(dict(FloatCurve=dict(Keys=[
+        {**key, "InterpMode": mode} for key in keys])))
+    assert sample_curves(sequence, {"Shape01", "Shape02"}) == {
+        "names": ["Shape02"], "data": result["data"]}
+    keys[0]["Value"] = float("nan")
+    with pytest.raises(ValueError, match="Invalid morph curve"):
+        sample_curves(sequence, {"Shape01"})

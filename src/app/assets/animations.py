@@ -10,6 +10,7 @@ from threading import RLock
 
 from app.runtime import server
 from . import paths
+from .animation_morphs import morph_names, read_morphs
 
 
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -26,8 +27,8 @@ def _json(file, limit=1024 * 1024):
     return json.loads(data)
 
 
-def read_clip(directory, entry, rig):
-    """Validate one contained clip without publishing it."""
+def _read_clip(directory, entry, rig, *, validated_morphs=None):
+    """Read and validate the clip and its optional morph sidecar once."""
     raw = _json(paths.safe_asset_path(directory, entry["file"]))
     if not isinstance(raw, dict):
         raise ValueError("Invalid animation metadata.")
@@ -40,7 +41,9 @@ def read_clip(directory, entry, rig):
             or duration != entry["duration"] or type(duration) not in (int, float)
             or not math.isfinite(duration) or not 0 < duration <= 3600):
         raise ValueError("Animation does not match the loaded rig.")
-    size = frames * bones * 28
+    bone_size = frames * bones * 28
+    names = morph_names(raw.get("morphs"))
+    size = bone_size + frames * len(names) * 4
     if size > _MAX_BYTES:
         raise ValueError("Animation data is too large.")
     file = raw.get("data_file")
@@ -51,10 +54,22 @@ def read_clip(directory, entry, rig):
         data = stream.read(size + 1)
     if len(data) != size or hashlib.sha256(data).hexdigest() != raw.get("sha256"):
         raise ValueError("Animation data is incomplete or has changed.")
-    for row in struct.iter_unpack("<7f", data):
+    for row in struct.iter_unpack("<7f", memoryview(data)[:bone_size]):
         if (not all(math.isfinite(v) and abs(v) <= 1e6 for v in row)
                 or abs(sum(v * v for v in row[3:]) - 1) > 0.001):
             raise ValueError("Animation contains invalid transforms.")
+    morph_data = None
+    if names:
+        if any(not math.isfinite(value) or abs(value) > 1e6
+               for (value,) in struct.iter_unpack("<f", memoryview(data)[bone_size:])):
+            raise ValueError("Animation contains invalid morph weights.")
+        morph_data = read_morphs(directory, raw["morphs"], validated=validated_morphs)
+    return raw, data, morph_data
+
+
+def read_clip(directory, entry, rig, *, validated_morphs=None):
+    """Validate one contained clip without publishing it."""
+    raw, data, _morph_data = _read_clip(directory, entry, rig, validated_morphs=validated_morphs)
     return raw, data
 
 
@@ -118,16 +133,27 @@ class AnimationSessions:
                 entry = session["entries"].get(clip_id) if isinstance(clip_id, str) else None
                 if not entry:
                     raise ValueError("Choose an animation from the current Asset.")
-            raw, data = read_clip(session["directory"], entry, session["rig"])
+            raw, data, morph_data = _read_clip(session["directory"], entry, session["rig"])
             with self._lock:
                 if self._sessions.get(token) is not session or not session["is_current"]():
                     raise ValueError("The animation preview is no longer active.")
                 url = server.publish_geometry(data, replace=False)
+                try:
+                    morph_url = server.publish_geometry(morph_data, replace=False) if morph_data is not None else None
+                except BaseException:
+                    server.release_geometry(url)
+                    raise
                 for previous in session["urls"]:
                     server.release_geometry(previous)
                 session["urls"] = {url}
-            return {"status": "ok", "clip": {"id": clip_id, "name": entry["name"], "skeleton_id": raw["skeleton_id"],
+                if morph_url:
+                    session["urls"].add(morph_url)
+            clip = {"id": clip_id, "name": entry["name"], "skeleton_id": raw["skeleton_id"],
                     "frame_count": raw["frame_count"], "bone_count": raw["bone_count"], "duration": raw["duration"],
-                    "data": {"url": url, "length": len(data)}}}
+                    "data": {"url": url, "length": len(data)}}
+            if morph_data is not None:
+                clip["morphs"] = {"names": raw["morphs"]["names"], "components": raw["morphs"]["components"],
+                                  "data": {"url": morph_url, "length": len(morph_data)}}
+            return {"status": "ok", "clip": clip}
         except (OSError, ValueError, TypeError, KeyError, RecursionError) as error:
             return {"status": "error", "error": str(error)}

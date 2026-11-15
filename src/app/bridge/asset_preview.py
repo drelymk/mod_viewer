@@ -201,6 +201,7 @@ class AssetPreview:
                             "humanoid_controls": rig["humanoid_controls"],
                             **self._animations.catalog(session["root"], session["asset"], rig, is_current)}
                     entry.update(game_rig_id=rig["id"], game_bone_map=rig["bone_map"])
+                    entry["game_morph_binding"] = {**rig["morph_binding"], "vertices": list(part.skinning.vertices)}
                 meshes[part.key] = entry
                 pieces.append(data)
                 offset += len(data)

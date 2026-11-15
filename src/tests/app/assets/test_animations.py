@@ -291,3 +291,129 @@ def test_direct_asset_weight_rig_preview_and_stale_token(tmp_path, monkeypatch):
     assert next(iter(weights["game_rigs"].values()))["animations"] == []
     preview.clear_preview()
     assert preview.get_skinning_preview(token)["status"] == "error"
+
+
+@pytest.mark.parametrize("change", ["valid", "path", "checksum", "index", "nonfinite", "overlap", "duplicate", "weight", "names", "publication"])
+def test_optional_morph_publication_validates_contained_geometry_and_weights(tmp_path, monkeypatch, change):
+    rig, source = sample()
+    frames, bone_data = converter()(source, rig, 1)
+    directory = tmp_path / "Asset01/Animation"
+    directory.mkdir(parents=True)
+    target_data = struct.pack("<I6f", 1, 0, 0, 2, 0, 1, 0)
+    target = dict(name="Shape01", offset=0, count=1)
+    morphs = dict(names=["Shape01"], file="Morph01.bin", sha256=hashlib.sha256(target_data).hexdigest(),
+                  components=[dict(vertex_sha256="b" * 64, index_sha256="c" * 64, vertex_count=3, targets=[target])])
+    data = bone_data + struct.pack("<2f", 0, 1)
+    if change == "path":
+        morphs["file"] = "../../outside.bin"
+    elif change == "checksum":
+        morphs["sha256"] = "0" * 64
+    elif change in ("index", "nonfinite"):
+        target_data = struct.pack("<I6f", 3 if change == "index" else 1, 0, 0,
+                                  float("nan") if change == "nonfinite" else 2, 0, 1, 0)
+        morphs["sha256"] = hashlib.sha256(target_data).hexdigest()
+    elif change == "overlap":
+        target["offset"] = 4
+    elif change == "duplicate":
+        morphs["components"].append(deepcopy(morphs["components"][0]))
+    elif change == "weight":
+        data = bone_data + struct.pack("<2f", 0, float("nan"))
+    elif change == "names":
+        morphs["names"] = ["Shape01", "Shape01"]
+    metadata = dict(format="mod-viewer-animation", version=1, coordinate_space="asset", layout="frame-major-tq-f32le",
+                    skeleton_id=rig["id"], frame_count=frames, bone_count=2, duration=1, data_file="Clip01.bin",
+                    sha256=hashlib.sha256(data).hexdigest(), morphs=morphs)
+    (directory / "Clip01.bin").write_bytes(data)
+    (directory / "Morph01.bin").write_bytes(target_data)
+    (directory / "Clip01.json").write_text(json.dumps(metadata))
+    (directory / "manifest.json").write_text(json.dumps(dict(format="mod-viewer-animations", version=1,
+        skeleton_id=rig["id"], clips=[dict(id="clip01", name="Clip 01", file="Clip01.json", duration=1)])))
+    published, released = [], []
+    def publish(data, **_):
+        if change == "publication" and published:
+            raise ValueError("Fixture publication failed.")
+        published.append(data)
+        return f"/geometry/{len(published)}"
+    monkeypatch.setattr("app.assets.animations.server.publish_geometry", publish)
+    monkeypatch.setattr("app.assets.animations.server.release_geometry", released.append)
+    current = True
+    sessions = AnimationSessions()
+    catalog = sessions.catalog(str(tmp_path), "Asset01", rig, lambda: current)
+    token = catalog["animation_session"]
+    from unittest.mock import patch
+    from app.assets.animation_morphs import read_morphs
+
+    with patch("app.assets.animations.read_morphs", wraps=read_morphs) as reader:
+        response = sessions.load(token, "clip01")
+    if change == "valid":
+        assert reader.call_count == 1
+    if change == "publication":
+        assert response["status"] == "error" and published == [data] and released == ["/geometry/1"]
+        return
+    if change != "valid":
+        assert response["status"] == "error" and not published
+        return
+    assert response["clip"]["morphs"]["data"]["length"] == 28
+    assert published == [data, target_data]
+    current = False
+    assert sessions.load(token, "clip01")["status"] == "error"
+    sessions.clear()
+    assert set(released) == {"/geometry/1", "/geometry/2"}
+
+
+def test_extraction_validation_cache_reuses_only_unchanged_morph_sidecars(tmp_path):
+    from unittest.mock import patch
+    from app.assets.animations import read_clip
+
+    rig, source = sample()
+    frames, bone_data = converter()(source, rig, 1)
+    target_data = struct.pack("<I6f", 1, 0, 0, 2, 0, 1, 0)
+    morphs = dict(names=["Shape01"], file="Morph01.bin", sha256=hashlib.sha256(target_data).hexdigest(),
+                  components=[dict(vertex_sha256="b" * 64, index_sha256="c" * 64, vertex_count=3,
+                                   targets=[dict(name="Shape01", offset=0, count=1)])])
+    data = bone_data + struct.pack("<2f", 0, 1)
+    metadata = dict(format="mod-viewer-animation", version=1, coordinate_space="asset", layout="frame-major-tq-f32le",
+                    skeleton_id=rig["id"], frame_count=frames, bone_count=2, duration=1, data_file="Clip01.bin",
+                    sha256=hashlib.sha256(data).hexdigest(), morphs=morphs)
+    target = tmp_path / "Morph01.bin"
+    target.write_bytes(target_data)
+    clip = tmp_path / "Clip01.json"
+    clip.write_text(json.dumps(metadata))
+    (tmp_path / "Clip02.json").write_text(json.dumps(metadata))
+    binary = tmp_path / "Clip01.bin"
+    binary.write_bytes(data)
+    validated = set()
+
+    def read(file="Clip01.json"):
+        return read_clip(str(tmp_path), dict(file=file, duration=1), rig, validated_morphs=validated)
+
+    with patch("app.assets.animation_morphs.open", wraps=open, create=True) as reader:
+        assert read()[1] == data
+        assert read("Clip02.json")[1] == data
+        assert reader.call_count == 1
+        # A fresh operation and publication still perform a fresh read.
+        read_clip(str(tmp_path), dict(file="Clip01.json", duration=1), rig)
+        assert reader.call_count == 2
+        replacement = tmp_path / "Replacement.bin"
+        replacement.write_bytes(target_data)
+        replacement.replace(target)
+        assert read()[1] == data
+        assert reader.call_count == 3
+        morphs["components"][0]["targets"][0]["offset"] = 4
+        clip.write_text(json.dumps(metadata))
+        with pytest.raises(ValueError, match="morph target range"):
+            read()
+        morphs["components"][0]["targets"][0]["offset"] = 0
+        invalid = bone_data + struct.pack("<2f", 0, float("nan"))
+        metadata["sha256"] = hashlib.sha256(invalid).hexdigest()
+        binary.write_bytes(invalid)
+        clip.write_text(json.dumps(metadata))
+        with pytest.raises(ValueError, match="invalid morph weights"):
+            read()
+        metadata["sha256"] = hashlib.sha256(data).hexdigest()
+        binary.write_bytes(data)
+        clip.write_text(json.dumps(metadata))
+        # An in-place change must invalidate the marker even at equal byte length.
+        target.write_bytes(bytes(len(target_data)))
+        with pytest.raises(ValueError, match="incomplete or has changed"):
+            read()

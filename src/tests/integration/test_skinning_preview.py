@@ -39,10 +39,30 @@ def test_modern_proxy_preview_uses_retained_program_and_retries_invalid_maps(tmp
     (tmp_path / "reverse.buf").write_bytes(struct.pack("<2048H", *reverse))
     forward_bytes = struct.pack("<2048H", *forward)
     (tmp_path / "forward.buf").write_bytes(forward_bytes)
-    rendered = build_mesh_result(groups, str(tmp_path), geometry_only=True)
+    import hashlib
+    from app.assets.resolver import AssetComponentBinding
+    from core.geometry.build_cache import MeshGeometryCache
+    from core.geometry.buffers import BufferStore
+
+    cache = MeshGeometryCache(BufferStore())
+    rendered = build_mesh_result(groups, str(tmp_path), geometry_only=True, geometry_cache=cache)
+    for group in groups:
+        for draw in group["draws"]:
+            draw.asset_binding = AssetComponentBinding(status="exact", asset_type="WWMI")
+    rendered = build_mesh_result(groups, str(tmp_path), geometry=rendered.geometry, geometry_cache=cache)
+    for key, manifest in rendered.skinning_manifest.items():
+        entry = rendered.meshes[key]
+        assert manifest.positions == bytes(rendered.geometry.data[
+            entry["pos"]["offset"]:entry["pos"]["offset"] + entry["pos"]["length"]])
+        assert manifest.morph_signature == tuple(hashlib.sha256(rendered.geometry.data[
+            entry[field]["offset"]:entry[field]["offset"] + entry[field]["length"]
+        ]).hexdigest() for field in ("idx", "uv"))
+        assert manifest.morph_topology == tuple(bytes(rendered.geometry.data[
+            entry[field]["offset"]:entry[field]["offset"] + entry[field]["length"]
+        ]) for field in ("idx", "uv"))
     assert len(rendered.skinning_manifest) == 2
     assert all(entry.skinning_source.blend_remap for entry in rendered.skinning_manifest.values())
-    context = SimpleNamespace(mod_dir=str(tmp_path), metadata={}, asset_folders=[])
+    context = SimpleNamespace(mod_dir=str(tmp_path), metadata={}, asset_folders=[], source=None)
     preview = ModPreview(_Access())
     preview._skinning_manifests[str(tmp_path)] = rendered.skinning_manifest
     monkeypatch.setattr(preview, "authoritative_context", lambda _path: (str(tmp_path), {}, context))
@@ -66,11 +86,20 @@ def test_modern_proxy_preview_uses_retained_program_and_retries_invalid_maps(tmp
 
 
 def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatch):
+    from core.geometry.build_cache import MeshGeometryCache
+    from core.geometry.buffers import BufferStore
+
     ini = write_gimi_skinning_mod(tmp_path)
     sections = merge_sections([str(ini)])
     groups = build_draw_groups(sections, extract_resources(sections))
     geometry = GeometryBlob()
-    rendered = build_mesh_result(groups, str(tmp_path), geometry=geometry)
+    cache = MeshGeometryCache(BufferStore())
+    build_mesh_result(groups, str(tmp_path), geometry=geometry,
+                      geometry_cache=cache, geometry_only=True)
+    with monkeypatch.context() as guard:
+        guard.setattr("core.geometry.mesh_builder.pack_draw_geometry", lambda *_args, **_kwargs: (
+            _ for _ in ()).throw(AssertionError("material finalization must reuse packed geometry")))
+        rendered = build_mesh_result(groups, str(tmp_path), geometry=geometry, geometry_cache=cache)
     entry = rendered.meshes["Component01Blend-1"]
     assert entry["skinning_available"] is True
     published = {}
@@ -124,6 +153,8 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
         (.6, .3, .1, 0.))
     assert list(rendered.skinning_manifest["Component01Blend-1"].used_vertices) == [
         0, 1, 2, 3]
+    assert rendered.skinning_manifest["Component01Blend-1"].positions == b""
+    assert rendered.skinning_manifest["Component01Blend-1"].morph_topology == ()
     assert result_entry["source"]["file"] == "component01.blend"
     assert preview._last_skinning_diagnostics[str(tmp_path)][
         "mapping_source"] == "loaded_model_manifest"

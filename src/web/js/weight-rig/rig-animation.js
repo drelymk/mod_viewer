@@ -1,5 +1,6 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import { t } from '../i18n/index.js';
+import { sampleMorphWeights } from './animation-morphs.js';
 
 function animationError(key) {
   return Object.assign(new Error(t(key)), { translationKey: key });
@@ -78,7 +79,10 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
   const changed = () => notify(snapshot());
   const pose = ({ finalize = !playing } = {}) => {
     if (clip && values && getRig()?.id === clip.skeleton_id)
-      applyPose(sampleAnimation(getRig(), clip, values, time), { finalize });
+      applyPose(sampleAnimation(getRig(), clip, values, time), {
+        finalize,
+        morphs: sampleMorphWeights(clip, values, time),
+      });
   };
   function cancel() {
     if (frame !== null) cancelAnimationFrame(frame);
@@ -142,9 +146,18 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
       if (current !== generation || getRig() !== rig) return;
       if (
         buffer.byteLength !== metadata.data.length ||
-        buffer.byteLength !== metadata.frame_count * rig.bones.length * 28
+        buffer.byteLength !== metadata.frame_count * (rig.bones.length * 28 + (metadata.morphs?.names.length || 0) * 4)
       )
         throw animationError('animation.downloadIncomplete');
+      if (metadata.morphs) {
+        const response = await fetch(metadata.morphs.data.url, { cache: 'no-store' });
+        if (!response.ok) throw animationError('animation.downloadFailed');
+        const targets = await response.arrayBuffer();
+        if (current !== generation || getRig() !== rig) return;
+        if (targets.byteLength !== metadata.morphs.data.length) throw animationError('animation.downloadIncomplete');
+        metadata.morphs.buffer = targets;
+        metadata.morphs.weights = new Float32Array(metadata.morphs.names.length);
+      }
       clip = metadata;
       values = new Float32Array(buffer);
       loading = false;

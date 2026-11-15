@@ -12,6 +12,7 @@ from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
 from .native import capture, make_rig, match_components, read_mesh, read_limited
 from .runtime import ExtractionCancelled, check_cancelled
+from .morphs import export_morphs, sample_curves
 
 
 # ActorX's 32-byte keys plus skeleton headers for the viewer's 128 MiB clip limit.
@@ -53,19 +54,23 @@ def exported_file(item, directory, extension):
 SEQUENCE_PROPERTIES = ("Skeleton", "AdditiveAnimType", "RefPoseType", "NumFrames", "SequenceLength")
 
 
-def sequence(file):
+def sequence(file, morph_names=(), *, skeleton=None):
     # Long clips carry very large per-track curve data; keep only the fields extraction uses.
     rows = document(file, 256 * 1024 * 1024)
     matches = [row for row in rows if row.get("Type") == "AnimSequence"]
     if len(matches) != 1:
         return None
     properties = matches[0].get("Properties") or {}
+    if (properties.get("AdditiveAnimType") not in (None, "AAT_None")
+            or (skeleton is not None and package_name(properties.get("Skeleton", {}).get("ObjectPath")) != skeleton)):
+        morph_names = ()
     slim = {key: properties[key] for key in SEQUENCE_PROPERTIES if key in properties}
     table = properties.get("TrackToSkeletonMapTable")
     if isinstance(table, list):
         slim["TrackToSkeletonMapTable"] = [dict(BoneTreeIndex=row["BoneTreeIndex"]) for row in table
                                            if isinstance(row, dict) and "BoneTreeIndex" in row]
-    return dict(Type="AnimSequence", Name=matches[0].get("Name"), Properties=slim)
+    return dict(Type="AnimSequence", Name=matches[0].get("Name"), Properties=slim,
+                MorphWeights=sample_curves(matches[0], morph_names))
 
 
 def animation_reference(client, skeleton, rig):
@@ -108,7 +113,7 @@ def clip_id(name, package, used):
     return result
 
 
-def preserve_library(asset, output, rig, previous=None):
+def preserve_library(asset, output, rig, previous=None, *, validated_morphs=None):
     original = asset / "Animation"
     if original.exists():
         if original.is_symlink() or not original.is_dir():
@@ -140,7 +145,7 @@ def preserve_library(asset, output, rig, previous=None):
         key = entry.get("id")
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key) or key in result:
             raise ValueError("Existing animation IDs are invalid.")
-        metadata, data = read_clip(str(catalog.parent), entry, check)
+        metadata, data = read_clip(str(catalog.parent), entry, check, validated_morphs=validated_morphs)
         total += len(data)
         if total > 2 * 1024 ** 3:
             raise ValueError("Animation library exceeds its size limit.")
@@ -356,6 +361,7 @@ def adopt_companions(client, captured, primary, primary_package, proven, charact
 
 
 def build(client, root, record, output, query, progress, cancel, index=None):
+    validated_morphs = set()
     asset = Path(root) / record["path"]
     captured, fingerprints = capture(root, record)
     progress("search", 0, 0)
@@ -424,7 +430,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         if file is None:
             reject("metadata", package, "The native tool could not export sequence metadata.")
             continue
-        item = sequence(file)
+        item = sequence(file, mesh.get("morphs", {}), skeleton=skeleton)
         if not item:
             reject("metadata", package, "The exported package does not contain one animation sequence.")
             continue
@@ -479,7 +485,9 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     output.mkdir(parents=True, exist_ok=True)
     library = output / "Animation"
     library.mkdir()
-    entries = preserve_library(asset, library, rig, previous)
+    entries = preserve_library(asset, library, rig, previous, validated_morphs=validated_morphs)
+    morph_targets = export_morphs(mesh, [captured[index] for index in proven
+                                       if index not in companions], library)
     existing = {key: document(library / entry["file"]) for key, entry in entries.items()}
     used, imported, secondary = set(entries), 0, 0
     reference = None
@@ -552,6 +560,11 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         metadata = dict(format="mod-viewer-animation", version=1, coordinate_space="asset", layout="frame-major-tq-f32le",
                         skeleton_id=rig["id"], frame_count=frames, bone_count=len(rig["bones"]), duration=duration,
                         data_file=key + ".bin", sha256=binary_hash, source=package)
+        if morph_targets and item.get("MorphWeights"):
+            morph_weights = item["MorphWeights"]
+            binary += morph_weights["data"]
+            metadata["sha256"] = hashlib.sha256(binary).hexdigest()
+            metadata["morphs"] = {**morph_targets, "names": morph_weights["names"]}
         if layer_info:
             metadata["reference_layer"] = layer_info
         (library / (key + ".bin")).write_bytes(binary)
@@ -560,7 +573,6 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         if key != clip_id(item["Name"], package, set()):
             label += " (" + package.removeprefix(character_root + "/").rsplit("/", 1)[0] + ")"
         entry = dict(id=key, name=label[:128], file=key + ".json", duration=duration)
-        read_clip(str(library), entry, rig)
         entries[key] = entry
         existing[key] = metadata
         provenance.append(dict(id=key, source=package, secondary=layer_info))
@@ -569,7 +581,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         detail = f" Most common skip reason ({reasons.most_common(1)[0][1]} of {len(ordered)} clips): {reasons.most_common(1)[0][0]}" if reasons else ""
         raise ValueError("No usable animation library could be produced within the viewer limits." + detail)
     for entry in entries.values():
-        read_clip(str(library), entry, rig)
+        read_clip(str(library), entry, rig, validated_morphs=validated_morphs)
     if sum(file.stat().st_size for file in library.rglob("*") if file.is_file()) > 2 * 1024 ** 3:
         raise ValueError("The extracted animation library exceeds its size limit.")
     manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()))

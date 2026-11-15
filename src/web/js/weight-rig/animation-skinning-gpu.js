@@ -1,7 +1,8 @@
 import { Matrix4, Quaternion } from 'three';
-import { Fn, If, float, instanceIndex, vec3, vec4 } from 'three/tsl';
+import { Fn, If, Loop, float, uint, instanceIndex, vec3, vec4 } from 'three/tsl';
 import { createGpuDeformation, gpuDeformationSupported } from '../mesh/deformation-gpu.js';
 import { applyWeightedNormalDeformationInto, applyWeightedTransformDeformationInto } from './weight-deformation.js';
+import { morphBaseline } from './animation-morphs.js';
 
 // Asset clips retain their authored linear blend skinning and all eight influences.
 export function createAnimationSkinningGpu(mesh, state) {
@@ -10,17 +11,27 @@ export function createAnimationSkinningGpu(mesh, state) {
   const bones = state.boneIds;
   const vertexCount = state.baselinePositions.length / 3;
   const stride = 22; // matrix, quaternion, and independent presence flags
+  const morph = state.animationMorph || null;
+  const paletteSize = (bones.length + 1) * stride;
+  const sourceLength = state.baselinePositions.length + (morph ? morph.ranges.length + morph.entries.length : 0);
   if (
     !gpuDeformationSupported([
-      state.baselinePositions.byteLength,
+      sourceLength * Float32Array.BYTES_PER_ELEMENT,
       state.baselineNormals?.byteLength || 0,
       state.indices.byteLength,
       state.weights.byteLength,
       vertexCount * 4,
-      (bones.length + 1) * stride * Float32Array.BYTES_PER_ELEMENT,
+      (paletteSize + (morph?.weights.length || 0)) * Float32Array.BYTES_PER_ELEMENT,
     ])
   )
     return null;
+  const sourcePositions = morph ? new Float32Array(sourceLength) : state.baselinePositions;
+  // Reuse the existing bindings for morph records and weights within WebGPU's buffer limit.
+  if (morph) {
+    sourcePositions.set(state.baselinePositions);
+    sourcePositions.set(morph.ranges, state.baselinePositions.length);
+    sourcePositions.set(morph.entries, state.baselinePositions.length + morph.ranges.length);
+  }
   const slots = new Map(bones.map((bone, index) => [Number(bone), index + 1]));
   const gpu = createGpuDeformation(mesh, {
     normal: !!state.baselineNormals,
@@ -32,11 +43,12 @@ export function createAnimationSkinningGpu(mesh, state) {
         if (values[offset + 20]) transforms.set(bone, new Matrix4().fromArray(values, offset));
         if (values[offset + 21]) rotations.set(bone, new Quaternion().fromArray(values, offset + 16));
       }
+      const baseline = morphBaseline(state, morph ? { ...morph, weights: values.subarray(paletteSize) } : null);
       const position = mesh.geometry.attributes.position.array;
-      position.set(state.baselinePositions);
+      position.set(baseline.positions);
       applyWeightedTransformDeformationInto(
         position,
-        state.baselinePositions,
+        baseline.positions,
         state.indices,
         state.weights,
         state.influenceCount,
@@ -45,10 +57,10 @@ export function createAnimationSkinningGpu(mesh, state) {
       );
       if (state.baselineNormals) {
         const normal = mesh.geometry.attributes.normal.array;
-        normal.set(state.baselineNormals);
+        normal.set(baseline.normals);
         applyWeightedNormalDeformationInto(
           normal,
-          state.baselineNormals,
+          baseline.normals,
           state.indices,
           state.weights,
           state.influenceCount,
@@ -59,14 +71,14 @@ export function createAnimationSkinningGpu(mesh, state) {
     },
   });
   const { readBuffer } = gpu;
-  const positions = readBuffer(state.baselinePositions);
+  const positions = readBuffer(sourcePositions);
   const normals = state.baselineNormals ? readBuffer(state.baselineNormals) : null;
   const weights = readBuffer(state.weights);
   const indices = readBuffer(
     Uint32Array.from(state.indices, (bone) => slots.get(bone) || 0),
     'uint',
   );
-  const palette = readBuffer(new Float32Array((bones.length + 1) * stride));
+  const palette = readBuffer(new Float32Array(paletteSize + (morph?.weights.length || 0)));
   const values = new Float64Array(palette.value.array.length);
   const active = readBuffer(new Uint32Array(vertexCount), 'uint');
   const read3 = (buffer, offset) =>
@@ -75,6 +87,18 @@ export function createAnimationSkinningGpu(mesh, state) {
     const offset = instanceIndex.mul(3);
     const p = read3(positions, offset).toVar();
     const n = normals ? read3(normals, offset).toVar() : null;
+    if (morph) {
+      const range = instanceIndex.mul(2).add(vertexCount * 3);
+      const start = uint(positions.element(range));
+      const end = uint(positions.element(range.add(1)));
+      Loop({ start, end, type: 'uint', condition: '<' }, ({ i }) => {
+        const source = i.mul(7).add(vertexCount * 5);
+        const weight = palette.element(uint(positions.element(source)).add(paletteSize));
+        p.addAssign(read3(positions, source.add(1)).mul(weight));
+        if (n) n.addAssign(read3(positions, source.add(4)).mul(weight));
+      });
+      if (n) If(end.greaterThan(start), () => n.assign(n.div(n.length().max(1e-20))));
+    }
     If(active.element(instanceIndex).greaterThan(0), () => {
       const sumPosition = vec3(0).toVar();
       const sumNormal = vec3(0).toVar();
@@ -117,6 +141,7 @@ export function createAnimationSkinningGpu(mesh, state) {
   })().compute(vertexCount);
   let previousVertices = null;
   return {
+    morph,
     materialize: gpu.materialize,
     dispose: gpu.dispose,
     update(transforms, rotations, vertices) {
@@ -141,6 +166,7 @@ export function createAnimationSkinningGpu(mesh, state) {
           values[offset + 21] = 1;
         }
       }
+      if (morph) values.set(morph.weights, paletteSize);
       palette.value.array.set(values);
       palette.value.needsUpdate = true;
       gpu.dispatch(compute, { values, vertices });
