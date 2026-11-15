@@ -30,6 +30,21 @@ def check_cancelled(cancel):
         raise ExtractionCancelled("Extraction cancelled; existing Asset files were preserved.")
 
 
+def list_packages(client, kind, folder, cancel):
+    """Collect complete package searches, retaining direct entries on subdivision."""
+    check_cancelled(cancel)
+    try:
+        return client.search("", kind, folder)
+    except SearchTruncated:
+        try:
+            packages = client.search("", kind, folder, recursive=False)
+        except SearchTruncated as error:
+            raise SearchTruncated("Package discovery is incomplete: a folder exceeds the native search limit.") from error
+        for name in client.folders(folder):
+            packages += list_packages(client, kind, folder + "/" + name, cancel)
+        return packages
+
+
 def ensure_runtime(cancel, bundle=None):
     root = Path(bundle) if bundle else Path(paths.vendor_dir()) / "game-extract"
     executable = root / "ModViewer.GameExtract.exe"

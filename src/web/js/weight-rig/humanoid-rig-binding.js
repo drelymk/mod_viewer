@@ -491,13 +491,15 @@ function buildJointBindings({ controlRig, modelRig, controlMappings = null, opti
 
   const rejectedControlKeys =
     controlMappings?.rejectedControlKeys instanceof Set ? controlMappings.rejectedControlKeys : new Set();
+  const independentSources = modelRig.sourceBindingMode === 'independent';
   const automaticControls = CONTROL_ORDER.filter(
-    (controlKey) => controlState.get(controlKey).anchorJointId === null && !rejectedControlKeys.has(controlKey),
+    (controlKey) =>
+      (independentSources || controlState.get(controlKey).anchorJointId === null) &&
+      !rejectedControlKeys.has(controlKey),
   );
 
-  // Calculate one candidate table after mapped roots are reserved. Both
-  // automatic phases reuse it, while later ownership checks exclude anchors
-  // and earlier extra seeds from consideration.
+  // Exact mapped joints stay reserved. Independent sources can seed additional
+  // disconnected joints from the same control without replacing its anchor.
   const availableJointIds = allJointIds(modelRig).filter((jointId) => !directOwnerByJointId.has(jointId));
   const candidatesByControl = new Map(
     automaticControls.map((controlKey) => [
@@ -506,7 +508,7 @@ function buildJointBindings({ controlRig, modelRig, controlMappings = null, opti
     ]),
   );
 
-  if (modelRig.sourceBindingMode === 'independent') {
+  if (independentSources) {
     // A partial palette need not represent every control. Let each joint choose
     // its nearest eligible control instead of filling absent limb anchors.
     assignIndependentSeeds({ candidatesByControl, directOwnerByJointId, controlState });

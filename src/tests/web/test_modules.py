@@ -2153,6 +2153,52 @@ def test_independent_sources_bind_shared_controls_pose_and_reset_without_vertex_
     assert all(all(row.values()) for row in result['rows'])
 
 
+@pytest.mark.parametrize('independent', [False, True])
+def test_mapped_head_binds_disconnected_source_joints_without_replacing_anchor(model_rig_page, independent):
+    result = model_rig_page.evaluate("""async independent => {
+      const humanoid = await import('./js/weight-rig/humanoid-control-rig.js');
+      const bindings = await import('./js/weight-rig/humanoid-rig-binding.js');
+      const deformation = await import('./js/weight-rig/weight-deformation.js');
+      const controlRig = humanoid.buildHumanoidControlRig({meshes:[{userData:{
+        humanoidRestPositions:new Float32Array([-1,0,0, 1,0,0, 0,2,0, -1,1.5,0, 1,1.5,0])}}]});
+      const head = controlRig.controls.head.position;
+      const points = [[head[0],head[1]+.01,head[2]],head,[head[0]+.005,head[1],head[2]]];
+      const source = window.__sourceRig('source-01',points.map((point,i) => [i+1,point,i===2 ? 2 : null]),
+        !independent);
+      const model = await window.__buildRig([source]);
+      const mappings = new Map([['head',{controlKey:'head',jointId:0}]]);
+      const binding = bindings.buildHumanoidRigBinding({controlRig,modelRig:model,controlMappings:mappings});
+      const diagnostics = independent ? binding.diagnostics.bindingsBySource['source-01'] : binding.diagnostics;
+      const neck = controlRig.controls.neck.position;
+      const direction = head.map((value,i) => value-neck[i]+[.03,0,.02][i]);
+      const length = Math.hypot(...head.map((value,i) => value-neck[i]));
+      const target = neck.map((value,i) => value+direction[i]*length/Math.hypot(...direction));
+      const baseline = new Float32Array(points.flat());
+      const indices = new Uint32Array([0,1,2]), weights = new Float32Array([1,1,1]);
+      const deform = posedControls => {
+        const transforms = bindings.buildHumanoidDriverBaseTransforms({binding,controlRig,modelRig:model,
+          posedControls}).result;
+        return deformation.applyWeightedTransformDeformation(baseline,indices,weights,1,transforms);
+      };
+      const posed = deform({head:target}), reset = deform(null);
+      const rejected = new Map(); rejected.rejectedControlKeys = new Set(['head']);
+      const rejectedBinding = bindings.buildHumanoidRigBinding({controlRig,modelRig:model,controlMappings:rejected});
+      const close = (actual,expected) => actual.every((value,i) => Math.abs(value-expected[i])<1e-5);
+      return {owners:model.joints.map(joint => binding.jointBindings.get(joint.jointId)?.controlKey || null),
+        anchor:diagnostics.bindingsByControl.head.anchorJointId,source:diagnostics.bindingsByControl.head.source,
+        method:binding.jointBindings.get(0).bindingMethod,
+        extraAnchor:binding.jointBindings.get(1)?.anchorJointId ?? null,
+        follows:close([...posed.slice(3,6)],independent ? target : head),
+        reset:close([...reset],[...baseline]),rejected:rejectedBinding.unboundJointIds};
+    }""", independent)
+    assert result['owners'] == (['head'] * 3 if independent else ['head', None, None])
+    assert result['anchor'] == 0 and result['source'] == 'mapped'
+    assert result['method'] == 'manual_control_mapping'
+    assert result['extraAnchor'] == (0 if independent else None)
+    assert result['follows'] and result['reset']
+    assert result['rejected'] == [0, 1, 2]
+
+
 def test_model_rig_skips_vertex_work_and_keeps_independent_chains(model_rig_page):
     result = model_rig_page.evaluate("""async () => {
       const source = window.__sourceRig('source-01', [[1, [0, 0, 0], null]]);

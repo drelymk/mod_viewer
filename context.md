@@ -1024,8 +1024,10 @@ of documentation, comments and tests; use portable fixtures instead.
   humanoid controls without vertex correspondence or cross-source attachments.
   Each source joint chooses its nearest eligible control before local inheritance;
   partial sources must not fill unrelated controls merely to reserve anchors.
-  Explicit control mappings claim their exact source joint; other sources bind
-  automatically to the shared control positions. Do not infer bone equivalence or
+  Explicit control mappings claim their exact source joint; the mapped control
+  remains eligible for additional disconnected joints in that source without
+  replacing its anchor. Other sources bind automatically to the shared control
+  positions. Do not infer bone equivalence or
   cross-source attachments from vertex proximity. Build deterministic spanning
   forests from source edges and never rewrite authored indices/weights.
   Cross-palette posing may stretch where inferred and authored

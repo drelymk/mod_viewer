@@ -12,7 +12,7 @@ from pathlib import Path
 
 from app.settings import config, paths
 from . import pipeline
-from .runtime import SearchTruncated, VERSION, check_cancelled, find_paks
+from .runtime import VERSION, check_cancelled, find_paks, list_packages
 
 FORMAT = 1
 KIND = "WWMI"
@@ -96,28 +96,12 @@ def remove(game_folder):
         pass
 
 
-def list_meshes(client, folder, cancel):
-    check_cancelled(cancel)
-    try:
-        return client.search("", "SkeletalMesh", folder)
-    except SearchTruncated:
-        # Child recursion cannot recover direct packages omitted by a broad search.
-        # A truncated direct search must fail the build, never publish a partial index.
-        try:
-            packages = client.search("", "SkeletalMesh", folder, recursive=False)
-        except SearchTruncated as error:
-            raise SearchTruncated("The game index is incomplete: a folder exceeds the native search limit.") from error
-        for name in client.folders(folder):
-            packages += list_meshes(client, folder + "/" + name, cancel)
-        return packages
-
-
 def build(client, game_folder, progress, cancel):
     current = fingerprint(game_folder)
     progress("index", 0, 0)
     packages = []
     for root in SCAN_ROOTS:
-        packages += list_meshes(client, root, cancel)
+        packages += list_packages(client, "SkeletalMesh", root, cancel)
     packages = sorted(dict.fromkeys(packages))
     directory = client.work / "index-shapes"
     meshes = {}
