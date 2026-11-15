@@ -113,7 +113,7 @@ def clip_id(name, package, used):
     return result
 
 
-def preserve_library(asset, output, rig, previous=None):
+def preserve_library(asset, output, rig, previous=None, *, validated_morphs=None):
     original = asset / "Animation"
     if original.exists():
         if original.is_symlink() or not original.is_dir():
@@ -145,7 +145,7 @@ def preserve_library(asset, output, rig, previous=None):
         key = entry.get("id")
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key) or key in result:
             raise ValueError("Existing animation IDs are invalid.")
-        metadata, data = read_clip(str(catalog.parent), entry, check)
+        metadata, data = read_clip(str(catalog.parent), entry, check, validated_morphs=validated_morphs)
         total += len(data)
         if total > 2 * 1024 ** 3:
             raise ValueError("Animation library exceeds its size limit.")
@@ -361,6 +361,7 @@ def adopt_companions(client, captured, primary, primary_package, proven, charact
 
 
 def build(client, root, record, output, query, progress, cancel, index=None):
+    validated_morphs = set()
     asset = Path(root) / record["path"]
     captured, fingerprints = capture(root, record)
     progress("search", 0, 0)
@@ -484,7 +485,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     output.mkdir(parents=True, exist_ok=True)
     library = output / "Animation"
     library.mkdir()
-    entries = preserve_library(asset, library, rig, previous)
+    entries = preserve_library(asset, library, rig, previous, validated_morphs=validated_morphs)
     morph_targets = export_morphs(mesh, [captured[index] for index in proven
                                        if index not in companions], library)
     existing = {key: document(library / entry["file"]) for key, entry in entries.items()}
@@ -580,7 +581,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         detail = f" Most common skip reason ({reasons.most_common(1)[0][1]} of {len(ordered)} clips): {reasons.most_common(1)[0][0]}" if reasons else ""
         raise ValueError("No usable animation library could be produced within the viewer limits." + detail)
     for entry in entries.values():
-        read_clip(str(library), entry, rig)
+        read_clip(str(library), entry, rig, validated_morphs=validated_morphs)
     if sum(file.stat().st_size for file in library.rglob("*") if file.is_file()) > 2 * 1024 ** 3:
         raise ValueError("The extracted animation library exceeds its size limit.")
     manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()))

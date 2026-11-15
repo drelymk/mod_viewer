@@ -258,7 +258,8 @@ def test_lazy_skin_preview_publishes_verified_rig_without_remapping_weights(tmp_
     assert fallback["meshes"]["Mesh01"]["bone_ids"] == [7, 8]
 
 
-@pytest.mark.parametrize("case", ["half", "float", "uv", "topology", "count", "missing", "no_uv", "invalid_uv", "truncated"])
+@pytest.mark.parametrize("case", ["half", "float", "uv", "topology", "count", "missing", "no_uv", "invalid_uv", "truncated",
+                                  "duplicate", "duplicate_missing"])
 def test_morph_topology_fallback_preserves_modified_rest_positions(tmp_path, monkeypatch, case):
     import struct
     from unittest.mock import patch
@@ -270,7 +271,9 @@ def test_morph_topology_fallback_preserves_modified_rest_positions(tmp_path, mon
     uv_format = "<2f" if case == "float" else "<2e"
     stride = 12 + struct.calcsize(uv_format)
     reference = b"".join(struct.pack("<3f", *point) + struct.pack(uv_format, *uv)
-                         for point, uv in [((0, 0, 0), (0, 0)), ((1, 0, 0), (1, 0)), ((0, 1, 0), (0, 1))])
+                         for point, uv in [((0, 0, 0), (0, 0)),
+                                           ((0 if case.startswith("duplicate") else 1, 0, 0), (1, 0)),
+                                           ((0, 1, 0), (0, 1))])
     if case == "invalid_uv":
         reference = reference[:12] + struct.pack(uv_format, float("nan"), 0) + reference[stride:]
     indices = struct.pack("<6H" if case == "float" else "<6I", 0, 1, 2, 2, 1, 0)
@@ -286,6 +289,8 @@ def test_morph_topology_fallback_preserves_modified_rest_positions(tmp_path, mon
                                 index_sha256=hashlib.sha256(indices).hexdigest())
     (asset / "Rig.json").write_text(json.dumps(raw))
     positions = struct.pack("<9f", 0, 0, 0, 1, .25, 0, 0, 1, 0)
+    if case.startswith("duplicate"):
+        positions = struct.pack("<9f", 0, 0, 0, 0, 0, 0, 0, 1, 0)
     if case == "count":
         positions += struct.pack("<3f", -5, -5, 0)
     mod_indices = struct.pack("<6I", 0, 2, 1, 2, 0, 1)
@@ -295,7 +300,7 @@ def test_morph_topology_fallback_preserves_modified_rest_positions(tmp_path, mon
         signature = signature[0], "0" * 64
     elif case == "topology":
         signature = "0" * 64, signature[1]
-    elif case == "missing":
+    elif case in ("missing", "duplicate_missing"):
         signature = ()
     cache = {}
 
@@ -306,7 +311,9 @@ def test_morph_topology_fallback_preserves_modified_rest_positions(tmp_path, mon
     with patch("app.assets.rig.parse_fmt", wraps=parse_fmt) as reader:
         result = resolve()
     assert reader.call_count == 1
-    expected = [0, 1, 2] if case in ("half", "float") else [0, -1, 2]
+    expected = [0, 1, 2] if case in ("half", "float", "duplicate") else [0, -1, 2]
+    if case == "duplicate_missing":
+        expected = [-1, -1, 2]
     if case == "count":
         expected.append(-1)
     assert result["morph_binding"]["vertices"] == expected
@@ -319,7 +326,8 @@ def test_morph_topology_fallback_preserves_modified_rest_positions(tmp_path, mon
     assert resolve()["morph_binding"] == result["morph_binding"]
 
 
-@pytest.mark.parametrize("case", ["split", "cyclic", "added", "ambiguous", "conflict", "wrong_uv", "invalid_index", "nonrigid"])
+@pytest.mark.parametrize("case", ["split", "cyclic", "added", "ambiguous", "conflict", "wrong_uv", "invalid_index", "nonrigid",
+                                  "duplicate_positions"])
 def test_morph_uv_triangles_recover_split_vertices_without_guessing_ambiguity(tmp_path, monkeypatch, case):
     import struct
     from .test_loader import _fmt
@@ -329,6 +337,8 @@ def test_morph_uv_triangles_recover_split_vertices_without_guessing_ambiguity(tm
     points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
     uvs = [(0, 1), (1, 1), (0, 0), (1, 0)]
     triangles = [0, 1, 2, 2, 1, 3]
+    if case == "duplicate_positions":
+        points[1] = points[0]
     if case == "ambiguous":
         points += [(10, 0, 0), (11, 0, 0), (10, 1, 0)]
         uvs += uvs[:3]
@@ -368,6 +378,8 @@ def test_morph_uv_triangles_recover_split_vertices_without_guessing_ambiguity(tm
     elif case == "invalid_index":
         mod_triangles[-1] = 999
     positions = struct.pack("<" + "fff" * len(mod_uvs), *([20, 20, 20] * len(mod_uvs)))
+    if case == "conflict":
+        positions = positions[:12] + struct.pack("<3f", *points[1]) + positions[24:]
     topology = (struct.pack("<" + "I" * len(mod_triangles), *mod_triangles),
                 b"".join(struct.pack("<2f", *uv) for uv in mod_uvs))
     cache = {}

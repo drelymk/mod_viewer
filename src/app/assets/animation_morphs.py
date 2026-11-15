@@ -1,11 +1,18 @@
 """Validate optional, contained sparse morph targets for skeletal clips."""
 
 import hashlib
+import json
 import math
+import os
 import re
 import struct
 
 from . import paths
+
+
+def _file_identity(file):
+    stat = os.stat(file)
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
 
 def morph_names(raw):
@@ -19,11 +26,22 @@ def morph_names(raw):
     return names
 
 
-def read_morphs(directory, raw):
+def read_morphs(directory, raw, *, validated=None):
+    """Read targets, or reuse a validation marker during one extraction operation.
+
+    A cache hit returns no bytes; publication callers must use the default fresh read.
+    """
     morph_names(raw)
     file = paths.safe_asset_path(directory, raw.get("file")) if isinstance(raw.get("file"), str) else None
     if not file:
         raise ValueError("Animation morph data is unavailable.")
+    key = None
+    if validated is not None:
+        descriptor = json.dumps([raw.get("sha256"), raw.get("components")], sort_keys=True,
+                                separators=(",", ":"), allow_nan=False).encode()
+        key = (file, _file_identity(file), hashlib.sha256(descriptor).digest())
+        if key in validated:
+            return None
     with open(file, "rb") as stream:
         data = stream.read(128 * 1024 * 1024 + 1)
     if len(data) > 128 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != raw.get("sha256"):
@@ -62,4 +80,6 @@ def read_morphs(directory, raw):
             cursor += length * 28
     if cursor != len(data):
         raise ValueError("Invalid morph data length.")
+    if key is not None and _file_identity(file) == key[1] and len(validated) < 1024:
+        validated.add(key)
     return data

@@ -951,7 +951,8 @@ def test_native_batch_rejects_incomplete_or_uncontained_results(tmp_path, respon
         client.batch("json", [MESH], tmp_path)
 
 
-def test_morph_extraction_maps_native_vertices_and_upgrades_existing_clips(tmp_path):
+@pytest.mark.parametrize("curve_mode", ["supported", "weighted", "interpolation"])
+def test_morph_extraction_maps_native_vertices_and_upgrades_existing_clips(tmp_path, curve_mode):
     from app.assets.animations import read_clip
     from app.assets.animation_morphs import read_morphs
 
@@ -998,6 +999,10 @@ def test_morph_extraction_maps_native_vertices_and_upgrades_existing_clips(tmp_p
             rows[0]["CompressedCurveNames"] = [dict(DisplayName=name) for name in ("Shape01", "Unknown01")]
             keys = [dict(Time=time, Value=time, ArriveTangent=0, LeaveTangent=0,
                          InterpMode="RCIM_Linear", TangentWeightMode="RCTWM_WeightedNone") for time in (0, 1)]
+            if curve_mode == "weighted":
+                keys[0]["TangentWeightMode"] = "RCTWM_WeightedBoth"
+            elif curve_mode == "interpolation":
+                keys[0]["InterpMode"] = "RCIM_Unknown"
             rows[0]["CompressedCurveData"] = dict(FloatCurves=[dict(FloatCurve=dict(Keys=keys))] * 2)
             file.write_text(json.dumps(rows))
         return result
@@ -1017,6 +1022,10 @@ def test_morph_extraction_maps_native_vertices_and_upgrades_existing_clips(tmp_p
     catalog = json.loads((output / "Animation/manifest.json").read_text())
     assert [entry["id"] for entry in catalog["clips"]] == ["Clip01"]
     metadata, data = read_clip(str(output / "Animation"), catalog["clips"][0], rig)
+    if curve_mode != "supported":
+        assert "morphs" not in metadata
+        assert data == (tmp_path / "before/Animation/Clip01.bin").read_bytes()
+        return
     assert metadata["morphs"]["names"] == ["Shape01"]
     assert struct.unpack("<2f", data[2 * 2 * 28:]) == (0, 1)
     morphs = read_morphs(str(output / "Animation"), metadata["morphs"])
@@ -1035,5 +1044,16 @@ def test_morph_curves_sample_authored_interpolation(mode, expected):
     result = sample_curves(sequence, {"Shape01"})
     assert struct.unpack("<3f", result["data"]) == pytest.approx((0, expected, 1))
     keys[0]["TangentWeightMode"] = "RCTWM_WeightedBoth"
-    with pytest.raises(ValueError, match="Unsupported morph curve"):
+    assert sample_curves(sequence, {"Shape01"}) is None
+    keys[0]["TangentWeightMode"] = "RCTWM_WeightedNone"
+    keys[0]["InterpMode"] = "RCIM_Unknown"
+    assert sample_curves(sequence, {"Shape01"}) is None
+    # Other supported targets survive an unsupported optional curve.
+    sequence["CompressedCurveNames"].append(dict(DisplayName="Shape02"))
+    sequence["CompressedCurveData"]["FloatCurves"].append(dict(FloatCurve=dict(Keys=[
+        {**key, "InterpMode": mode} for key in keys])))
+    assert sample_curves(sequence, {"Shape01", "Shape02"}) == {
+        "names": ["Shape02"], "data": result["data"]}
+    keys[0]["Value"] = float("nan")
+    with pytest.raises(ValueError, match="Invalid morph curve"):
         sample_curves(sequence, {"Shape01"})

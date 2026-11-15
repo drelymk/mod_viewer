@@ -27,7 +27,7 @@ def _json(file, limit=1024 * 1024):
     return json.loads(data)
 
 
-def _read_clip(directory, entry, rig):
+def _read_clip(directory, entry, rig, *, validated_morphs=None):
     """Read and validate the clip and its optional morph sidecar once."""
     raw = _json(paths.safe_asset_path(directory, entry["file"]))
     if not isinstance(raw, dict):
@@ -63,13 +63,13 @@ def _read_clip(directory, entry, rig):
         if any(not math.isfinite(value) or abs(value) > 1e6
                for (value,) in struct.iter_unpack("<f", memoryview(data)[bone_size:])):
             raise ValueError("Animation contains invalid morph weights.")
-        morph_data = read_morphs(directory, raw["morphs"])
+        morph_data = read_morphs(directory, raw["morphs"], validated=validated_morphs)
     return raw, data, morph_data
 
 
-def read_clip(directory, entry, rig):
+def read_clip(directory, entry, rig, *, validated_morphs=None):
     """Validate one contained clip without publishing it."""
-    raw, data, _morph_data = _read_clip(directory, entry, rig)
+    raw, data, _morph_data = _read_clip(directory, entry, rig, validated_morphs=validated_morphs)
     return raw, data
 
 

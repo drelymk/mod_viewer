@@ -300,17 +300,27 @@ def _mod_morph_uv_triangles(reference, vertex_count, topology):
     for index, point in enumerate(points):
         if mapping[index] < 0 and index not in conflicts and point in proven and unique.get(point) is not None:
             mapping[index] = unique[point]
-    return mapping
+    return mapping, conflicts
 
 
 def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, signature=(), topology=()):
-    """Map rest positions first, then use proven topology for reshaped faces."""
+    """Prefer proven topology, leaving ambiguous position/UV matches unmapped."""
     if not positions or len(positions) % 12:
         return None
     try:
         reference = _morph_reference(directory, reference_dir, palette, cache)
         if reference is None:
             return None
+        exact_topology = len(signature) == 2 and len(positions) // 12 == reference["count"]
+        uv_triangles = len(topology) == 2 and len(palette["bone_map"]) == 1
+        reference_topology = None
+        if exact_topology or uv_triangles:
+            try:
+                reference_topology = _reference_morph_topology(reference, palette)
+            except (OSError, ValueError, TypeError, struct.error):
+                pass
+            if reference_topology is not None and exact_topology and signature == reference["signature"]:
+                return list(range(reference["count"]))
         if "buckets" not in reference:
             reference["buckets"] = None
             layout, data = reference["layout"], reference["vertices"]
@@ -325,7 +335,7 @@ def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, sig
                     return None
                 cell = tuple(math.floor(value * 10000) for value in point)
                 bucket = buckets.setdefault(cell, {})
-                bucket.setdefault(point, index)
+                bucket[point] = -1 if point in bucket else index
                 if len(bucket) > 64:
                     return None
             reference["buckets"] = buckets
@@ -348,21 +358,15 @@ def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, sig
                     squared = sum((a - b) ** 2 for a, b in zip(point, reference_point))
                     if squared < distance:
                         best, distance = index, squared
+                    elif squared == distance:
+                        best = -1
             vertices.append(best)
-        exact_topology = len(signature) == 2 and len(vertices) == reference["count"]
-        uv_triangles = len(topology) == 2 and len(palette["bone_map"]) == 1
-        if -1 in vertices and (exact_topology or uv_triangles):
-            try:
-                reference_topology = _reference_morph_topology(reference, palette)
-            except (OSError, ValueError, TypeError, struct.error):
-                reference_topology = None
-            if reference_topology is not None:
-                if exact_topology and signature == reference["signature"]:
-                    return list(range(len(vertices)))
-                if uv_triangles:
-                    uv_mapping = _mod_morph_uv_triangles(reference, len(vertices), topology)
-                    if uv_mapping is not None:
-                        vertices = [target if target >= 0 else original for target, original in zip(uv_mapping, vertices)]
+        if uv_triangles and reference_topology is not None:
+            result = _mod_morph_uv_triangles(reference, len(vertices), topology)
+            if result is not None:
+                uv_mapping, conflicts = result
+                vertices = [-1 if index in conflicts else target if target >= 0 else original
+                            for index, (target, original) in enumerate(zip(uv_mapping, vertices))]
         return vertices if any(vertex >= 0 for vertex in vertices) else None
     except (OSError, ValueError, TypeError, struct.error):
         return None

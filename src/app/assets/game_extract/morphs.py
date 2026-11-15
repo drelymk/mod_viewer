@@ -30,10 +30,11 @@ def sample_curves(sequence, names):
             if (any(type(key.get(field)) not in (int, float) or not math.isfinite(key[field])
                     or abs(key[field]) > 1e6 for field in ("Time", "Value", "ArriveTangent", "LeaveTangent"))
                     or key["Time"] < 0 or key["Time"] > duration + 1e-4
-                    or (index and key["Time"] <= keys[index - 1]["Time"])
-                    or key.get("InterpMode") not in ("RCIM_Linear", "RCIM_Constant", "RCIM_Cubic")
-                    or key.get("TangentWeightMode") != "RCTWM_WeightedNone"):
-                raise ValueError("Unsupported morph curve keys.")
+                    or (index and key["Time"] <= keys[index - 1]["Time"])):
+                raise ValueError("Invalid morph curve keys.")
+        if any(key.get("InterpMode") not in ("RCIM_Linear", "RCIM_Constant", "RCIM_Cubic")
+               or key.get("TangentWeightMode") != "RCTWM_WeightedNone" for key in keys):
+            continue
         if not any(key["Value"] or key["ArriveTangent"] or key["LeaveTangent"] for key in keys):
             continue
         values, index = [], 0
