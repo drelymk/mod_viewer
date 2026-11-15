@@ -1,6 +1,5 @@
-// Pure, conservative reconciliation of source-local inferred rigs. The
-// authored skinning streams remain source-scoped; this module only builds a
-// viewer-owned model graph from neutral geometry and source topology.
+// Build the viewer-owned model graph from source-local rigs. Only validated
+// bone identities can join sources; geometry never establishes equivalence.
 
 import { createWorkBudget } from './cooperative-scheduler.js';
 import {
@@ -10,161 +9,34 @@ import {
   collectSourceBoneEvidence,
   prepareSourceBoneEvidence,
   modelReferenceRadius,
-  buildCrossSourceWeightEvidenceCooperative,
 } from './weight-rig-reconcile-evidence.js';
-import {
-  GuardedUnionFind,
-  buildModelWideBoneIdentity,
-  buildCandidates,
-  runEquivalencePasses,
-} from './weight-rig-reconcile-matching.js';
 import {
   buildModelJoints,
   sourceModelEdges,
   maximumSpanningForest,
   rootVotes,
   orientModelForest,
-  orientModelForestWithAttachments,
-  componentSupport,
 } from './weight-rig-reconcile-forest.js';
-import { addAttachments } from './weight-rig-reconcile-attachments.js';
-export {
-  CROSS_SOURCE_STRONG_VERTEX_COUNT,
-  CROSS_SOURCE_STRONG_WEIGHT_STRENGTH,
-  sourceBoneKey,
-} from './weight-rig-reconcile-evidence.js';
-export {
-  CROSS_SOURCE_CANDIDATE_DISTANCE,
-  CROSS_SOURCE_STRICT_DISTANCE,
-  CROSS_SOURCE_PROPAGATION_DISTANCE,
-  CROSS_SOURCE_AMBIGUITY_MARGIN,
-  CROSS_SOURCE_GRAPH_ALIGNMENT_MARGIN,
-  CROSS_SOURCE_GRAPH_ALIGNMENT_MIN_SCORE,
-} from './weight-rig-reconcile-matching.js';
+export { sourceBoneKey } from './weight-rig-reconcile-evidence.js';
 export { orientModelRigForest } from './weight-rig-reconcile-forest.js';
-export { CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN } from './weight-rig-reconcile-attachments.js';
 
-export const MODEL_RIG_BUILDER_VERSION = 5;
+export const MODEL_RIG_BUILDER_VERSION = 6;
 
-async function assembleModelRigReconciliation(
-  sourceRigs,
-  evidenceByKey,
-  referenceRadius,
-  { useModelWideBoneIds = false, options = {}, checkpoint },
-) {
-  const identity = useModelWideBoneIds ? buildModelWideBoneIdentity(evidenceByKey) : null;
-  const candidateBuild = identity
-    ? {
-        candidates: [],
-        crossEvidenceByPair: new Map(),
-      }
-    : await buildCandidates(evidenceByKey, referenceRadius, options, checkpoint);
-  const candidates = candidateBuild.candidates;
-  const unionFind = identity?.unionFind || new GuardedUnionFind(evidenceByKey);
-  const equivalence = identity
-    ? {
-        correspondenceStrength: new Map(),
-        accepted: [],
-        diagnostics: [],
-      }
-    : await runEquivalencePasses(candidates, evidenceByKey, unionFind, checkpoint);
-  await checkpoint();
-  const model = buildModelJoints(unionFind, evidenceByKey, equivalence.correspondenceStrength, referenceRadius, {
-    clusterOrder: identity?.clusterOrder || null,
+function boneIdentityGroups(evidenceByKey, modelWide) {
+  const groups = new Map();
+  evidenceByKey.forEach((evidence, sourceBoneKey) => {
+    const identity = modelWide ? evidence.boneId : sourceBoneKey;
+    const members = groups.get(identity) || [];
+    members.push(sourceBoneKey);
+    groups.set(identity, members);
   });
-  const sourceEdges = sourceModelEdges(sourceRigs, model.keyToJoint);
-  const sourceForestEdges = maximumSpanningForest(model.joints, sourceEdges);
-  const votes = rootVotes(sourceRigs, model.keyToJoint);
-  const sourceForest = orientModelForest(model.joints, sourceForestEdges, votes);
-  const attachments = await addAttachments(
-    model.joints,
-    sourceForestEdges,
-    sourceForest,
-    referenceRadius,
-    candidateBuild.crossEvidenceByPair,
-    checkpoint,
-  );
-  const finalEdges = attachments.edges;
-  const finalForest = orientModelForestWithAttachments(model.joints, sourceForest, finalEdges);
-  const survivingAttachments = finalEdges.filter((edge) => edge.relationshipType === 'attachment');
-  await checkpoint();
-  const attachmentDiagnostics = attachments.diagnostics.map((item) => ({
-    ...item,
-    left: { jointId: item.jointA },
-    right: { jointId: item.jointB },
-  }));
-  const rejectedCandidates = [
-    ...equivalence.diagnostics,
-    ...attachmentDiagnostics.filter((item) => item.decision === 'rejected'),
-  ];
-  const unmatchedCount = [...unionFind.clusters().values()].filter((members) => members.length === 1).length;
-  const ambiguousCount = rejectedCandidates.filter(
-    (item) => item.rejectionReason === 'ambiguous' || item.rejectionReason === 'attachment_ambiguous',
-  ).length;
-  const mainComponent =
-    [...finalForest.components].sort(
-      (left, right) =>
-        componentSupport(right, model.joints) - componentSupport(left, model.joints) ||
-        right.nodeIds.length - left.nodeIds.length ||
-        left.componentId - right.componentId,
-    )[0] || null;
-  const mainComponentId = mainComponent?.componentId ?? null;
-  const unresolvedComponents = finalForest.components.filter((component) => component.componentId !== mainComponentId);
-  const unresolvedSourceKeys = [
-    ...new Set(
-      unresolvedComponents.flatMap((component) =>
-        component.nodeIds.flatMap((jointId) =>
-          (model.joints[jointId]?.members || []).map((member) => member.sourceKey),
-        ),
-      ),
-    ),
-  ].sort();
-  const reconciliation = {
-    identityMode: identity ? 'model-wide-bone-id' : 'geometric-reconciliation',
-    uniqueModelBoneIdCount: identity?.uniqueModelBoneIdCount ?? null,
-    sourceCount: sourceRigs.length,
-    sourceBoneCount: evidenceByKey.size,
-    candidateCount: candidates.length,
-    sampleBuildMs: identity ? 0 : null,
-    spatialIndexMs: identity ? 0 : null,
-    crossSourceMatchMs: identity ? 0 : null,
-    modelJointCount: model.joints.length,
-    equivalenceClusterCount: [...unionFind.clusters().values()].filter((members) => members.length > 1).length,
-    equivalentSourceBoneCount: [...unionFind.clusters().values()]
-      .filter((members) => members.length > 1)
-      .reduce((sum, members) => sum + members.length, 0),
-    attachmentCount: survivingAttachments.length,
-    unmatchedCount,
-    ambiguousCount,
-    componentCount: finalForest.components.length,
-    mainComponentId,
-    unresolvedComponentCount: unresolvedComponents.length,
-    unresolvedJointCount: unresolvedComponents.reduce((sum, component) => sum + component.nodeIds.length, 0),
-    unresolvedSourceKeys,
-    modelReferenceRadius: referenceRadius,
-    joints: model.joints,
-    acceptedEquivalences: equivalence.accepted.map((item) => ({ ...item })),
-    acceptedAttachments: survivingAttachments,
-    attachmentDiagnostics,
-    rejectedCandidates,
-  };
-  return {
-    modelReferenceRadius: referenceRadius,
-    sourceBoneToModelJointMap: model.keyToJoint,
-    joints: model.joints,
-    edges: finalEdges,
-    components: finalForest.components,
-    componentByJointId: finalForest.componentByJointId,
-    reconciliation,
-  };
+  return [...groups.entries()]
+    .sort((left, right) => (modelWide ? left[0] - right[0] : left[0].localeCompare(right[0])))
+    .map(([, members]) => members.sort());
 }
 
-/**
- * Build Model Rig reconciliation with one cancellable work budget for vertex
- * matching and graph decisions. Identity mode only controls which evidence is
- * needed; both modes share the same guarded assembly and publication path.
- */
-export async function buildModelRigReconciliationCooperative(
+/** Assemble source-local or validated shared-ID joints with cancellable publication. */
+export async function buildModelRigCooperative(
   sourceRigs = [],
   options = {},
   { budget = createWorkBudget(), isCurrent = () => true, timings = null } = {},
@@ -172,11 +44,11 @@ export async function buildModelRigReconciliationCooperative(
   const rigs = [...sourceRigs]
     .filter((rig) => rig?.sourceKey !== undefined)
     .sort((left, right) => String(left.sourceKey).localeCompare(String(right.sourceKey)));
-  const useModelWideBoneIds =
+  const modelWide =
     rigs.length > 0 &&
     rigs.every((rig) => rig.boneIdsModelWide === true) &&
     new Set(rigs.map((rig) => rig.boneIdDomain || 'model')).size === 1;
-  const stale = Symbol('stale reconciliation');
+  const stale = Symbol('stale model rig');
   const checkpoint = async () => {
     if (!isCurrent()) throw stale;
     await budget.checkpoint();
@@ -194,23 +66,35 @@ export async function buildModelRigReconciliationCooperative(
       EPSILON,
       number(options.modelReferenceRadius, modelReferenceRadius(evidenceByKey)),
     );
-    const activeSources = new Set([...evidenceByKey.values()].map((evidence) => evidence.sourceKey));
-    const matchingRigs = rigs.filter((rig) => activeSources.has(String(rig.sourceKey)));
-    if (timings && (useModelWideBoneIds || matchingRigs.length < 2)) {
-      timings.sampleBuildMs = 0;
-      timings.spatialIndexMs = 0;
-      timings.crossSourceMatchMs = 0;
-    }
-    const crossEvidenceByPair = useModelWideBoneIds
-      ? new Map()
-      : await buildCrossSourceWeightEvidenceCooperative(matchingRigs, referenceRadius, checkpoint, timings);
     await checkpoint();
     const graphStartedAt = clockNow();
-    const result = await assembleModelRigReconciliation(rigs, evidenceByKey, referenceRadius, {
-      useModelWideBoneIds,
-      options: { ...options, crossEvidenceByPair },
-      checkpoint,
-    });
+    const groups = boneIdentityGroups(evidenceByKey, modelWide);
+    const model = buildModelJoints(groups, evidenceByKey, referenceRadius);
+    await checkpoint();
+    const edges = maximumSpanningForest(model.joints, sourceModelEdges(rigs, model.keyToJoint));
+    const forest = orientModelForest(model.joints, edges, rootVotes(rigs, model.keyToJoint));
+    await checkpoint();
+    const sharedGroups = groups.filter((members) => members.length > 1);
+    const result = {
+      sourceBindingMode: modelWide ? 'shared' : 'independent',
+      modelReferenceRadius: referenceRadius,
+      sourceBoneToModelJointMap: model.keyToJoint,
+      joints: model.joints,
+      edges,
+      components: forest.components,
+      componentByJointId: forest.componentByJointId,
+      reconciliation: {
+        identityMode: modelWide ? 'model-wide-bone-id' : 'source-local',
+        uniqueModelBoneIdCount: modelWide ? groups.length : null,
+        sourceCount: rigs.length,
+        sourceBoneCount: evidenceByKey.size,
+        modelJointCount: model.joints.length,
+        equivalenceClusterCount: sharedGroups.length,
+        equivalentSourceBoneCount: sharedGroups.reduce((sum, members) => sum + members.length, 0),
+        componentCount: forest.components.length,
+        modelReferenceRadius: referenceRadius,
+      },
+    };
     await checkpoint();
     if (timings) timings.graphBuildMs = clockNow() - graphStartedAt;
     return result;

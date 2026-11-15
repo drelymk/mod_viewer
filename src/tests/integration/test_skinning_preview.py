@@ -48,7 +48,10 @@ def test_modern_proxy_preview_uses_retained_program_and_retries_invalid_maps(tmp
     rendered = build_mesh_result(groups, str(tmp_path), geometry_only=True, geometry_cache=cache)
     for group in groups:
         for draw in group["draws"]:
-            draw.asset_binding = AssetComponentBinding(status="exact", asset_type="WWMI")
+            component = draw.skinning_merged_layout[0]
+            assert component[4] > 1
+            draw.asset_binding = AssetComponentBinding(status="exact", asset_type="WWMI",
+                geometry_hash=component[0], first_index=component[1], index_count=component[2])
     rendered = build_mesh_result(groups, str(tmp_path), geometry=rendered.geometry, geometry_cache=cache)
     for key, manifest in rendered.skinning_manifest.items():
         entry = rendered.meshes[key]

@@ -326,7 +326,7 @@ def test_morph_topology_fallback_preserves_modified_rest_positions(tmp_path, mon
     assert resolve()["morph_binding"] == result["morph_binding"]
 
 
-@pytest.mark.parametrize("case", ["split", "cyclic", "added", "ambiguous", "conflict", "wrong_uv", "invalid_index", "nonrigid",
+@pytest.mark.parametrize("case", ["split", "cyclic", "added", "ambiguous", "conflict", "wrong_uv", "invalid_index", "multi_bone",
                                   "duplicate_positions"])
 def test_morph_uv_triangles_recover_split_vertices_without_guessing_ambiguity(tmp_path, monkeypatch, case):
     import struct
@@ -355,7 +355,7 @@ def test_morph_uv_triangles_recover_split_vertices_without_guessing_ambiguity(tm
         ("POSITION", 0, "R32G32B32_FLOAT", 0), ("TEXCOORD", 0, "R32G32_FLOAT", 12)])
     raw["components"][0].update(vertex_sha256=hashlib.sha256(reference).hexdigest(),
                                 index_sha256=hashlib.sha256(index_data).hexdigest(), index_count=len(triangles))
-    if case == "nonrigid":
+    if case == "multi_bone":
         raw["components"][0]["bone_map"] = [0, 1]
     (asset / "Rig.json").write_text(json.dumps(raw))
     from dataclasses import replace
@@ -390,7 +390,7 @@ def test_morph_uv_triangles_recover_split_vertices_without_guessing_ambiguity(tm
 
     result = resolve()
     mapping = result["morph_binding"]["vertices"] if result["morph_binding"] else None
-    if case in ("wrong_uv", "invalid_index", "nonrigid"):
+    if case in ("wrong_uv", "invalid_index"):
         assert mapping is None
     elif case == "ambiguous":
         assert mapping == [-1, 1, 2, 3, -1]

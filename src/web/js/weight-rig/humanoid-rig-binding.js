@@ -306,6 +306,33 @@ function assignAutomaticExtraSeeds({ automaticControls, candidatesByControl, dir
     });
 }
 
+function assignIndependentSeeds({ candidatesByControl, directOwnerByJointId, controlState }) {
+  const nearestByJointId = new Map();
+  candidatesByControl.forEach((candidates) => {
+    candidates.forEach((candidate) => {
+      const previous = nearestByJointId.get(candidate.jointId);
+      if (!previous || candidate.distanceRatio < previous.distanceRatio)
+        nearestByJointId.set(candidate.jointId, candidate);
+    });
+  });
+  const candidates = [...nearestByJointId.values()].sort(
+    (left, right) => left.distanceRatio - right.distanceRatio || left.jointId - right.jointId,
+  );
+  candidates.forEach((candidate) => {
+    const state = controlState.get(candidate.controlKey);
+    if (state.anchorJointId === null) {
+      state.anchorJointId = candidate.jointId;
+      state.distanceRatio = candidate.distanceRatio;
+      state.source = 'automatic';
+    }
+    state.directSeedCount += 1;
+    directOwnerByJointId.set(
+      candidate.jointId,
+      directOwnerFor(candidate.controlKey, 'automatic', 'automatic_control_mapping', candidate, state.anchorJointId),
+    );
+  });
+}
+
 function inheritedOwners(modelRig, directOwnerByJointId) {
   const ownerByJointId = new Map(directOwnerByJointId);
   const visited = new Set();
@@ -420,8 +447,7 @@ export function buildHumanoidDriverFrames(controlRig, posedControls = null) {
   return result;
 }
 
-/** Build direct ModelJoint ownership and inherited deformation bindings. */
-export function buildHumanoidRigBinding({ controlRig, modelRig, controlMappings = null, options = {} } = {}) {
+function buildJointBindings({ controlRig, modelRig, controlMappings = null, options = {} } = {}) {
   const height = Math.max(Number(controlRig?.frame?.height) || 0, EPSILON);
   const drivers = buildHumanoidDriverFrames(controlRig);
   const pointDistanceRatio = Number.isFinite(Number(options.pointDistanceRatio))
@@ -480,11 +506,15 @@ export function buildHumanoidRigBinding({ controlRig, modelRig, controlMappings 
     ]),
   );
 
-  // Phase B: reserve one nearest point-to-point anchor per unmapped control.
-  assignAutomaticAnchors({ automaticControls, candidatesByControl, directOwnerByJointId, controlState });
-
-  // Phase C: reserve all remaining in-radius joints before inheritance.
-  assignAutomaticExtraSeeds({ automaticControls, candidatesByControl, directOwnerByJointId, controlState });
+  if (modelRig.sourceBindingMode === 'independent') {
+    // A partial palette need not represent every control. Let each joint choose
+    // its nearest eligible control instead of filling absent limb anchors.
+    assignIndependentSeeds({ candidatesByControl, directOwnerByJointId, controlState });
+  } else {
+    // Reserve one nearest anchor per control, then all remaining in-radius seeds.
+    assignAutomaticAnchors({ automaticControls, candidatesByControl, directOwnerByJointId, controlState });
+    assignAutomaticExtraSeeds({ automaticControls, candidatesByControl, directOwnerByJointId, controlState });
+  }
 
   // Phase D: propagate direct ownership through the actual ModelRig hierarchy.
   // Direct owners are boundaries; no path or geometry is invented here.
@@ -504,6 +534,50 @@ export function buildHumanoidRigBinding({ controlRig, modelRig, controlMappings 
     jointBindings,
     unboundJointIds,
     diagnostics: ownershipDiagnostics(controlState, directOwnerByJointId, ownerByJointId, unboundJointIds),
+  };
+}
+
+/** Bind independent palettes to the same controls without equating their bones. */
+export function buildHumanoidRigBinding(args = {}) {
+  const { modelRig, controlMappings } = args;
+  if (modelRig?.sourceBindingMode !== 'independent') return buildJointBindings(args);
+
+  const jointsBySource = new Map();
+  for (const joint of modelRig.joints || []) {
+    const sourceKey = joint.members[0].sourceKey;
+    const joints = jointsBySource.get(sourceKey) || [];
+    joints.push(joint);
+    jointsBySource.set(sourceKey, joints);
+  }
+  const jointBindings = new Map();
+  const unboundJointIds = [];
+  const bindingsBySource = Object.create(null);
+  for (const [sourceKey, joints] of jointsBySource) {
+    const jointIds = new Set(joints.map((joint) => joint.jointId));
+    const mappings = new Map([...(controlMappings || [])].filter(([, mapping]) => jointIds.has(mapping.jointId)));
+    mappings.rejectedControlKeys = controlMappings?.rejectedControlKeys;
+    const binding = buildJointBindings({
+      ...args,
+      modelRig: {
+        ...modelRig,
+        joints,
+        components: modelRig.components.filter((component) => jointIds.has(component.rootId)),
+      },
+      controlMappings: mappings,
+    });
+    binding.jointBindings.forEach((entry, jointId) => jointBindings.set(jointId, entry));
+    unboundJointIds.push(...binding.unboundJointIds);
+    bindingsBySource[sourceKey] = binding.diagnostics;
+  }
+  return {
+    version: 1,
+    jointBindings,
+    unboundJointIds: unboundJointIds.sort((left, right) => left - right),
+    diagnostics: {
+      sourceCount: jointsBySource.size,
+      unownedJointCount: unboundJointIds.length,
+      bindingsBySource,
+    },
   };
 }
 

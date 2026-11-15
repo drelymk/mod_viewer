@@ -12,7 +12,7 @@ import {
 } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { rebuildModelRestFrames, rebuildSourceRigRestFrames } from './weight-rig-frames.js';
-import { buildModelRigReconciliationCooperative, sourceBoneKey } from './weight-rig-reconcile.js';
+import { buildModelRigCooperative, sourceBoneKey } from './weight-rig-reconcile.js';
 import { createRigAnimation } from './rig-animation.js';
 import { buildAnimationMeshBinding, createAnimationMeshSession } from './rig-animation-meshes.js';
 import { setRigAnimationMeshes } from '../mesh/mesh-state.js';
@@ -891,7 +891,7 @@ async function buildModelSkinningRig(
   const previousRootSignatures = new Set(modelRigState.explicitRootSignatures);
   const reconciliation =
     buildGameRigReconciliation(sourceRigs) ||
-    (await buildModelRigReconciliationCooperative(
+    (await buildModelRigCooperative(
       sourceRigs,
       {},
       {
@@ -908,6 +908,7 @@ async function buildModelSkinningRig(
     key: 'model-rig',
     sourceKey: 'model-rig',
     sourceRigs: [...sourceRigs],
+    sourceBindingMode: reconciliation.sourceBindingMode || 'shared',
     modelReferenceRadius:
       reconciliation.modelReferenceRadius || reconciliation.reconciliation?.modelReferenceRadius || 0,
     reconciliation,

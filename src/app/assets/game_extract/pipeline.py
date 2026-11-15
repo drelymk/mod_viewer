@@ -11,7 +11,7 @@ from app.assets.animation_conversion import ReferencePoseMismatch, convert_clip,
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
 from .native import capture, make_rig, match_components, read_mesh, read_limited
-from .runtime import ExtractionCancelled, check_cancelled
+from .runtime import ExtractionCancelled, SearchTruncated, check_cancelled
 from .morphs import export_morphs, sample_curves
 
 
@@ -360,6 +360,21 @@ def adopt_companions(client, captured, primary, primary_package, proven, charact
     return {index: rows[0] for index, rows in found.items() if len(rows) == 1}
 
 
+def animation_packages(client, folder, cancel):
+    check_cancelled(cancel)
+    try:
+        return client.search("", "AnimSequence", folder)
+    except SearchTruncated:
+        # Retain direct clips as well as descendants; never accept a partial search.
+        try:
+            packages = client.search("", "AnimSequence", folder, recursive=False)
+        except SearchTruncated as error:
+            raise SearchTruncated("Animation discovery is incomplete: a folder exceeds the native search limit.") from error
+        for name in client.folders(folder):
+            packages += animation_packages(client, folder + "/" + name, cancel)
+        return packages
+
+
 def build(client, root, record, output, query, progress, cancel, index=None):
     validated_morphs = set()
     asset = Path(root) / record["path"]
@@ -410,7 +425,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     if not skeleton:
         raise ValueError("The matching mesh does not declare a usable source skeleton.")
     progress("animations", 0, 0)
-    packages = client.search("", "AnimSequence", character_root)
+    packages = animation_packages(client, character_root, cancel)
     if not packages:
         raise ValueError("No character animation sequences were found.")
     metadata_dir = client.work / "animation-metadata"

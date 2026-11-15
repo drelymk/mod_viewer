@@ -1994,7 +1994,7 @@ def test_invalid_humanoid_mapping_provenance_stays_unbound(module_page, builder,
 
 
 @pytest.fixture
-def reconciliation_page(module_page):
+def model_rig_page(module_page):
     module_page.evaluate("""async () => {
       window.__reconciliation = await import('./js/weight-rig/weight-rig-reconcile.js');
       window.__sourceRig = (sourceKey, rows, modelWide = false, direction = [1, 0, 0]) => {
@@ -2024,19 +2024,19 @@ def reconciliation_page(module_page):
           centerByBoneId: new Map(nodes.map(node => [node.boneId, node.weightedCenter])),
           restDirectionByBoneId: new Map(nodes.map(node => [node.boneId, direction])),
           restFrameEvidenceByBoneId: new Map(nodes.map(node => [node.boneId, {directionSource: 'geometry'}])),
-          restFrameByBoneId: new Map(), jointPivotByBoneId: new Map(), vertexEvidence: [],
+          restFrameByBoneId: new Map(), jointPivotByBoneId: new Map(),
         };
       };
       window.__buildRig = (rigs, options = {}, work = {}) =>
-        window.__reconciliation.buildModelRigReconciliationCooperative(rigs, options,
+        window.__reconciliation.buildModelRigCooperative(rigs, options,
           {budget: {checkpoint: async () => {}}, ...work});
     }""")
     return module_page
 
 
 @pytest.mark.parametrize(('marked', 'model_wide'), [(False, False), (True, False), (True, True)])
-def test_reconciliation_preserves_exact_sources_and_stable_rebuild(reconciliation_page, marked, model_wide):
-    result = reconciliation_page.evaluate("""async ({marked, modelWide}) => {
+def test_model_rig_preserves_exact_sources_and_stable_rebuild(model_rig_page, marked, model_wide):
+    result = model_rig_page.evaluate("""async ({marked, modelWide}) => {
       const {sourceBoneKey} = window.__reconciliation;
       const keys = [1, 2].map(id => marked ? `stream#bone=part-0${id}.buf|offset=0`
         : `folder-0${id}/stream.buf|offset=0`);
@@ -2049,39 +2049,117 @@ def test_reconciliation_preserves_exact_sources_and_stable_rebuild(reconciliatio
         window.__sourceRig(keys[0], [[1, [0, 0, 0], null]], true),
         window.__sourceRig(keys[1], [[1, [10, 0, 0], null]], false),
       ], {modelReferenceRadius: 1});
-      return {jointCount: first.joints.length, members: first.joints[0].members.map(member => member.sourceKey),
+      return {jointCount: first.joints.length, members: first.joints.flatMap(joint => joint.members.map(member => member.sourceKey)),
         mapped: keys.map(key => first.sourceBoneToModelJointMap.get(sourceBoneKey(key, 1))),
         stable: JSON.stringify(signature(first)) === JSON.stringify(signature(permuted)),
         rebuilt: JSON.stringify(signature(first)) === JSON.stringify(signature(rebuilt)),
         separateCount: separate.joints.length};
     }""", {'marked': marked, 'modelWide': model_wide})
-    assert result['jointCount'] == 1
+    assert result['jointCount'] == (1 if model_wide else 2)
     assert len(set(result['members'])) == 2
-    assert result['mapped'] == [0, 0]
+    assert result['mapped'] == ([0, 0] if model_wide else [0, 1])
     assert result['stable'] and result['rebuilt']
     assert result['separateCount'] == 2
 
 
-def test_reconciliation_requires_matching_shared_palette_domains(reconciliation_page):
-    result = reconciliation_page.evaluate("""async () => {
+@pytest.mark.parametrize(('model_wide', 'same_domain', 'joint_count'), [
+    (True, True, 1), (True, False, 2), (False, True, 2),
+])
+def test_model_rig_requires_validated_ids_in_matching_domains(model_rig_page, model_wide, same_domain, joint_count):
+    result = model_rig_page.evaluate("""async ({modelWide,sameDomain}) => {
       const a=window.__sourceRig('stream-01',[[1,[0,0,0],null]],true);
-      const b=window.__sourceRig('stream-02',[[1,[10,0,0],null]],true);
-      a.boneIdDomain=b.boneIdDomain='palette01';
-      const shared=await window.__buildRig([a,b]);
-      b.boneIdDomain='palette02';
-      const different=await window.__buildRig([a,b],{modelReferenceRadius:1});
-      return {shared:shared.joints.length,different:different.joints.length};
+      const b=window.__sourceRig('stream-02',[[1,[0,0,0],null]],modelWide);
+      a.boneIdDomain='palette01'; b.boneIdDomain=sameDomain ? 'palette01' : 'palette02';
+      for (const rig of [a,b]) Object.defineProperty(rig,'vertexEvidence',{
+        get() {throw new Error('Model rig assembly must not read vertex evidence');}});
+      const built=await window.__buildRig([a,b]);
+      return {count:built.joints.length,mode:built.sourceBindingMode};
+    }""", {'modelWide':model_wide,'sameDomain':same_domain})
+    assert result['count'] == joint_count
+    assert result['mode'] == ('shared' if joint_count == 1 else 'independent')
+
+
+def test_independent_sources_bind_shared_controls_pose_and_reset_without_vertex_matching(model_rig_page):
+    result = model_rig_page.evaluate("""async () => {
+      const humanoid = await import('./js/weight-rig/humanoid-control-rig.js');
+      const bindings = await import('./js/weight-rig/humanoid-rig-binding.js');
+      const ik = await import('./js/weight-rig/humanoid-rig-ik.js');
+      const deformation = await import('./js/weight-rig/weight-deformation.js');
+      const {sourceBoneKey} = window.__reconciliation;
+      const controlRig = humanoid.buildHumanoidControlRig({meshes:[{userData:{
+        humanoidRestPositions:new Float32Array([-1,0,0, 1,0,0, 0,2,0, -1,1.5,0, 1,1.5,0])}}]});
+      const keys = ['leftShoulder','leftElbow','leftHand','rightHand'];
+      const points = keys.map(key => controlRig.controls[key].position);
+      const rigs = ['source-01','source-02'].map(key => window.__sourceRig(key,
+        points.map((point,i) => [i+1,point,i === 1 || i === 2 ? i : null])));
+      rigs.push(window.__sourceRig('source-03',[[3,points[2],null]]));
+      for (const rig of rigs) Object.defineProperty(rig,'vertexEvidence',{
+        get() {throw new Error('Independent binding must not read vertex evidence');}});
+      const options = {};
+      const timings = {};
+      const model = await window.__buildRig(rigs,options,{timings});
+      const original = JSON.stringify(model);
+      const reversed = await window.__buildRig([...rigs].reverse(),options);
+      const rebuilt = await window.__buildRig(rigs,options);
+      const mappings = new Map([['leftElbow',{controlKey:'leftElbow',jointId:
+        model.sourceBoneToModelJointMap.get(sourceBoneKey('source-01',2))}]]);
+      const binding = bindings.buildHumanoidRigBinding({controlRig,modelRig:model,controlMappings:mappings});
+      const target = [...points[2]]; target[1] += .1; target[2] += .05;
+      const solved = ik.solveHumanoidControlIk({controlRig,role:'left_arm',target});
+      const pose = ik.mergeHumanoidLimbPose({},solved.positions,solved.keys);
+      const rows = rigs.map(source => {
+        const ids = source.boneIds;
+        const baseline = new Float32Array(ids.flatMap(id => source.centerByBoneId.get(id)));
+        const indices = new Uint32Array(ids), weights = new Float32Array(ids.length).fill(1);
+        const before = JSON.stringify([baseline,indices,weights]);
+        const deform = posedControls => {
+          const transforms = bindings.buildHumanoidDriverBaseTransforms({binding,controlRig,modelRig:model,
+            posedControls}).result;
+          const aliases = new Map(ids.map(id => [id,transforms.get(
+            model.sourceBoneToModelJointMap.get(sourceBoneKey(source.sourceKey,id)))]));
+          return deformation.applyWeightedTransformDeformation(baseline,indices,weights,1,aliases);
+        };
+        const rest = deform(null), posed = deform(pose), reset = deform(null);
+        const close = (a,b) => a.every((value,i) => Math.abs(value-b[i]) < 1e-5);
+        return {rest:close([...rest],[...baseline]),reset:close([...reset],[...baseline]),
+          handFollows:close([...posed.slice(ids.indexOf(3)*3,ids.indexOf(3)*3+3)],solved.end),
+          otherHand:!ids.includes(4) || close([...posed.slice(ids.indexOf(4)*3)],points[3]),
+          authoredUnchanged:before===JSON.stringify([baseline,indices,weights])};
+      });
+      const partial = await window.__buildRig([window.__sourceRig('source-04',
+        [[1,[0,0,0],null],[2,[.001,0,0],1]])],options);
+      const partialControls = {...controlRig,controls:{...controlRig.controls,
+        head:{position:[0,0,0]},neck:{position:[0,-.1,0]},leftShoulder:{position:[.05,0,0]}}};
+      const partialBinding = bindings.buildHumanoidRigBinding({controlRig:partialControls,modelRig:partial});
+      return {mode:model.sourceBindingMode,identity:model.reconciliation.identityMode,
+        jointCount:model.joints.length,mapSize:model.sourceBoneToModelJointMap.size,
+        separate:model.joints.every(joint => joint.members.length===1),
+        localEdges:model.edges.every(edge => model.joints[edge.jointA].members[0].sourceKey===
+          model.joints[edge.jointB].members[0].sourceKey),
+        graphMeasured:Number.isFinite(timings.graphBuildMs),
+        partialControls:[...partialBinding.jointBindings.values()].map(value => value.controlKey),
+        stable:original===JSON.stringify(reversed) && original===JSON.stringify(rebuilt),
+        unbound:binding.unboundJointIds,rows,
+        mapped:binding.diagnostics.bindingsBySource['source-01'].bindingsByControl.leftElbow.source,
+        automatic:binding.diagnostics.bindingsBySource['source-02'].bindingsByControl.leftElbow.source};
     }""")
-    assert result == {'shared': 1, 'different': 2}
+    assert result['mode'] == 'independent' and result['identity'] == 'source-local'
+    assert result['jointCount'] == result['mapSize'] == 9
+    assert result['separate'] and result['localEdges'] and result['stable']
+    assert result['graphMeasured']
+    assert result['unbound'] == []
+    assert result['partialControls'] == ['head', 'head']
+    assert result['mapped'] == 'mapped' and result['automatic'] == 'automatic'
+    assert all(all(row.values()) for row in result['rows'])
 
 
-def test_reconciliation_skips_unneeded_vertex_work_and_completes_strict_chains(reconciliation_page):
-    result = reconciliation_page.evaluate("""async () => {
+def test_model_rig_skips_vertex_work_and_keeps_independent_chains(model_rig_page):
+    result = model_rig_page.evaluate("""async () => {
       const source = window.__sourceRig('source-01', [[1, [0, 0, 0], null]]);
-      source.vertexEvidence = [{get positions() {throw new Error('unused vertex evidence was read');}}];
+      Object.defineProperty(source,'vertexEvidence',{
+        get() {throw new Error('Unused vertex evidence was read');}});
       const single = await window.__buildRig([source]);
       const empty = window.__sourceRig('source-02', []);
-      empty.vertexEvidence = source.vertexEvidence;
       const withEmpty = await window.__buildRig([source, empty]);
       const chain = (key, first) => window.__sourceRig(key, Array.from({length: 100}, (_,i) =>
         [first+i, [i, 0, 0], i ? first+i-1 : null]));
@@ -2089,69 +2167,51 @@ def test_reconciliation_skips_unneeded_vertex_work_and_completes_strict_chains(r
       const complete = await window.__buildRig([chain('source-01', 1), chain('source-02', 201)], {},
         {budget: {checkpoint: async () => {completeCheckpoints += 1;}}});
       return {singleCount: single.joints.length, withEmptyCount: withEmpty.joints.length,
-        candidateCount: single.reconciliation.candidateCount,
         completeCount: complete.joints.length, edges: complete.edges.length,
-        completedWithoutPathWork: completeCheckpoints < 100,
-        strictCount: complete.reconciliation.acceptedEquivalences.filter(item => item.pass === 'strict').length,
-        uniqueSources: complete.joints.every(joint => new Set(joint.members.map(item => item.sourceKey)).size
-          === joint.members.length)};
+        completedWithoutVertexWork: completeCheckpoints < 100,
+        separateSources: complete.joints.every(joint => joint.members.length === 1)};
     }""")
-    assert result == {'singleCount': 1, 'withEmptyCount': 1, 'candidateCount': 0, 'completeCount': 100,
-                      'edges': 99, 'completedWithoutPathWork': True, 'strictCount': 100, 'uniqueSources': True}
+    assert result == {'singleCount': 1, 'withEmptyCount': 1, 'completeCount': 200,
+                      'edges': 198, 'completedWithoutVertexWork': True, 'separateSources': True}
 
 
 @pytest.mark.parametrize('model_wide', [False, True])
-def test_reconciliation_cancels_at_collection_and_graph_checkpoints(reconciliation_page, model_wide):
-    result = reconciliation_page.evaluate("""async modelWide => {
+def test_model_rig_cancels_at_collection_and_graph_checkpoints(model_rig_page, model_wide):
+    result = model_rig_page.evaluate("""async modelWide => {
+      const options = {};
       const rigs = ['source-01', 'source-02'].map((key, source) => window.__sourceRig(key,
         Array.from({length: 12}, (_, i) => {
           const first = modelWide ? 1 : source * 100 + 1;
           return [first + i, [i, 0, 0], i ? first + i - 1 : null];
         }), modelWide));
-      for (const rig of rigs) {
-        rig.vertexEvidence = [{positions: new Float32Array(258 * 3),
-          indices: new Uint32Array(258).fill(rig.boneIds[0]),
-          weights: new Float32Array(258).fill(1), influenceCount: 1}];
-      }
-      const authored = rigs.map(rig => JSON.stringify(rig.vertexEvidence));
+      for (const rig of rigs) Object.defineProperty(rig,'vertexEvidence',{
+        get() {throw new Error('Cancelled model rig assembly must not read vertex evidence');}});
+      const authored = rigs.map(rig => JSON.stringify(rig.influenceGraph));
       let totalCheckpoints = 0;
-      const expected = await window.__buildRig(rigs, {},
+      const expected = await window.__buildRig(rigs, options,
         {budget: {checkpoint: async () => {totalCheckpoints += 1;}}});
       const cancelled = [];
       for (const cancelAt of [1, 2, ...[0.25, 0.5, 0.75].map(part => Math.ceil(totalCheckpoints * part)), totalCheckpoints]) {
         let current = true, checkpoints = 0;
-        const result = await window.__buildRig(rigs, {}, {isCurrent: () => current,
+        const result = await window.__buildRig(rigs, options, {isCurrent: () => current,
           budget: {checkpoint: async () => {
             await new Promise(resolve => setTimeout(resolve, 0));
             if (++checkpoints === cancelAt) current = false;
           }}});
         cancelled.push(result === null);
       }
-      const recovered = await window.__buildRig(rigs);
+      const recovered = await window.__buildRig(rigs,options);
       return {cancelled, graphCheckpoints: totalCheckpoints > 4,
-        authoredUnchanged: rigs.every((rig, i) => JSON.stringify(rig.vertexEvidence) === authored[i]),
+        authoredUnchanged: rigs.every((rig, i) => JSON.stringify(rig.influenceGraph) === authored[i]),
         recovered: JSON.stringify(recovered) === JSON.stringify(expected)};
     }""", model_wide)
     assert result == {'cancelled': [True] * 6, 'graphCheckpoints': True,
                       'authoredUnchanged': True, 'recovered': True}
 
 
-def test_reconciliation_rejects_equal_endpoint_competition(reconciliation_page):
-    result = reconciliation_page.evaluate("""async () => {
-      const rigs = [window.__sourceRig('source-01', [[1, [0, 0, 0], null]]),
-        window.__sourceRig('source-02', [[2, [0, 0, 0], null], [3, [0, 0, 0], null]])];
-      const built = await window.__buildRig(rigs);
-      const reversed = await window.__buildRig([...rigs].reverse());
-      return {joints: built.joints.length, accepted: built.reconciliation.acceptedEquivalences.length,
-        ambiguous: built.reconciliation.rejectedCandidates.some(item => item.rejectionReason === 'ambiguous'),
-        stable: JSON.stringify(built) === JSON.stringify(reversed)};
-    }""")
-    assert result == {'joints': 3, 'accepted': 0, 'ambiguous': True, 'stable': True}
-
-
 @pytest.mark.parametrize('parent', [3, 99])
-def test_reconciliation_recovers_source_cycles_and_missing_parents(reconciliation_page, parent):
-    result = reconciliation_page.evaluate("""async parent => {
+def test_model_rig_recovers_source_cycles_and_missing_parents(model_rig_page, parent):
+    result = model_rig_page.evaluate("""async parent => {
       const rig = window.__sourceRig('source-01',
         [[1, [0, 0, 0], null], [2, [1, 0, 0], 1], [3, [2, 0, 0], 2]]);
       rig.inferredForest.components[0].parentById[1] = parent;
@@ -2164,22 +2224,8 @@ def test_reconciliation_recovers_source_cycles_and_missing_parents(reconciliatio
     assert result == {'joints': 3, 'edges': 2, 'root': 0, 'roots': 1, 'reachable': True}
 
 
-def test_reconciliation_missing_neighbours_are_not_equivalence_evidence(reconciliation_page):
-    result = reconciliation_page.evaluate("""async () => {
-      const rigs = ['source-01', 'source-02'].map((key, index) => {
-        const rig = window.__sourceRig(key, [[index + 1, [index * 0.05, 0, 0], null]]);
-        rig.inferredForest.components[0].parentById[index + 1] = 999;
-        return rig;
-      });
-      const built = await window.__buildRig(rigs, {modelReferenceRadius: 1});
-      return {joints: built.joints.length, accepted: built.reconciliation.acceptedEquivalences.length,
-        separateMembers: built.joints.every(joint => joint.members.length === 1)};
-    }""")
-    assert result == {'joints': 2, 'accepted': 0, 'separateMembers': True}
-
-
-def test_reconciliation_preserves_first_source_edge_provenance_and_sync_rerooting(reconciliation_page):
-    result = reconciliation_page.evaluate("""async () => {
+def test_model_rig_preserves_first_source_edge_provenance_and_sync_rerooting(model_rig_page):
+    result = model_rig_page.evaluate("""async () => {
       const rig = window.__sourceRig('source-01',
         [[1, [0,0,0], null], [2, [1,0,0], 1], [3, [10,0,0], null], [4, [11,0,0], 3]]);
       rig.inferredForest.components[0].edges = [
@@ -2212,41 +2258,30 @@ def test_reconciliation_preserves_first_source_edge_provenance_and_sync_rerootin
         'synchronous': True, 'roots': [1, 3], 'parents': [1, None, 3, None], 'authoredUnchanged': True}
 
 
-@pytest.mark.parametrize('competing_host', [False, True])
-@pytest.mark.parametrize('chained', [False, True])
-def test_reconciliation_preserves_boundary_orientation_and_rejects_ambiguous_hosts(reconciliation_page, competing_host, chained):
-    result = reconciliation_page.evaluate("""async ({competingHost, chained}) => {
+@pytest.mark.parametrize('host_count', [1, 2])
+@pytest.mark.parametrize('extra_accessory', [False, True])
+def test_model_rig_preserves_nearby_source_hierarchies_without_attachments(model_rig_page, host_count, extra_accessory):
+    result = model_rig_page.evaluate("""async ({hostCount,extraAccessory}) => {
       const {sourceBoneKey} = window.__reconciliation;
-      const body = key => window.__sourceRig(key,
-        [[10, [-2, 0, 0], null, 32], [11, [0, 0, 0], 10, 32], [12, [2, 0, 0], 11, 32]], false,
-        key === 'source-02' ? [0, 1, 0] : [1, 0, 0]);
-      const accessory = window.__sourceRig('source-03',
-        [[20, [0, 0, 0.5], null, 4], [21, [0, 0, 0.08], 20, 4]], false, [0, 0, 1]);
-      const rigs = [body('source-01'), accessory];
-      if (competingHost) rigs.push(body('source-02'));
-      if (chained) rigs.push(window.__sourceRig('source-04',
-        [[30, [0, 0, 1], null], [31, [0, 0, 0.58], 30]]));
-      const built = await window.__buildRig(rigs, {modelReferenceRadius: 2});
-      const reversed = await window.__buildRig([...rigs].reverse(), {modelReferenceRadius: 2});
-      const id = (key, bone) => built.sourceBoneToModelJointMap.get(sourceBoneKey(key, bone));
-      const parent = (key, bone) => built.joints[id(key, bone)].parentId;
-      return {attachments: built.reconciliation.attachmentCount,
-        hostPreserved: parent('source-01', 11) === id('source-01', 10)
-          && parent('source-01', 12) === id('source-01', 11),
-        boundaryPreserved: competingHost ? parent('source-03', 21) === id('source-03', 20)
-          : parent('source-03', 21) === id('source-01', 11) && parent('source-03', 20) === id('source-03', 21),
-        chainPreserved: !chained || parent('source-04', 31) === id('source-03', 20)
-          && parent('source-04', 30) === id('source-04', 31),
-        ambiguity: built.reconciliation.attachmentDiagnostics.some(item => item.rejectionReason === 'attachment_ambiguous'),
-        reachable: built.components.every(component => component.nodeIds.every(id => component.depthById[id] !== null)),
-        stable: JSON.stringify(built.joints) === JSON.stringify(reversed.joints),
-        edgeCount: built.edges.length};
-    }""", {'competingHost': competing_host, 'chained': chained})
-    assert result['attachments'] == (0 if competing_host else 1) + int(chained)
-    assert result['hostPreserved'] and result['boundaryPreserved'] and result['chainPreserved']
-    assert result['reachable'] and result['stable']
-    assert result['ambiguity'] is competing_host
-    assert result['edgeCount'] == (5 if competing_host else 4) + 2 * int(chained)
+      const rigs = Array.from({length:hostCount},(_,i) => window.__sourceRig(`source-0${i+1}`,
+        [[10,[-2,0,0],null],[11,[0,0,0],10],[12,[2,0,0],11]]));
+      rigs.push(window.__sourceRig('source-03',[[20,[0,0,.5],null],[21,[0,0,.08],20]]));
+      if (extraAccessory) rigs.push(window.__sourceRig('source-04',[[30,[0,0,1],null],[31,[0,0,.58],30]]));
+      const built = await window.__buildRig(rigs);
+      const reversed = await window.__buildRig([...rigs].reverse());
+      const id = (key,bone) => built.sourceBoneToModelJointMap.get(sourceBoneKey(key,bone));
+      return {components:built.components.length,joints:built.joints.length,edges:built.edges.length,
+        preserved:rigs.every(rig => rig.inferredForest.components.every(component =>
+          Object.entries(component.parentById).every(([bone,parent]) => built.joints[id(rig.sourceKey,bone)].parentId===
+            (parent===null ? null : id(rig.sourceKey,parent))))),
+        sourceEdges:built.edges.every(edge => built.joints[edge.jointA].members[0].sourceKey===
+          built.joints[edge.jointB].members[0].sourceKey),
+        stable:JSON.stringify(built)===JSON.stringify(reversed)};
+    }""", {'hostCount':host_count,'extraAccessory':extra_accessory})
+    assert result == {'components':host_count + 1 + extra_accessory,
+                      'joints':host_count * 3 + 2 + extra_accessory * 2,
+                      'edges':host_count * 2 + 1 + extra_accessory,
+                      'preserved':True,'sourceEdges':True,'stable':True}
 
 
 def test_weight_session_preserves_model_wide_descriptor_through_saved_selection_and_save(module_page):
@@ -2449,7 +2484,7 @@ def test_source_rig_surface_failure_recovery_and_cache_lifecycle(module_page):
       return {missing, partial: partial.map(rig => rig.sourceKey), sameObject: repaired === cached,
         callsAfterBuild, callsAfterCacheHit: preparationCount, errors: session.getErrors(),
         memberCount: repaired.influenceGraph.memberCount, uniqueMemberCount: repaired.influenceGraph.uniqueMemberCount,
-        meshCount: repaired.meshes.size, vertexEvidenceCount: repaired.vertexEvidence.length,
+        meshCount: repaired.meshes.size,
         mode: repaired.influenceGraph.evidenceMode,
         weightsUsable: [...runtime.knownMeshes].every(mesh => runtime.stateFor(mesh).loaded),
         noVertexPreparation: [...runtime.knownMeshes].every(mesh => !('influenceNodes' in runtime.stateFor(mesh))),
@@ -2460,7 +2495,7 @@ def test_source_rig_surface_failure_recovery_and_cache_lifecycle(module_page):
     assert result['sameObject'] and result['weightsUsable'] and result['noVertexPreparation']
     assert result['callsAfterCacheHit'] == result['callsAfterBuild']
     assert result['errors'] == {}
-    assert result['memberCount'] == result['meshCount'] == result['vertexEvidenceCount'] == 3
+    assert result['memberCount'] == result['meshCount'] == 3
     assert result['uniqueMemberCount'] == 2
     assert result['mode'] == 'surface'
     assert result['authoredWeights'] == [1, 1, 1]

@@ -258,7 +258,7 @@ def _reference_morph_topology(reference, palette):
 
 
 def _mod_morph_uv_triangles(reference, vertex_count, topology):
-    """Recover split/reordered rigid vertices from unambiguous UV triangles."""
+    """Recover split/reordered vertices from unambiguous UV triangles."""
     indices, uvs = topology
     if (vertex_count > 100000 or reference["count"] > 100000
             or not indices or len(indices) % 12 or len(indices) > 1200000
@@ -312,7 +312,7 @@ def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, sig
         if reference is None:
             return None
         exact_topology = len(signature) == 2 and len(positions) // 12 == reference["count"]
-        uv_triangles = len(topology) == 2 and len(palette["bone_map"]) == 1
+        uv_triangles = len(topology) == 2
         reference_topology = None
         if exact_topology or uv_triangles:
             try:

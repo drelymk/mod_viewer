@@ -903,8 +903,8 @@ of documentation, comments and tests; use portable fixtures instead.
   and use a contained, checksummed sparse-target sidecar. Validate ranges,
   finite values and captured VB/IB fingerprints before publication. Original
   Assets use their compact vertex mapping. Compatible mods assume original
-  faces: match rest positions within 0.0001, then complete topology/UV identity,
-  or unique UV triangles for rigid split/reshaped components. Preserve the mod's
+  faces: use complete topology/UV identity, unique UV triangles or unambiguous
+  rest-position matches within 0.0001, independent of bone count. Preserve the mod's
   rest shape, source winding/V conversions and verified bone palette. Reject
   ambiguous/conflicting UV assignments; new UVs remain unmapped. Share one
   bounded reference decode per component during Weight access, and retain morph
@@ -1013,25 +1013,29 @@ of documentation, comments and tests; use portable fixtures instead.
   Building is explicit (Settings confirm dialog or index button) or automatic
   when extracting without a ready index; the extraction Browse pick is saved to
   Settings, and clearing the WWMI folder deletes its index.
-- Cross-source reconciliation is a viewer-owned graph over source rigs. Preserve
+- Model Rig assembly is a viewer-owned graph over source rigs. Preserve
   `SourceBoneRef {sourceKey,boneId}` and `${sourceKey}#bone=${boneId}`; only
   models whose sources all declare validated model-wide IDs in one domain (R16
   Blend, active VertexVG remapping or a verified shared WWMI layout) may group
   equal numeric IDs directly. Different verified layouts cannot share numeric
   identity. Keep R16 IDs unchanged
-  without adding component offsets again. Otherwise
-  require normalized mutual-best geometry/topology evidence through strict seeds,
-  neighbour propagation and graph alignment, one member per
-  source, ambiguity rejection, a maximum-spanning forest and cycle-free boundary
-  attachments; retain rejected evidence for diagnostics and never rewrite authored
-  indices/weights. Cross-palette posing may stretch where inferred and authored
+  without adding component offsets again. Ordinary Rig activation otherwise keeps
+  joints and hierarchy source-local, binding each source independently to the same
+  humanoid controls without vertex correspondence or cross-source attachments.
+  Each source joint chooses its nearest eligible control before local inheritance;
+  partial sources must not fill unrelated controls merely to reserve anchors.
+  Explicit control mappings claim their exact source joint; other sources bind
+  automatically to the shared control positions. Do not infer bone equivalence or
+  cross-source attachments from vertex proximity. Build deterministic spanning
+  forests from source edges and never rewrite authored indices/weights.
+  Cross-palette posing may stretch where inferred and authored
   topology differ. `ModelJoint` signatures sort canonical source-bone keys and
-  deterministic `joint_id` values bind Main Rig mappings. Reconcile lazily from
+  deterministic `joint_id` values bind Main Rig mappings. Assemble lazily from
   the current source rigs and retain structure only in memory; model-rig caches
   are neither read nor written. Builder provenance still versions saved control
   mappings in `.mod_viewer.json`. Missing source-bone references never establish
-  equivalence. Keep one canonical source-to-joint Map and diagnostic counts and
-  decisions; avoid eager duplicate evidence snapshots. Cooperative vertex matching
+  equivalence. Keep one canonical source-to-joint Map and diagnostic counts;
+  do not retain per-mesh vertex correspondence evidence. Source collection
   and graph assembly share one cancellation checkpoint; only the public build
   boundary converts stale work to `null`. Root editing keeps synchronous orientation.
 - Rig presets use `rig.version = 1` in `.mod_viewer.json`: stable IDs, bounded
