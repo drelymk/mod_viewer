@@ -17,6 +17,7 @@ from app.assets import index
 from app.assets.animations import AnimationSessions, read_clip
 from app.assets.animation_morphs import read_morphs
 from app.assets.game_extract import zzz_animation, zzz_index, zzz_morphs, zzz_native, zzz_pipeline, zzz_runtime
+from app.assets.game_extract.pipeline import rest_worlds
 from app.assets.loader.hash_asset import load_hash_asset
 from app.assets.rig import resolve_game_rig, validate_rig
 from app.assets.resolver import AssetComponentBinding
@@ -53,7 +54,7 @@ def fixture(tmp_path):
     mesh = dict(name="SeparateMesh_Avatar_Type01_Character01_Model_Body", vertices=np.array(vertices).ravel().tolist(),
         uv=np.array(uv).ravel().tolist(), indices=[0, 1, 2], weights=[[.75, .25, 0, 0]] * 3,
         bone_indices=[[0, 1, 0, 0]] * 3, bone_hashes=[0, 100],
-        bind_poses=[np.eye(4).ravel().tolist(), np.diag([1, .5, 1, 1]).ravel().tolist()],
+        bind_poses=[matrix.ravel(order="C").tolist() for matrix in (np.eye(4), np.diag([1, .5, 1, 1]))],
         sections=[dict(first=0, count=3, vertex_first=0, vertex_count=3)])
     rows = [dict(name=value["name"], type=kind, block="ZenlessZoneZero_Data/StreamingAssets/Blocks/1.blk",
                  cab="CAB-01", offset=0, file_ordinal=0, path_id=number)
@@ -163,6 +164,32 @@ def test_zzz_package_reimport_and_exact_capture_admission_lifecycle(tmp_path, sh
     assert resolve(captured_palette=True) is None
 
 
+def test_zzz_serialized_inverse_binds_preserve_affine_placement(tmp_path):
+    root, _asset, record, avatar, mesh, rows, client = fixture(tmp_path)
+    half = float(np.sqrt(.5))
+    avatar["bones"][0].update(translation=[3, -2, 1], rotation=[0, 0, half, half], scale=[1, 2, 1])
+    avatar["bones"][1].update(translation=[1, 2, -1], rotation=[half, 0, 0, half], scale=[2, 1, 3])
+    root_world = np.array([[0, -2, 0, 3], [1, 0, 0, -2], [0, 0, 1, 1], [0, 0, 0, 1]])
+    child_local = np.array([[2, 0, 0, 1], [0, 0, -3, 2], [0, 1, 0, -1], [0, 0, 0, 1]])
+    placement = np.array([[0, 0, 1, 4], [0, 1, 0, -3], [-1, 0, 0, 2], [0, 0, 0, 1]])
+    binds = [np.linalg.inv(world) @ placement for world in (root_world, root_world @ child_local)]
+    mesh["bind_poses"] = [matrix.ravel(order="C").tolist() for matrix in binds]
+    mapping, actual = zzz_native.mesh_placement(mesh, avatar)
+    assert mapping == [0, 1]
+    np.testing.assert_allclose(actual, placement, atol=1e-12)
+    captured, _ = zzz_native.capture(root, record)
+    chosen = zzz_pipeline.verify_candidates(client, captured, rows, "Character01", threading.Event())
+    worlds = rest_worlds(chosen["rig"]["bones"], affine=True)
+    np.testing.assert_allclose(worlds[0], np.linalg.inv(placement), atol=1e-12)
+    np.testing.assert_allclose(worlds[2], np.linalg.inv(placement) @ root_world @ child_local, atol=1e-12)
+    changed = deepcopy(mesh)
+    changed["bind_poses"] = [matrix.ravel(order="F").tolist() for matrix in binds]
+    assert zzz_native.mesh_placement(changed, avatar) is None
+    changed = deepcopy(mesh)
+    changed["bind_poses"][1][3] += .01
+    assert zzz_native.mesh_placement(changed, avatar) is None
+
+
 def test_zzz_native_proof_rejects_wrong_rest_weights_topology_and_ambiguous_palettes(tmp_path):
     root, _asset, record, avatar, mesh, _rows, _client = fixture(tmp_path)
     part = zzz_native.capture(root, record)[0][0]
@@ -261,7 +288,7 @@ def test_zzz_shape_fallback_keeps_body_avatar_when_a_prop_has_an_extra_legacy_me
     prop_mesh = deepcopy(mesh)
     prop_mesh["name"] = "SeparateMesh_Avatar_Type01_Character01_Prop_Model_Prop"
     prop_mesh["bone_hashes"] = [0, 200]
-    prop_mesh["bind_poses"] = [np.eye(4).ravel().tolist()] * 2
+    prop_mesh["bind_poses"] = [np.eye(4).ravel(order="C").tolist()] * 2
     prop_mesh["vertices"] = (np.asarray(mesh["vertices"]).reshape(-1, 3) + [0, 0, 2]).ravel().tolist()
     prop_rows = [{**rows[0], "name": prop_avatar["name"], "path_id": 50},
                  {**rows[1], "name": prop_mesh["name"], "path_id": 51}]

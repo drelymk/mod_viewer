@@ -1058,7 +1058,10 @@ of documentation, comments and tests; use portable fixtures instead.
   palette; Avatar path hashes and all used inverse binds must establish one common
   mesh-to-Avatar basis. Preserve that basis with an extra root instead of rewriting
   captured geometry. Resolve symmetric component coordinate hypotheses across
-  the model using one common basis; equally supported incompatible placements
+  the model using one common basis. Native bind-pose arrays retain ZZZ's serialized
+  row-major float order through ReadMatrix and indexer export; do not transpose
+  them based on the reader's internal column-major field names.
+  Equally supported incompatible placements
   remain ambiguous. A larger animation Avatar may replace a model Avatar only
   with identical induced ancestry, reference worlds and remapped palettes.
   Accept legacy and short Unity mesh names only as candidate-discovery hints.

@@ -88,6 +88,8 @@ def mesh_placement(mesh, avatar):
             for bone, weight in zip(indices, weights) if weight > 0}
     if not used or any(type(bone) is not int or not 0 <= bone < len(mapping) for bone in used):
         return None
+    # ReadMatrix and the native indexer preserve ZZZ's serialized row-major
+    # float order despite Matrix4x4's column-major field names.
     matrices = [worlds[mapping[bone]] @ np.asarray(poses[bone]).reshape(4, 4) for bone in used]
     if not all(np.allclose(matrix, matrices[0], rtol=0, atol=2e-4) for matrix in matrices):
         return None
