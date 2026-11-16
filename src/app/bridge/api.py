@@ -360,6 +360,9 @@ class ModViewerAPI:
     def list_ini_files(self, folder_path):
         return ini_api.list_inis(self._access.mod_folder(folder_path))
 
+    def remove_ini(self, folder_path, ini_name):
+        return self._mod_preview.remove_ini(folder_path, ini_name)
+
     def get_ini_text(self, folder_path, ini_name):
         return ini_api.get_text(self._access.mod_folder(folder_path), ini_name)
 

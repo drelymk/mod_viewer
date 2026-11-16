@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from collections import Counter
+import json
 
 import pytest
 
@@ -8,6 +9,9 @@ from core.geometry.skinning import SkinningSource
 from core.ini.document import IniDocument
 from tests.support_snapshot import snapshot_context
 from app.session import edit as edit_session
+from app.mods import loader, metadata
+from core.geometry.mesh_builder import GeometryBlob
+from tests.support.model_data import basic_model_ini, triangle_geometry
 
 
 class _Access:
@@ -39,6 +43,112 @@ class _Publication:
 
 def _context(paths=()):
     return snapshot_context("mod", paths)
+
+
+def test_ini_removal_lifecycle_preserves_siblings_staged_edits_and_source_files(
+        api_root, tmp_path, monkeypatch):
+    preview = ModPreview(_Access())
+    monkeypatch.setattr(preview, "_load_asset_folders", lambda: [])
+    original = basic_model_ini()
+    relatives = ["Root.ini", "one/Part.ini", "two/Part.ini"]
+    for relative in relatives:
+        ini = tmp_path / relative
+        ini.parent.mkdir(parents=True, exist_ok=True)
+        ini.write_text(original, encoding="utf-8")
+        for name, data in triangle_geometry().items():
+            (ini.parent / name).write_bytes(data)
+    metadata_path = tmp_path / ".mod_viewer.json"
+    metadata_path.write_text(json.dumps({"mesh_names": {"fixture": "Label"}}))
+
+    def load():
+        _, _, context = preview.authoritative_context(api_root)
+        result = loader.load_mod(context=context, geometry=GeometryBlob())
+        assert "error" not in result
+        return context, result
+
+    context, result = load()
+    assert {mesh["identity"]["source"] for mesh in result["meshes"].values()} == set(relatives)
+    staged_text = original + "\n; pending edit\n"
+    edit_session.update_text(api_root, "two/Part.ini", staged_text)
+    staged_doc = edit_session.document(api_root, "two/Part.ini")[1]
+    edit_session.cache_diagnostics(api_root, {"fixture": True})
+
+    assert preview.remove_ini(api_root, "one/Part.ini")["saved"]
+    assert edit_session.cached_diagnostics(api_root) is None
+    context, result = load()
+    assert [record.relative_path for record in context.ini.records] == ["Root.ini", "two/Part.ini"]
+    assert {mesh["identity"]["source"] for mesh in result["meshes"].values()} == {"Root.ini", "two/Part.ini"}
+    assert edit_session.list_documents(api_root) == ["Root.ini", "two/Part.ini"]
+    assert edit_session.document(api_root, "two/Part.ini")[1] is staged_doc
+    assert edit_session.editable_text(staged_doc) == staged_text
+    assert edit_session.dirty_documents(api_root) == {"two/Part.ini"}
+
+    assert preview.remove_ini(api_root, "Root.ini")["saved"]
+    edit_session.discard(api_root)
+    context, result = load()
+    assert [record.relative_path for record in context.ini.records] == ["two/Part.ini"]
+    assert len(result["meshes"]) == 1
+    assert preview.remove_ini(api_root, "two/Part.ini")["saved"]
+    assert load()[1]["meshes"] == {}
+    edit_session.discard(api_root)
+    assert load()[1]["meshes"] == {}
+    saved = json.loads(metadata_path.read_text())
+    assert saved["removed_inis"] == ["one/Part.ini", "Root.ini", "two/Part.ini"]
+    assert saved["mesh_names"] == {"fixture": "Label"}
+    for relative in relatives:
+        assert (tmp_path / relative).read_text() == original
+    assert not list(tmp_path.rglob("*.BAK"))
+    # Remaining utility INIs are valid even when all geometry INIs are excluded.
+    (tmp_path / "Utility.ini").write_text("[Constants]\nglobal $value = 1\n")
+    edit_session.discard(api_root)
+    context, result = load()
+    assert [record.relative_path for record in context.ini.records] == ["Utility.ini"]
+    assert result["meshes"] == {}
+
+
+def test_removing_last_disabled_ini_does_not_switch_to_active_selection(
+        api_root, tmp_path, monkeypatch):
+    for name in ["Active.ini", "DISABLEDPart.ini"]:
+        (tmp_path / name).write_text(basic_model_ini())
+    preview = ModPreview(_Access())
+    monkeypatch.setattr(preview, "_load_asset_folders", lambda: [])
+    _, _, context = preview.authoritative_context(api_root, disabled_ini=True)
+    assert [record.relative_path for record in context.ini.records] == ["DISABLEDPart.ini"]
+    assert preview.remove_ini(api_root, "DISABLEDPart.ini")["saved"]
+    _, _, context = preview.authoritative_context(api_root)
+    assert context.ini_paths == []
+    result = loader.load_mod(context=context, geometry=GeometryBlob())
+    assert "error" not in result
+    assert result["meshes"] == {}
+
+
+def test_ini_removal_failed_metadata_replace_keeps_ini_active(
+        api_root, tmp_path, monkeypatch):
+    ini = tmp_path / "Part.ini"
+    ini.write_text(basic_model_ini())
+    sidecar = tmp_path / ".mod_viewer.json"
+    sidecar.write_text('{"fixture": true}\n')
+    previous = sidecar.read_bytes()
+    preview = ModPreview(_Access())
+    edit_session.load_documents(api_root, [str(ini)])
+    def fail(*_args):
+        raise OSError("synthetic replacement failure")
+    with monkeypatch.context() as patch:
+        patch.setattr("app.mods.metadata_storage.os.replace", fail)
+        assert "error" in preview.remove_ini(api_root, "Part.ini")
+    assert sidecar.read_bytes() == previous
+    assert edit_session.list_documents(api_root) == ["Part.ini"]
+    assert preview.remove_ini(api_root, "Part.ini")["saved"]
+    assert edit_session.list_documents(api_root) == []
+
+
+@pytest.mark.parametrize("ini_name", ["../Other.ini", "nested/../Part.ini", "Unknown.ini"])
+def test_ini_removal_rejects_unloaded_browser_paths(api_root, tmp_path, ini_name):
+    ini = tmp_path / "Part.ini"
+    ini.write_text(basic_model_ini())
+    edit_session.load_documents(api_root, [str(ini)])
+    assert "error" in ModPreview(_Access()).remove_ini(api_root, ini_name)
+    assert not (tmp_path / metadata.METADATA_NAME).exists()
 
 
 @pytest.mark.parametrize(

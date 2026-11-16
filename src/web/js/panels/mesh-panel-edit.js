@@ -280,6 +280,7 @@ async function applyComponentMeshChanges(descriptor) {
       (group) =>
         group.componentDescriptor.modPath === descriptor.modPath &&
         group.componentDescriptor.source === descriptor.source &&
+        group.componentDescriptor.ini === descriptor.ini &&
         group.componentDescriptor.component === descriptor.component,
     );
     if (updated?.itemObjs.length) selectMesh(updated.itemObjs[0]);

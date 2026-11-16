@@ -4,6 +4,73 @@ from .payloads import append_stream, controlled_payload, model_payload, textured
 from .support import bridge_calls, open_model, project_mesh_points, wait_loaded
 
 
+def test_ini_header_remove_failure_retry_sibling_identity_last_ini_and_read_only(viewer):
+    payload = model_payload(4)
+    inis = ['one/Part.ini', 'one/Part.ini', 'one/Other.ini', 'two/Part.ini']
+    for mesh, ini in zip(payload['meshes'].values(), inis):
+        mesh['source'] = ini.split('/')[0]
+        mesh['identity']['source'] = ini
+        mesh['sources'][0]['ini'] = ini
+    archive = model_payload()
+    archive['metadata'].update(source_kind='zip', source_read_only=True)
+    page = viewer({'fixture-01': payload, 'fixture-02': archive})
+    page.evaluate("""() => {
+      const api = window.pywebview.api, load = api.load_mod, remove = api.remove_ini;
+      const removed = new Map();
+      api.load_mod = async (...args) => {
+        const payload = await load(...args), names = removed.get(args[0]) || [];
+        payload.meshes = Object.fromEntries(Object.entries(payload.meshes)
+          .filter(([, mesh]) => !names.includes(mesh.identity.source)));
+        return payload;
+      };
+      api.remove_ini = async (path, ini) => {
+        const result = await remove(path, ini);
+        if (result.saved) removed.set(path, [...(removed.get(path) || []), ini]);
+        return result;
+      };
+    }""")
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 4)
+    assert page.locator('.mesh-ini-hdr .group-name').all_text_contents() == ['one/Part.ini', 'one/Other.ini']
+    menu = page.locator('.mesh-context-menu [data-i18n="mesh.removeIni"]')
+    first = page.locator('.mesh-ini-hdr').first
+    first.locator('.group-toggle').click()
+    first.click(button='right')
+    assert menu.inner_text() == 'Remove'
+    page.evaluate("window.__bridge.results.iniRemove = {error:'synthetic save failure'}")
+    menu.click()
+    page.locator('#dialog-backdrop.show').wait_for()
+    assert 'synthetic save failure' in page.locator('#dialog-message').inner_text()
+    page.locator('#dialog-ok').click()
+    assert page.evaluate('window.modViewer.activeMeshes.length') == 4
+    page.evaluate("""() => {
+      window.__bridge.results.iniRemove = {saved:true};
+      window.__bridge.blocked.iniRemove = true;
+    }""")
+    first.click(button='right')
+    menu.click()
+    page.wait_for_function('window.__bridge.calls.filter(call => call.name === "iniRemove").length === 2')
+    assert page.evaluate("window.modViewer.switchMod('fixture-02')") is False
+    page.evaluate("window.__bridge.release('iniRemove')")
+    wait_loaded(page, 2)
+    assert bridge_calls(page, 'iniRemove') == [['fixture-01', 'one/Part.ini']] * 2
+    assert page.locator('.mesh-ini-hdr .group-name').all_text_contents() == []
+    assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.userData.identity.source)') == ['one/Other.ini', 'two/Part.ini']
+    for remaining in (1, 0):
+        page.locator('.mesh-src-hdr').first.click(button='right')
+        menu.click()
+        page.wait_for_function('count => window.modViewer.activeMeshes.length === count', arg=remaining)
+        page.wait_for_function('!document.querySelector("#loading").classList.contains("show")')
+    assert page.locator('.mesh-src-hdr').count() == 0
+    assert bridge_calls(page, 'export') == []
+    assert not page.locator('#dialog-backdrop.show').count()
+    open_model(page, 'fixture-02')
+    wait_loaded(page)
+    page.locator('.mesh-src-hdr').click(button='right')
+    assert page.locator('.mesh-context-menu:visible').count() == 0
+    assert len(bridge_calls(page, 'iniRemove')) == 4
+
+
 def test_unavailable_texture_selection_reports_localized_error_without_mutation(viewer):
     payload = textured_payload()
     unavailable = 'diffuse::texture-03.dds'

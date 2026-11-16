@@ -69,11 +69,11 @@ class ModPreview:
                               defer_assets=False):
         """Load selected INI documents while preserving the current session."""
         folder_path = self._access.mod_folder(folder_path)
-        source = edit_session.source_for(folder_path) or \
-            mod_source_for_path(folder_path)
+        session_source = edit_session.source_for(folder_path)
+        source = session_source or mod_source_for_path(folder_path)
         ini_paths = edit_session.document_paths(folder_path)
         discovered_docs = {}
-        if not ini_paths:
+        if not ini_paths and session_source is None:
             discovery_kwargs = {"disabled": disabled_ini,
                                 "documents": discovered_docs}
             if getattr(source, "virtual", False):
@@ -176,6 +176,20 @@ class ModPreview:
                     raise ModImportError(result["error"])
             return result
         except (ValueError, ModSourceError, OSError) as error:
+            return {"error": str(error)}
+
+    def remove_ini(self, folder_path, ini_name):
+        """Exclude one loaded INI from this mod's viewer state."""
+        try:
+            folder_path = self._access.mod_folder(folder_path)
+            key, _document = edit_session.document(folder_path, ini_name)
+            if edit_session.source_for(folder_path).read_only:
+                return {"error": "Viewer metadata cannot be saved for compressed mods."}
+            result = metadata.save_removed_ini(folder_path, key)
+            if result.get("saved"):
+                edit_session.invalidate_diagnostics(folder_path)
+            return result
+        except (KeyError, ValueError, ModSourceError, OSError) as error:
             return {"error": str(error)}
 
     def load_mod(self, folder_path, disabled_ini=False):

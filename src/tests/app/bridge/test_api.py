@@ -85,6 +85,7 @@ EXPECTED_API_METHODS = {
     "rebuild_asset_index",
     "record_toggle",
     "remove_missing_asset_parts",
+    "remove_ini",
     "rename_rig_pose_preset",
     "save_component_material_kind",
     "save_mesh_color_adjustment",
@@ -309,6 +310,16 @@ def test_import_rejects_browser_invented_folder_before_reading(monkeypatch, tmp_
     result = api.import_mod(str(tmp_path))
     assert "native folder picker" in result["error"]
     assert edit_session.import_summary_for(str(tmp_path)) is None
+
+
+def test_ini_removal_rejects_unauthorized_mod_before_metadata_write(monkeypatch, tmp_path):
+    api = ModViewerAPI()
+    api._access._authorized_roots.clear()
+    api._access._authorized_folders.clear()
+    monkeypatch.setattr("app.mods.metadata.save_removed_ini", lambda *_: pytest.fail(
+        "an unauthorized folder reached metadata persistence"))
+    assert "native folder picker" in api.remove_ini(str(tmp_path), "Part.ini")["error"]
+    assert not (tmp_path / ".mod_viewer.json").exists()
 
 
 def test_load_asset_clears_loaded_mod_state_before_transition(monkeypatch):
