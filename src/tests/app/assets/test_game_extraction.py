@@ -661,6 +661,92 @@ def test_scaled_reference_extraction_identity_errors_and_ambiguity(tmp_path, mon
     assert not (tmp_path / "ambiguous").exists()
 
 
+def test_section_matching_preserves_captured_ranges_and_native_morph_correspondence(tmp_path, monkeypatch):
+    root, _asset, record, client, _ = fixture(tmp_path)
+    captured, _ = capture(str(root), record)
+    mesh = read_mesh(client.export("mesh", MESH, client.work / "reference")[0])
+    mesh["positions"] = [(8, 0, 0), *mesh["positions"][1:], *mesh["positions"]]
+    mesh["uv"] = [channel * 2 for channel in mesh["uv"]]
+    mesh["weights"] *= 2
+    mesh["indices"] = list(range(6))
+    mesh["sections"] = [(0, 3), (3, 3)]
+    mesh["morphs"] = {"Shape01": [(0, 0, 2, 0, .5, 0, 3)]}
+    palette, = match_components(captured, mesh)
+    assert palette["first_index"] == 0 and palette["native_first_index"] == 3
+    assert palette["bone_map"] == [0, 1]
+    monkeypatch.setattr(pipeline, "read_mesh", lambda _: mesh)
+    output = tmp_path / "shifted"
+    result, _ = pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+    assert result["proven_components"] == 1 and result["unmatched_components"] == 0
+    rig = validate_rig(json.loads((output / "Rig.json").read_text()))
+    assert rig["components"][0]["first_index"] == 0
+    assert "native_first_index" not in rig["components"][0]
+    morph_file, = (output / "Animation").glob("morphs-*.bin")
+    assert struct.unpack("<I6f", morph_file.read_bytes()) == (0, 0, 0, 2, 0, .5, 0)
+
+    mesh["indices"][:3] = mesh["indices"][3:]
+    with pytest.raises(ValueError, match="one unique native mesh section"):
+        match_components(captured, mesh)
+    with pytest.raises(ValueError, match="unique matching game mesh"):
+        pipeline.build(client, str(root), record, tmp_path / "ambiguous-sections", "Character01", lambda *_: None, threading.Event())
+    assert not (tmp_path / "ambiguous-sections").exists()
+
+
+@pytest.mark.parametrize("attribute", ["positions", "uv", "weights"])
+def test_shifted_section_matching_requires_exact_vertex_evidence(tmp_path, attribute):
+    root, _asset, record, client, _ = fixture(tmp_path)
+    captured, _ = capture(str(root), record)
+    mesh = read_mesh(client.export("mesh", MESH, client.work / "reference")[0])
+    mesh["indices"] = [0, 0, 0, 0, 1, 2]
+    mesh["sections"] = [(3, 3)]
+    if attribute == "positions":
+        mesh["positions"][0] = (0.00001, 0, 0)
+    elif attribute == "uv":
+        mesh["uv"][0][0] = (0.00001, 0)
+    else:
+        mesh["weights"][0] = [(0, 127), (1, 128)]
+    with pytest.raises(ValueError, match="one unique native mesh section"):
+        match_components(captured, mesh)
+
+
+@pytest.mark.parametrize("candidates,expected", [
+    ({0: {2}, 1: {2, 4}, 2: {4, 6}}, [2, 4, 6]),
+    ({0: {2, 4}, 1: {2}}, [4, 2]),
+    ({0: {2, 4}, 1: {2, 4}}, None),
+    ({0: {2}, 1: {2}}, None),
+    ({0: {2}, 1: {2, 4}, 2: {4}}, None),
+    ({0: {2}, 1: set()}, None),
+])
+def test_bone_palette_requires_a_forced_one_to_one_mapping(candidates, expected):
+    before = deepcopy(candidates)
+    if expected is None:
+        with pytest.raises(ValueError, match="cannot be mapped unambiguously"):
+            native._unique_bone_map(candidates)
+    else:
+        assert native._unique_bone_map(candidates) == expected
+    assert candidates == before
+
+
+def test_equal_weight_palette_is_retained_in_extracted_rig_and_animation(tmp_path, monkeypatch):
+    root, asset, record, client, _ = fixture(tmp_path)
+    mesh = read_mesh(client.export("mesh", MESH, client.work / "reference")[0])
+    mesh["weights"] = [[(0, 255)], [(0, 128), (1, 128)], [(0, 128), (1, 128)]]
+    vertex_file = asset / "11111111/Component 0.vb"
+    vertices = bytearray(vertex_file.read_bytes())
+    for vertex, weights in enumerate(((255, 0), (128, 128), (128, 128))):
+        struct.pack_into("<4B", vertices, vertex * 28 + 24, *weights, 0, 0)
+    vertex_file.write_bytes(vertices)
+    monkeypatch.setattr(pipeline, "read_mesh", lambda _: mesh)
+    output = tmp_path / "output"
+    result, _ = pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+    assert result["proven_components"] == result["clips"] == 1
+    assert result["unmatched_components"] == 0
+    rig = validate_rig(json.loads((output / "Rig.json").read_text()))
+    assert rig["components"][0]["bone_map"] == [0, 1]
+    assert rig["components"][0]["vertex_sha256"] == hashlib.sha256(vertices).hexdigest()
+    assert json.loads((output / "Animation/manifest.json").read_text())["skeleton_id"] == rig["id"]
+
+
 def test_biped_humanoid_controls_require_exact_names_and_hierarchy():
     tree = [("Root", -1), ("Bip001", 0), ("Bip001Pelvis", 1), ("Bip001Spine2", 2), ("Bip001Neck", 3), ("Bip001Head", 4)]
     for side in "LR":
@@ -803,7 +889,49 @@ def test_native_game_picker_never_grants_mod_or_asset_access(tmp_path, monkeypat
         api._access.asset_folder(str(game))
 
 
-@pytest.mark.parametrize("game_kind", ["GIMI", "ZZMI"])
+@pytest.mark.parametrize("kind", ["ZZMI", "WWMI"])
+def test_index_failure_is_reported_without_rescanning_required_indexes(tmp_path, monkeypatch, kind):
+    from app.assets.game_extract import backends
+
+    asset = tmp_path / "Asset01"
+    asset.mkdir()
+    (asset / "Rig.json").write_bytes(b"existing rig")
+    entry = dict(type=kind, path=str(tmp_path))
+    record = dict(path="Asset01")
+    selected = str(asset)
+    service = RigExtraction(lambda _: (selected, entry, {}, record))
+    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
+    monkeypatch.setattr("app.bridge.rig_extraction.inherit_directory_permissions", lambda _: None)
+    calls = []
+    backend = backends.require_backend(kind)
+    monkeypatch.setattr(backend, "capture", lambda *_: ([], {}))
+    monkeypatch.setattr(backend, "open_client", lambda *_: SimpleNamespace(close=lambda: calls.append("close")))
+    def failed_index(*_):
+        calls.append("index")
+        raise ValueError("Synthetic index scan failed.")
+    monkeypatch.setattr(backend, "ensure_index", failed_index)
+    def build(_client, _root, _record, output, _query, _progress, _cancel, index):
+        assert index is None
+        calls.append("fallback")
+        output.mkdir()
+        (output / "Rig.json").write_bytes(b"new rig")
+        (output / "Animation").mkdir()
+        (output / "RigExtraction.json").write_bytes(b"report")
+        return dict(bones=1, clips=1, imported=1, secondary=0, skipped=0), {}
+    monkeypatch.setattr(backend, "build", build)
+    job = service._begin()
+    service._run(job, selected, entry, record, str(tmp_path / "Game01"), "Character01", backend)
+    result = service.status(job)
+    if kind == "ZZMI":
+        assert result["status"] == "error" and result["error"] == "Synthetic index scan failed."
+        assert calls == ["index", "close"]
+        assert (asset / "Rig.json").read_bytes() == b"existing rig"
+    else:
+        assert result["status"] == "complete" and calls == ["index", "fallback", "close"]
+        assert (asset / "Rig.json").read_bytes() == b"new rig"
+
+
+@pytest.mark.parametrize("game_kind", ["GIMI"])
 def test_game_adapters_scope_grants_and_reject_unavailable_jobs(tmp_path, monkeypatch, game_kind):
     from app.assets.game_extract import backends
 

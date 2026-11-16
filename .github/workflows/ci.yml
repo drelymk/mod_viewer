@@ -15,6 +15,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  zzz-extract:
+    name: ZZZ extraction helper
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: native/game-extract/global.json
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          install: mingw-w64-x86_64-gcc
+      - name: Add native compiler
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: Add-Content $env:GITHUB_PATH (Join-Path $env:MSYS2_LOCATION 'mingw64\bin')
+      - name: Build locked ZZZ reader and verify ABI and formatting
+        run: python tools/build_zzz_extract.py --verify-format
+
   game-extract:
     name: Direct extraction helper
     runs-on: windows-latest

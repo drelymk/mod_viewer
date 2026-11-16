@@ -8,7 +8,7 @@ The WWMI modules implement only the Wuthering Waves archive/layout contract.
 from pathlib import Path
 
 from app.settings.game_folders import GAME_KINDS
-from . import wwmi
+from . import wwmi, zzz
 
 
 class UnsupportedGame(ValueError):
@@ -16,7 +16,7 @@ class UnsupportedGame(ValueError):
         super().__init__("Game rig/animation extraction is not available for this game yet.")
 
 
-_BACKENDS = {"WWMI": wwmi}
+_BACKENDS = {"WWMI": wwmi, "ZZMI": zzz}
 
 
 def backend_for(kind):

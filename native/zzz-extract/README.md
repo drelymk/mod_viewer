@@ -1,0 +1,83 @@
+# ZZZ extraction reader
+
+This helper implements the existing extraction job's private file/JSON protocol.
+The shared Python client owns cancellation, process lifetime, request/response
+limits and temporary output budgets. The bridge owns native picker grants,
+revision checks and atomic installation with rollback. Extraction reads the
+installed game offline; it never downloads keys, executables or updates.
+
+Build with .NET SDK 10.0.100 or a compatible newer stable SDK and Windows x64 MinGW g++:
+
+```text
+python tools/build_zzz_extract.py --verify-format
+```
+
+The build pins original AnimeStudio commit
+`76234e9f6f5a839504f41f9612719529fe2309a5` and verifies its source archive's
+SHA-256. It compiles its managed Unity reader and ZZZ V2 ACL decoder from source.
+SDK discovery is shared with the WuWa helper: PATH or an explicit `--dotnet`
+override, with a prerequisite warning when the required SDK is missing. See the
+[build prerequisites](../game-extract/README.md).
+The decoder distributed with that revision crashes on supported ZZZ tracks;
+rebuilding its unchanged native source avoids that stale binary. No Ultimate
+fork, GUI, FBX exporter, YAML clip exporter, image/audio decoder or updater is
+included. The managed reader retains its internal YAML types because native
+object classes implement those interfaces; the helper never exports YAML.
+Oodle uses the same pinned decoder archive as WuWa. Transitive managed packages
+are locked in `locks/`; dependency changes require `--update-locks` and renewed
+native geometry/animation verification. The helper bundles .NET 10.0.13.
+
+Build-time adaptations remove unused image and unrelated game helpers, make
+parser failures fatal, preserve duplicate internal CAB scopes, restrict external
+resource reads to the current bundle, and permit exact bundle-offset reads.
+Avatar reads stop after the skeleton, reference pose and path-hash table: optional
+HumanDescription authoring metadata is unnecessary for skinning and varies across
+native asset layouts. Mesh shapes filter unrelated outfit families before opening
+their Avatars; shape-compatible candidates still require complete native proof.
+Both legacy exporter mesh names and short Unity mesh names are discovery hints.
+Geometry, path hashes and inverse binds establish identity. Equivalent Avatar
+copies in one animation family use the existing reference-world tolerance;
+differences in the skeleton or animation ownership remain rejected. Generated
+clip paths are unique with Windows case-insensitive semantics.
+Locators include game-relative block path, bundle offset, internal file ordinal,
+CAB and PathID. Never resolve an object by CAB basename or PathID alone.
+
+The index caches metadata only. Captured triangles, positions, UVs and positive
+float weights prove mesh correspondence and an unambiguous palette. Avatar path
+hashes and all used inverse binds prove the hierarchy and mesh-to-Avatar basis.
+Avatar constants may include or omit the root-motion flag. Accept only one
+bounded layout with valid UTF-8 paths, matching CRCs and every skeleton hash;
+duplicate, truncated or ambiguous tables fail closed. Optional authoring data
+does not participate in extraction.
+A synthetic root preserves that basis without rewriting captured coordinates.
+Version 2 sidecars retain sparse palettes, nonuniform reference scale and sampled
+TQS tracks. Unknown transform bindings reject a clip; unsupported non-transform
+channels are counted explicitly in clip metadata and the extraction report.
+Facial extraction retains single-frame blend shapes and their authored full
+weights. Renderer paths and Animator Avatar references come from explicit Unity
+pointers. Streamed null-mesh renderers require a unique geometry-proven mesh with
+the same complete ordered bone paths and any nonempty default-weight count; names cannot establish a
+route. Complete triangle multisets preserve duplicate counts during geometry proof.
+Each converted facial clip includes a playable GLB with a checked sparse runtime
+view. The viewer loads that GLB lazily with the clip, applies facial deltas before
+skinning, and restores the original geometry when playback ends. Unsupported
+in-between targets remain omitted. Curve sampling has an independent memory budget.
+On the first clip read, the helper reads only the contained game's PlayerSettings
+blend-shape clamp policy from `globalgamemanagers`. Extraction records and honors
+that policy instead of assuming signed or clamped playback. Unknown policy is not
+guessed. Clip-only runtime revisions keep the separate metadata-index version,
+so this conversion correction does not require rebuilding a ready format-3 index.
+Unchanged mod Blend streams may use an exact verified fingerprint. Other weight
+layouts keep the existing inferred rig until independently proven.
+
+Generated binaries and licenses live in the ignored assets directory. Runtime
+verification hashes every manifest entry before starting a job. `--self-test`
+checks the bundled native ABI; synthetic Python and browser contracts exercise
+binding, conversion, saved-file validation and scale-aware deformation. Real
+game files are never committed as fixtures.
+
+The app distribution shares identical helper files in `assets/extractors.zip`;
+see the [portable packaging contract](../game-extract/README.md). Unpacking is lazy,
+verified and confined to a private temporary directory, including on read-only
+application installations. Source native development keeps the normal publish
+directory.

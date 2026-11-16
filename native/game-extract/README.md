@@ -26,11 +26,21 @@ Build from the repository root:
 python tools/build_game_extract.py --verify-format
 ```
 
-Build prerequisites are .NET SDK 10.0.100, CMake 3.16+ and a Windows x64 C++
+Build prerequisites are .NET SDK 10.0.100 or a compatible newer stable SDK,
+CMake 3.16+ and a Windows x64 C++
 compiler (MSVC or MinGW). The parser already requires .NET 10; the helper bundles
 the same 10.0.13 runtime used by the previous extractor. End users need no SDK.
 `src/build.py` builds and includes the helper automatically. Generated files live
 under the ignored assets and quality-report directories.
+
+Both helper builds check the SDK selected by their `global.json` before
+restoring packages. They use `dotnet` on PATH or an explicit `--dotnet` executable.
+The main application build checks both helpers before installing dependencies or
+downloading assets and forwards its `--dotnet` option to them. A missing SDK prints
+a prerequisite warning with the required version and installation guidance, then
+stops without a traceback. The SDK policy prefers the declared baseline and allows
+newer stable SDKs when needed, including newer major releases. A runtime-only installation is insufficient. No local
+cache directory is assumed, and this check does not install or download an SDK.
 
 Parser, ACL, RTM, public WuWa AES keys and decoder archives have fixed revisions and SHA-256 checksums
 in the build tool. The native library contains only the required ACL decoder;
@@ -54,3 +64,10 @@ The affected TIFF, ICC and histogram operations are therefore unreachable throug
 these extraction operations. Retain the locked dependency and visible restore
 warnings; reassess this conclusion before enabling landscape or image exports.
 Package metadata and license texts are shipped in `licenses/`.
+
+The portable app packs both helpers into `assets/extractors.zip`, storing identical
+runtime files once and excluding debug symbols. It verifies and unpacks only the
+requested helper into a private temporary directory on explicit extraction. The
+existing runtime manifest checks still run before execution. This keeps the app
+self-contained and offline while avoiding two copies of the same .NET payload.
+Source publish folders and dependency versions remain unchanged.

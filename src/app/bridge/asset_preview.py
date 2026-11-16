@@ -189,7 +189,7 @@ class AssetPreview:
                     raise ValueError("The Asset preview is no longer active.")
                 source, decoded = decode_captured_skinning(session["root"], part.skinning)
                 entry, data = ModPreview._skin_entry(decoded, source, offset)
-                binding = AssetComponentBinding(status="exact", range_status="exact", asset_type="WWMI",
+                binding = AssetComponentBinding(status="exact", range_status="exact", asset_type=part.asset_type,
                     root=session["root"], asset=session["asset"], metadata=part.metadata_path,
                     geometry_hash=part.geometry_hash, component_ordinal=part.component_ordinal,
                     first_index=part.first_index, index_count=part.index_count)
@@ -197,11 +197,12 @@ class AssetPreview:
                     {os.path.normcase(session["root"])}, cache, captured_palette=True)
                 if rig:
                     if rig["id"] not in rigs:
-                        rigs[rig["id"]] = {"id": rig["id"], "bones": rig["bones"],
+                        rigs[rig["id"]] = {"id": rig["id"], "version": rig["version"], "bones": rig["bones"],
                             "humanoid_controls": rig["humanoid_controls"],
                             **self._animations.catalog(session["root"], session["asset"], rig, is_current)}
                     entry.update(game_rig_id=rig["id"], game_bone_map=rig["bone_map"])
-                    entry["game_morph_binding"] = {**rig["morph_binding"], "vertices": list(part.skinning.vertices)}
+                    if rig["morph_binding"]:
+                        entry["game_morph_binding"] = {**rig["morph_binding"], "vertices": list(part.skinning.vertices)}
                 meshes[part.key] = entry
                 pieces.append(data)
                 offset += len(data)

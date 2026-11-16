@@ -7,7 +7,7 @@ from stat import S_ISREG
 import subprocess
 import time
 
-from app.settings import paths
+from .bundle import runtime_directory
 
 
 PARSER_COMMIT = "cb909733773daea9015a67f6955d6f2ec24d3629"
@@ -46,7 +46,7 @@ def list_packages(client, kind, folder, cancel):
 
 
 def ensure_runtime(cancel, bundle=None):
-    root = Path(bundle) if bundle else Path(paths.vendor_dir()) / "game-extract"
+    root = Path(bundle) if bundle else runtime_directory("game-extract", cancel)
     executable = root / "ModViewer.GameExtract.exe"
     check_cancelled(cancel)
     try:
@@ -94,6 +94,9 @@ class Client:
         self.serial = 0
         self.process = None
 
+    def command(self):
+        return [str(self.executable), "--paks", str(self.paks), "--work", str(self.work)]
+
     def close(self):
         process, self.process = self.process, None
         if process is not None:
@@ -125,7 +128,7 @@ class Client:
             self._check_output_budget()
             if self.process is None:
                 self.process = subprocess.Popen(
-                    [str(self.executable), "--paks", str(self.paks), "--work", str(self.work)],
+                    self.command(),
                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             request = json.dumps(dict(id=self.serial, op=operation, **arguments)).encode("utf-8") + b"\n"

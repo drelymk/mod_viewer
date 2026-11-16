@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetLockFilePath>UnityReader.packages.lock.json</NuGetLockFilePath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(AnimeStudioRoot)/AnimeStudio/**/*.cs"
+      Exclude="$(AnimeStudioRoot)/AnimeStudio/obj/**;$(AnimeStudioRoot)/AnimeStudio/AFKJourneyUtils.cs;$(AnimeStudioRoot)/AnimeStudio/Extensions/ImageExtensions.cs;$(AnimeStudioRoot)/AnimeStudio/Extensions/Texture2DExtensions.cs;$(AnimeStudioRoot)/AnimeStudio/Extensions/Texture2DConverter.cs" />
+    <PackageReference Include="K4os.Hash.xxHash" Version="1.0.8" />
+    <PackageReference Include="MessagePack" Version="3.1.12" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Portable.BouncyCastle" Version="1.9.0" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+  </ItemGroup>
+</Project>

@@ -824,11 +824,12 @@ of documentation, comments and tests; use portable fixtures instead.
   exact members for evidence but keep provenance. Infer only conservative
   maximum-spanning topology from overlap/centers: Blend data provides no names,
   canonical skeleton, hierarchy, bind pose, animation or semantic labels.
-- Exact registered WWMI Asset/range bindings may provide an optional root
-  `Rig.json` (`mod-viewer-rig`, version 1, Asset coordinates). Read it only on
+- Exact registered WWMI and ZZMI Asset/range bindings may provide an optional root
+  `Rig.json` (`mod-viewer-rig`, versions 1/2, Asset coordinates). Read it only on
   Weight/Rig access from retained skinning manifests, through Asset containment
   rules. Validate ordered parents, finite translations, near-unit quaternions,
-  uniform reference scales (uniformly mirrored negative scales are allowed) and reference VB/IB
+  uniform reference scales in version 1 (uniformly mirrored negative scales are allowed),
+  nonsingular affine scales in version 2, and reference VB/IB
   fingerprints and either an explicit Blend-content fingerprint/palette binding
   or an Asset-declared stock WWMI merged palette with same-INI template proof.
   Do not infer a mod's palette namespace from numeric IDs or component offsets.
@@ -877,6 +878,10 @@ of documentation, comments and tests; use portable fixtures instead.
   projects each drawn compact palette to R8. Unproven pipelines, unsupported
   namespaces, stale reference geometry and invalid sidecars retain inference.
   Authored graph adoption requires every source to resolve the same skeleton.
+  Meshes sharing a weight source may carry different sparse subsets of its
+  verified bone map. Merge those subsets for source-Rig admission while retaining
+  each mesh's exact palette for playback. Require every member's used bone IDs
+  to resolve, reject conflicting aliases, and never mutate the per-mesh bindings.
   Keep source IDs/weights unchanged; source-to-game-joint aliases supply exact
   parents, pivots, rest axes and names, including unweighted ancestors. Optional
   explicit `humanoid_controls` maps all 16 controls to distinct, hierarchy-checked
@@ -894,9 +899,9 @@ of documentation, comments and tests; use portable fixtures instead.
   vertex IDs. Load weights lazily through Asset containment and validate captured
   component palettes with the same Rig.json/reference hashes. Asset Weight/Rig
   posing is temporary; never persist mod selection/preset metadata to an Asset.
-- Optional Asset `Animation/manifest.json` catalogs and clip metadata are version 1
-  sidecars bound to the normalized skeleton fingerprint. Binary clips are bounded,
-  checksummed frame-major local translation/quaternion float32 tracks in Asset
+- Optional Asset `Animation/manifest.json` catalogs are version 1; clip metadata
+  supports version 1 TQ and version 2 TQS sidecars bound to the normalized skeleton
+  fingerprint. Binary clips are bounded, checksummed frame-major local float32 tracks in Asset
   coordinates. Use endpoint-inclusive timing, normalized quaternion interpolation,
   original parent hierarchy and animated-world times inverse-rest-world deltas.
   Optional native morphs append named frame-major weights to the clip binary
@@ -908,7 +913,7 @@ of documentation, comments and tests; use portable fixtures instead.
   rest shape, source winding/V conversions and verified bone palette. Reject
   ambiguous/conflicting UV assignments; new UVs remain unmapped. Share one
   bounded reference decode per component during Weight access, and retain morph
-  inputs only for WWMI bindings. Keep matching out of playback. Apply morphs
+  inputs only for WWMI/ZZMI bindings. Keep matching out of playback. Apply morphs
   before skinning, upload only weights and restore the baseline on release.
   Extraction samples linear, constant and unweighted cubic matching curves.
   Only exact compatible authored rigs expose the library, including matching mods.
@@ -932,10 +937,12 @@ of documentation, comments and tests; use portable fixtures instead.
   settles so rig construction cannot interrupt newly started playback. Stale
   library loads must not activate a replacement model. Playback reuses the rig
   without rebuilding it. Prepare visible playback meshes lazily and reuse per-mesh
-  transform maps and quaternion objects across frames; pause/seek may finalize
+  transform maps and normal matrices across frames; pause/seek may finalize
   hidden compatible meshes without changing their visibility.
   Asset clip skinning uses TSL with each mesh's exact palette and all authored
   influences; upload bone transforms rather than deformed vertices each frame.
+  Affine animation normals use each delta's inverse transpose in both GPU and
+  lazy CPU deformation. Manual quaternion rotation remains supported.
   Keep CPU geometry lazy for tools and finalize bounds on pause/seek/release.
   Secondary-layer conversion requires an explicit authored bone mask, a verified
   shared skeleton and reference-pose local additive metadata. CUE4Parse bakes
@@ -974,8 +981,8 @@ of documentation, comments and tests; use portable fixtures instead.
   Never publish private configuration, keys or native logs. Settings > Game
   directory persists native-picker game folders per tool (`gameFolders` in
   config.json). Settings and extraction share the same UI for every registered
-  game, driven by `game_extract/backends.py` capabilities. Only WWMI currently
-  has an adapter; unavailable games keep folder selection but cannot start jobs.
+  game, driven by `game_extract/backends.py` capabilities. WWMI and ZZMI have
+  adapters; unavailable games keep folder selection but cannot start jobs.
   Extraction prefills only its Asset's game folder, re-validated and re-granted
   by the backend. Opaque grants include the game kind and cannot cross games.
   Game adapters own validation, native clients, indexing and package building;
@@ -984,6 +991,15 @@ of documentation, comments and tests; use portable fixtures instead.
   section vertex/index counts cover the most captured components, so props in
   other meshes do not block the body; require the unique best native
   geometry/UV/positive-weight proof, and report unproven components, before adopting its skeleton and component palettes.
+  Captured IB offsets may restart across geometry hashes; match each component
+  against all native sections with the same index count and require one complete
+  exact proof. Keep captured offsets in rig identities and the proven native
+  offset only in extraction state for morph correspondence; reject duplicate
+  matching sections even when one shares the captured offset.
+  Equal positive weights may leave an individual bone ambiguous. Propagate
+  uniquely proven targets through the full one-to-one component palette before
+  rejecting it; require every mapping to be forced and recheck all exact influence
+  pairs. Never choose between unresolved alternatives or conflicting aliases.
   Leftover components (props) are adopted only from a companion mesh found by
   the verified character folder name across the full Character tree, including
   the character's own folder and accessories outside the shape index. Never
@@ -1013,6 +1029,75 @@ of documentation, comments and tests; use portable fixtures instead.
   Building is explicit (Settings confirm dialog or index button) or automatic
   when extracting without a ready index; the extraction Browse pick is saved to
   Settings, and clearing the WWMI folder deletes its index.
+- ZZZ uses a separate minimal native reader built from pinned original AnimeStudio
+  source and its rebuilt ZZZ V2 ACL decoder, plus the same pinned Oodle decoder as
+  WuWa. No GUI, Ultimate fork, media exporters or updater is bundled. The shared
+  bounded client, picker grants, jobs, revision checks and atomic installer remain
+  authoritative. Index the complete local block metadata and key it by runtime plus
+  archive names, sizes and mtimes. Preserve block path, bundle offset, internal CAB,
+  file ordinal and PathID together; never collapse duplicate internal CAB names.
+  Restrict external resource streams to their containing bundle.
+  Reuse a valid persisted ZZZ index across extractions and client lifetimes.
+  Pool repeated renderer bone-path strings losslessly in the persisted index;
+  restore the exact ordered paths for facial proof, with bounded tables and
+  references. Keep existing unpooled indexes reusable without another full scan.
+  Index compatibility has its own reader version; clip-only runtime changes
+  do not invalidate unchanged discovery metadata.
+  An index schema/runtime change requires one successful rebuild. ZZZ index
+  failures remain visible and abort extraction; never hide them by repeating
+  the same full scan as an index-free fallback.
+  Only shape-plausible character mesh families need native Avatar reads; families
+  with no matching captured component shapes cannot block a different verified
+  model. A shape-compatible unreadable candidate still fails closed. Avatar
+  extraction reads the skeleton, reference pose and exact path-hash table without
+  requiring optional HumanDescription authoring metadata. Support constants with
+  and without the root-motion flag only through a unique, object-bounded path
+  table with valid UTF-8, unique CRCs and complete skeleton-hash coverage.
+  Prove captured positions,
+  UV triangles and positive float weights before adopting a sparse
+  palette; Avatar path hashes and all used inverse binds must establish one common
+  mesh-to-Avatar basis. Preserve that basis with an extra root instead of rewriting
+  captured geometry. Resolve symmetric component coordinate hypotheses across
+  the model using one common basis; equally supported incompatible placements
+  remain ambiguous. A larger animation Avatar may replace a model Avatar only
+  with identical induced ancestry, reference worlds and remapped palettes.
+  Accept legacy and short Unity mesh names only as candidate-discovery hints.
+  Include legacy meshes named for child prop/variant families when scoring a
+  body Avatar; a prop-only name match must not exclude the body before proof.
+  Equivalent copies within one animation family are selected deterministically
+  using the hierarchy/reference-world/palette proof, including serialized float
+  noise; different families or genuinely different reference skeletons remain
+  ambiguous. Reuse an existing reference pose only when this proof also retains
+  every bone index, preserving clip identity across equivalent native copies.
+  Clip filenames reserve case-folded IDs before adding source hashes
+  so distinct native names cannot collide on Windows.
+  Version 2 rigs retain nonuniform scale and sparse palettes. Captured references
+  require exact metadata/VB/IB fingerprints; mods additionally require an exact
+  proven Blend-content fingerprint. Other layouts retain inferred rigs. Decode ACL,
+  dense, streamed Hermite and constant tracks into endpoint-inclusive TQS samples;
+  unknown transform paths reject a clip and omitted non-transform channels remain
+  explicit in metadata/reports. Prove whole native submesh triangle multisets,
+  including repeated triangles, in both correspondence paths. Bound intermediate
+  Float64 curve sampling before reading/allocating it, independently of clip size.
+  Facial curves require captured-geometry correspondence, native shape hashes,
+  and a renderer path under the proven Animator Avatar. Resolve explicit mesh
+  pointers through complete index locators; a streamed null-mesh renderer may
+  instead prove one unique native mesh through its complete ordered bone paths
+  and, when serialized, exact nonempty default-weight count. Ambiguous references
+  or incompatible targets stay omitted.
+  Single-frame native shapes retain their authored full-weight scale and axis
+  reflection; unsupported in-between shapes are never flattened. Extraction reads
+  the game's exact `legacyClampBlendShapeWeights` PlayerSettings policy
+  lazily from contained `globalgamemanagers` data. Clamp normalized single-frame
+  weights to 0..1 only when that policy is true; preserve signed/extrapolated
+  weights when false and refuse unknown policy instead of guessing. Record the
+  policy in converted clips; it must apply equally to runtime data and facial GLB.
+  Each facial clip
+  carries a contained, checksummed playable GLB with an embedded sparse runtime
+  view. Animation loading validates that GLB and its reference fingerprints lazily,
+  then uses the shared morph-before-skinning playback and restoration lifecycle.
+  Preserve compatible libraries and user files in the
+  existing staging transaction. Extraction/indexing stays off ordinary load paths.
 - Model Rig assembly is a viewer-owned graph over source rigs. Preserve
   `SourceBoneRef {sourceKey,boneId}` and `${sourceKey}#bone=${boneId}`; only
   models whose sources all declare validated model-wide IDs in one domain (R16
@@ -1198,6 +1283,20 @@ of documentation, comments and tests; use portable fixtures instead.
 
 ## Builds and test discipline
 
+- Portable builds store native helpers in one content-addressed compressed
+  `assets/extractors.zip`, retaining all runtime dependencies and licenses while
+  omitting debug symbols. Identical files across helpers are stored once. Materialize
+  only a requested helper in a private process-lifetime temporary directory during
+  explicit extraction, with cancellation, containment, size and digest checks;
+  then run the existing pinned runtime validation before execution. Keep unpacking
+  off startup/model-load paths. Source builds keep ordinary helper publish folders.
+- Native helper builds check the SDK selected by each `global.json` through PATH
+  or an explicit `--dotnet` executable. Never assume a machine-specific SDK cache.
+  Use the declared stable baseline when available, with compatible stable SDK
+  roll-forward to newer releases. Let .NET resolve this policy in the project
+  directory; do not reject a selected SDK merely because its version is newer.
+  The app build checks this prerequisite before dependency installation or asset
+  downloads; a missing SDK emits installation guidance and stops without a traceback.
 - `features.ini` is build-time only: bake a temporary module and remove it after
   building. Source enables all features; frozen UI gates never replace backend
   authorization. Missing/malformed values default to enabled.

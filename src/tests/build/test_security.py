@@ -133,6 +133,7 @@ def test_pyinstaller_command_bundles_third_party_notices(monkeypatch):
     monkeypatch.setattr(build, "write_baked_features", lambda _features: None)
     monkeypatch.setattr(build, "clean_baked_features", lambda: None)
     monkeypatch.setattr(build, "write_version_file", lambda: "version.txt")
+    monkeypatch.setattr(build, "prepare_packaged_assets", lambda _destination: None)
     monkeypatch.setattr(build, "run", lambda command: commands.append(command))
 
     build.build(python="python", onedir=True, console=True)

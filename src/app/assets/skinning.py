@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from core.geometry.skinning import SkinningSource, decode_skinning
+from core.geometry.migoto_dump import parse_vertex_dump
 from . import paths
 
 
@@ -12,6 +13,20 @@ class CapturedSkinning:
     stride: int
     channels: tuple
     vertices: tuple
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedDumpSkinning:
+    file: str
+    vertices: tuple
+    index_file: str = ""
+
+
+def capture_dump_skinning(root, file, layout, vertices, index_file=None):
+    relative = paths.relative_asset_path(root, file)
+    declared = any(item.name == "BLENDINDICES" and item.index == 0 for item in layout.semantics)
+    index_relative = paths.relative_asset_path(root, index_file) if index_file else ""
+    return CapturedDumpSkinning(relative, tuple(vertices), index_relative or "") if relative and declared else None
 
 
 def capture_skinning(root, file, layout, vertices):
@@ -36,6 +51,12 @@ def decode_captured_skinning(root, manifest):
     file = paths.safe_asset_path(root, manifest.file)
     if not file:
         raise ValueError("The captured skin-weight resource is unavailable.")
+    if isinstance(manifest, CapturedDumpSkinning):
+        dump = parse_vertex_dump(file, include_skinning=True)
+        if dump.blend_data is None:
+            raise ValueError("The captured vertex dump has no supported skin weights.")
+        source = SkinningSource(manifest.file, 32, 4, "gimi_f32_u32_4")
+        return source, decode_skinning(source, dump.blend_data, manifest.vertices)
     with open(file, "rb") as stream:
         data = stream.read(512 * 1024 * 1024 + 1)
     if len(data) > 512 * 1024 * 1024:

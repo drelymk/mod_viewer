@@ -57,3 +57,23 @@ upstream files.
 The helper runs only for explicit game extraction/index jobs and writes native
 mesh/property/animation data into private staging. CUE4Parse-MCP is no longer
 distributed or invoked.
+
+## ZZZ extraction reader
+
+- Original AnimeStudio revision `76234e9f6f5a839504f41f9612719529fe2309a5`
+  provides the Unity reader and ZZZ V2 ACL decoder source (MIT).
+  Source: https://github.com/Escartem/AnimeStudio
+- The build excludes the GUI, media exporters, FBX library and Ooz distribution.
+  It reuses the pinned WuWa Oodle decoder described above. The ZZZ native ACL
+  source embeds ACL/RTM code under their MIT licenses; those notices are retained.
+- Managed libraries use committed NuGet dependency locks and retain their license
+  texts, package metadata and inventory under `assets/zzz-extract/licenses`.
+  The source license is included there too. Build pins and deliberate reader
+  adaptations are documented in `tools/build_zzz_extract.py` and
+  `native/zzz-extract/README.md`.
+
+Portable distributions retain these native dependencies and their license files in
+`assets/extractors.zip`, with identical file content shared between the helpers.
+The selected helper and its licenses are materialized in a private temporary
+directory when extraction is requested. Source publish directories retain the
+paths listed above. Debug symbols are omitted from the portable distribution.

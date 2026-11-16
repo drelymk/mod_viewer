@@ -23,6 +23,7 @@ import argparse
 import configparser
 import glob
 import hashlib
+import importlib.util
 import ntpath
 import os
 import shutil
@@ -531,9 +532,32 @@ def clean():
         os.remove(spec)
 
 
-def build(onedir=False, console=False, python=None):
+def prepare_packaged_assets(destination):
+    """Keep browser assets intact and store identical helper files only once."""
+    script = os.path.join(HERE, "..", "tools", "pack_game_extract.py")
+    spec = importlib.util.spec_from_file_location("pack_game_extract", script)
+    packer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(packer)
+    for name in os.listdir(ASSETS):
+        if name in (*packer.KINDS, "extractors.zip"):
+            continue
+        source = os.path.join(ASSETS, name)
+        target = os.path.join(destination, name)
+        if os.path.isdir(source):
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+    result = packer.pack_helpers(ASSETS, os.path.join(destination, "extractors.zip"))
+    log(f"Native helper payload: {result['original'] / 1048576:.1f} MiB -> "
+        f"{result['packed'] / 1048576:.1f} MiB (shared compressed files)")
+
+
+def build(onedir=False, console=False, python=None, *, distpath=None, workpath=None):
     write_baked_features(resolve_features(FEATURES_FILE))
+    packaged = None
     try:
+        packaged = tempfile.TemporaryDirectory(prefix="mod-viewer-build-assets-")
+        prepare_packaged_assets(packaged.name)
         cmd = [
             python or sys.executable, "-m", "PyInstaller",
             "--noconfirm", "--clean",
@@ -547,7 +571,7 @@ def build(onedir=False, console=False, python=None):
             # compress, even if upx happens to be on PATH.
             "--noupx",
             # Three.js, served to the webview from a localhost port at runtime.
-            "--add-data", f"{ASSETS}{os.pathsep}assets",
+            "--add-data", f"{packaged.name}{os.pathsep}assets",
             # Make the third-party license notice available beside the packaged
             # application rather than only in the source checkout.
             "--add-data", f"{THIRD_PARTY_NOTICES}{os.pathsep}.",
@@ -557,6 +581,7 @@ def build(onedir=False, console=False, python=None):
             # analysis can miss them.
             "--hidden-import", "webview.platforms.edgechromium",
             "--hidden-import", "clr_loader",
+            "--hidden-import", "lzma",
             # Include the installed NumPy distribution's license notices.
             "--copy-metadata", "numpy",
             # Trimming these keeps the single-file payload from ballooning.
@@ -566,11 +591,17 @@ def build(onedir=False, console=False, python=None):
             os.path.join(HERE, ENTRY),
         ]
         icon = os.path.join(HERE, "icon.ico")
+        if distpath:
+            cmd += ["--distpath", os.fspath(distpath)]
+        if workpath:
+            cmd += ["--workpath", os.fspath(workpath), "--specpath", os.fspath(workpath)]
         if os.path.isfile(icon):
             cmd += ["--icon", icon]
         run(cmd)
     finally:
         clean_baked_features()
+        if packaged is not None:
+            packaged.cleanup()
 
 
 def report(onedir):
@@ -596,17 +627,25 @@ def main():
     ap.add_argument("--skip-deps", action="store_true", help="skip pip install")
     ap.add_argument("--refresh-assets", action="store_true",
                     help="re-download pinned browser assets")
+    ap.add_argument("--dotnet", default="dotnet",
+                    help="dotnet executable providing the required SDK (default: PATH)")
     ap.add_argument("--rebuild-bootloader", action="store_true",
                     help="recompile PyInstaller's bootloader in an isolated venv "
                          "(clears most antivirus false positives; needs a C compiler). "
                          "Reuses the existing build environment if already compiled; "
                          "remove it to redo.")
     args = ap.parse_args()
+    if os.path.dirname(args.dotnet):
+        args.dotnet = os.path.abspath(args.dotnet)
 
     if sys.version_info < MIN_PYTHON:
         sys.exit("Python 3.10.1+ required.")
 
     os.chdir(HERE)
+    helpers = [os.path.join(HERE, "..", "tools", name)
+               for name in ("build_game_extract.py", "build_zzz_extract.py")]
+    for helper in helpers:
+        run([sys.executable, helper, "--check-sdk", "--dotnet", args.dotnet])
     python = None
     if args.rebuild_bootloader:
         python = prepare_bootloader_venv()
@@ -616,7 +655,8 @@ def main():
     verify_assets()
     verify_web()
     verify_features()
-    run([sys.executable, os.path.join(HERE, "..", "tools", "build_game_extract.py"), "--verify-format"])
+    for helper in helpers:
+        run([sys.executable, helper, "--verify-format", "--dotnet", args.dotnet])
     clean()
     build(onedir=args.onedir, console=args.console, python=python)
     report(args.onedir)

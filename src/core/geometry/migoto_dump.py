@@ -47,6 +47,7 @@ class ParsedVertexDump:
     positions: bytes
     normals: bytes | None
     uvs: bytes | None
+    blend_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +69,7 @@ class ParsedIndexDump:
 
 
 _SEMANTIC_RE = re.compile(
-    r"\b(POSITION|NORMAL|TEXCOORD)(\d*)\b", re.I)
+    r"\b(POSITION|NORMAL|TEXCOORD|BLENDWEIGHTS?|BLENDINDICES)(\d*)\b", re.I)
 _INDEX_RE = re.compile(r"(?:vb\d+\s*\[\s*(\d+)\s*\]|vertex\s*(\d+)|"
                        r"\b(?:v|vertex)\s*[:=]?\s*(\d+))", re.I)
 _NUMBER_RE = re.compile(
@@ -166,13 +167,15 @@ def _layout_declaration(line, semantics, state):
         format_match.group(1) if format_match else None)
 
 
-def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT):
+def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT, include_skinning=False):
     """Stream one text VB dump and return canonical XYZ/UV byte arrays."""
     path = _readable_path(path)
     max_vertices = min(int(max_vertices), MAX_VERTEX_COUNT)
     state = {"stride": 0, "count": None}
     declarations = {}
     values = {"POSITION": {}, "NORMAL": {}, "TEXCOORD": {}}
+    if include_skinning:
+        values.update(BLENDWEIGHTS={}, BLENDWEIGHT={}, BLENDINDICES={})
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as stream:
             for line_number, raw_line in enumerate(stream, 1):
@@ -194,7 +197,7 @@ def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT):
                     continue
                 text = line.split(":", 1)[1] if ":" in line else line
                 parsed = _float_values(text)
-                needed = 2 if name == "TEXCOORD" else 3
+                needed = 1 if name.startswith("BLEND") else 2 if name == "TEXCOORD" else 3
                 if len(parsed) < needed:
                     raise MigotoDumpError(
                         f"Dump line {line_number} has an incomplete {name} value.")
@@ -202,7 +205,7 @@ def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT):
                     raise MigotoDumpError("Dump vertex count exceeds the safety limit.")
                 if len(values[name]) >= max_vertices and vertex not in values[name]:
                     raise MigotoDumpError("Dump vertex count exceeds the safety limit.")
-                values[name][vertex] = tuple(parsed[:needed])
+                values[name][vertex] = tuple(parsed if name.startswith("BLEND") else parsed[:needed])
     except OSError as error:
         raise MigotoDumpError(f"Could not read dump: {error}") from error
 
@@ -231,8 +234,29 @@ def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT):
     semantic_items = tuple(declarations.values())
     layout = DumpVertexLayout(
         int(state["stride"] or 0), vertex_count, semantic_items)
+    blend = None
+    if include_skinning and values["BLENDINDICES"]:
+        ids = values["BLENDINDICES"]
+        weights = values["BLENDWEIGHTS"] or values["BLENDWEIGHT"]
+        blend = bytearray(vertex_count * 32)
+        rigid = next((semantic for semantic in semantic_items if semantic.name == "BLENDINDICES" and semantic.index == 0), None)
+        rigid_layout = (rigid is not None and (rigid.format or "").removeprefix("DXGI_FORMAT_") == "R32_UINT"
+                        and not any(semantic.name in ("BLENDWEIGHT", "BLENDWEIGHTS") for semantic in semantic_items))
+        for vertex in range(vertex_count):
+            indices = ids.get(vertex, ())
+            amounts = weights.get(vertex, ())
+            if not amounts and len(indices) == 1 and rigid_layout:
+                amounts = (1.0,)
+            if (not 1 <= len(indices) <= 4 or len(amounts) != len(indices)
+                    or any(v != int(v) or not 0 <= v < 2 ** 32 for v in indices)
+                    or any(not 0 <= v <= 1 for v in amounts)):
+                raise MigotoDumpError("Dump contains an incomplete or invalid skin-weight record.")
+            struct.pack_into("<4f4I", blend, vertex * 32,
+                             *amounts, *([0] * (4 - len(amounts))),
+                             *(int(v) for v in indices), *([0] * (4 - len(indices))))
+        blend = bytes(blend)
     return ParsedVertexDump(layout, pack("POSITION", 3),
-                             pack("NORMAL", 3), pack("TEXCOORD", 2))
+                             pack("NORMAL", 3), pack("TEXCOORD", 2), blend)
 
 
 def _index_row_values(line):

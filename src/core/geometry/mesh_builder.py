@@ -224,7 +224,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             if draw.skinning_source is not None:
                 rest_positions, morph_signature, morph_topology = b"", (), ()
                 binding = draw.asset_binding
-                if getattr(binding, "asset_type", None) == "WWMI":
+                if getattr(binding, "asset_type", None) in ("WWMI", "ZZMI"):
                     position_range = publication["pos"]
                     rest_positions = (bytes(geometry.data[position_range["offset"]:
                                       position_range["offset"] + position_range["length"]])

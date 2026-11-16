@@ -12,6 +12,8 @@ const translationA = new Vector3();
 const translationB = new Vector3();
 const rotationA = new Quaternion();
 const rotationB = new Quaternion();
+const scaleA = new Vector3();
+const scaleB = new Vector3();
 
 function bindPose(rig) {
   let cached = bindCache.get(rig);
@@ -39,14 +41,17 @@ export function sampleAnimation(rig, clip, values, time) {
   const second = Math.min(first + 1, clip.frame_count - 1);
   const alpha = position - first;
   const count = rig.bones.length;
+  const width = clip.layout === 'frame-major-tqs-f32le' ? 10 : 7;
   const { scales, inverse, worlds } = bindPose(rig);
   const result = new Map();
   for (let index = 0; index < count; index++) {
-    const a = (first * count + index) * 7;
-    const b = (second * count + index) * 7;
+    const a = (first * count + index) * width;
+    const b = (second * count + index) * width;
     translationA.fromArray(values, a).lerp(translationB.fromArray(values, b), alpha);
     rotationA.fromArray(values, a + 3).slerp(rotationB.fromArray(values, b + 3), alpha);
-    const world = worlds[index].compose(translationA, rotationA, scales[index]);
+    const scale =
+      width === 10 ? scaleA.fromArray(values, a + 7).lerp(scaleB.fromArray(values, b + 7), alpha) : scales[index];
+    const world = worlds[index].compose(translationA, rotationA, scale);
     const parent = rig.bones[index].parent;
     if (parent >= 0) world.premultiply(worlds[parent]);
     result.set(index, new Matrix4().multiplyMatrices(world, inverse[index]));
@@ -138,6 +143,14 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
       if (response?.status !== 'ok')
         throw response?.error ? new Error(response.error) : animationError('animation.unavailable');
       const metadata = response.clip;
+      const width =
+        metadata.layout === 'frame-major-tqs-f32le' && metadata.version === 2
+          ? 10
+          : (!metadata.layout || metadata.layout === 'frame-major-tq-f32le') &&
+              (metadata.version === undefined || metadata.version === 1)
+            ? 7
+            : 0;
+      if (!width) throw animationError('animation.rigMismatch');
       if (metadata.skeleton_id !== rig.id || metadata.bone_count !== rig.bones.length)
         throw animationError('animation.rigMismatch');
       const download = await fetch(metadata.data.url, { cache: 'no-store' });
@@ -146,7 +159,8 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
       if (current !== generation || getRig() !== rig) return;
       if (
         buffer.byteLength !== metadata.data.length ||
-        buffer.byteLength !== metadata.frame_count * (rig.bones.length * 28 + (metadata.morphs?.names.length || 0) * 4)
+        buffer.byteLength !==
+          metadata.frame_count * (rig.bones.length * width * 4 + (metadata.morphs?.names.length || 0) * 4)
       )
         throw animationError('animation.downloadIncomplete');
       if (metadata.morphs) {

@@ -68,7 +68,7 @@ export function sampleMorphWeights(clip, values, time) {
   const position = Math.max(0, Math.min(1, time / clip.duration)) * (clip.frame_count - 1);
   const first = Math.floor(position),
     next = Math.min(first + 1, clip.frame_count - 1);
-  const offset = clip.frame_count * clip.bone_count * 7;
+  const offset = clip.frame_count * clip.bone_count * (clip.layout === 'frame-major-tqs-f32le' ? 10 : 7);
   const count = morphs.names.length;
   for (let index = 0; index < count; index++) {
     const left = values[offset + first * count + index];

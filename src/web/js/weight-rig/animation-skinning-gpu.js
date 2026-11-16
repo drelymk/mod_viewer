@@ -1,5 +1,5 @@
-import { Matrix4, Quaternion } from 'three';
-import { Fn, If, Loop, float, uint, instanceIndex, vec3, vec4 } from 'three/tsl';
+import { Matrix3, Matrix4 } from 'three';
+import { Fn, If, Loop, float, uint, instanceIndex, vec3 } from 'three/tsl';
 import { createGpuDeformation, gpuDeformationSupported } from '../mesh/deformation-gpu.js';
 import { applyWeightedNormalDeformationInto, applyWeightedTransformDeformationInto } from './weight-deformation.js';
 import { morphBaseline } from './animation-morphs.js';
@@ -10,7 +10,9 @@ export function createAnimationSkinningGpu(mesh, state) {
   if (mesh.userData.animationState) return null;
   const bones = state.boneIds;
   const vertexCount = state.baselinePositions.length / 3;
-  const stride = 22; // matrix, quaternion, and independent presence flags
+  const stride = 27; // position matrix, normal matrix, independent presence flags
+  const rotationMatrix = new Matrix4();
+  const normalMatrix = new Matrix3();
   const morph = state.animationMorph || null;
   const paletteSize = (bones.length + 1) * stride;
   const sourceLength = state.baselinePositions.length + (morph ? morph.ranges.length + morph.entries.length : 0);
@@ -40,8 +42,8 @@ export function createAnimationSkinningGpu(mesh, state) {
       const rotations = new Map();
       for (const [bone, slot] of slots) {
         const offset = slot * stride;
-        if (values[offset + 20]) transforms.set(bone, new Matrix4().fromArray(values, offset));
-        if (values[offset + 21]) rotations.set(bone, new Quaternion().fromArray(values, offset + 16));
+        if (values[offset + 25]) transforms.set(bone, new Matrix4().fromArray(values, offset));
+        if (values[offset + 26]) rotations.set(bone, new Matrix3().fromArray(values, offset + 16));
       }
       const baseline = morphBaseline(state, morph ? { ...morph, weights: values.subarray(paletteSize) } : null);
       const position = mesh.geometry.attributes.position.array;
@@ -109,7 +111,7 @@ export function createAnimationSkinningGpu(mesh, state) {
         const weight = weights.element(blend);
         If(weight.greaterThan(0), () => {
           const bone = indices.element(blend).mul(stride);
-          If(palette.element(bone.add(20)).greaterThan(0), () => {
+          If(palette.element(bone.add(25)).greaterThan(0), () => {
             const transformed = read3(palette, bone)
               .mul(p.x)
               .add(read3(palette, bone.add(4)).mul(p.y))
@@ -119,9 +121,11 @@ export function createAnimationSkinningGpu(mesh, state) {
             positionWeight.addAssign(weight);
           });
           if (n)
-            If(palette.element(bone.add(21)).greaterThan(0), () => {
-              const q = vec4(read3(palette, bone.add(16)), palette.element(bone.add(19)));
-              const rotated = n.add(q.xyz.cross(q.xyz.cross(n).add(n.mul(q.w))).mul(2));
+            If(palette.element(bone.add(26)).greaterThan(0), () => {
+              const rotated = read3(palette, bone.add(16))
+                .mul(n.x)
+                .add(read3(palette, bone.add(19)).mul(n.y))
+                .add(read3(palette, bone.add(22)).mul(n.z));
               sumNormal.addAssign(rotated.mul(weight));
               normalWeight.addAssign(weight);
             });
@@ -159,11 +163,14 @@ export function createAnimationSkinningGpu(mesh, state) {
         const rotation = rotations?.get(bone);
         if (matrix) {
           matrix.toArray(values, offset);
-          values[offset + 20] = 1;
+          values[offset + 25] = 1;
         }
         if (rotation) {
-          rotation.toArray(values, offset + 16);
-          values[offset + 21] = 1;
+          const normal = rotation.isMatrix3
+            ? rotation
+            : normalMatrix.setFromMatrix4(rotationMatrix.makeRotationFromQuaternion(rotation));
+          normal.toArray(values, offset + 16);
+          values[offset + 26] = 1;
         }
       }
       if (morph) values.set(morph.weights, paletteSize);

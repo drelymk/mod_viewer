@@ -1,4 +1,4 @@
-"""Optional authored skeletons attached to exact, registered WWMI Assets."""
+"""Optional authored skeletons attached to exact, registered game Assets."""
 
 import hashlib
 import json
@@ -8,7 +8,8 @@ import re
 import struct
 from itertools import product
 
-from core.geometry.migoto_format import parse_fmt
+from core.geometry.migoto_format import MigotoBinaryLayout, MigotoElement, parse_fmt
+from core.geometry.migoto_dump import parse_vertex_dump, parse_index_dump, pack_indices
 
 from . import paths
 
@@ -58,6 +59,21 @@ def _vector(value, size):
     return value
 
 
+def _bone_mapping(value, count, *, sparse=False, maximum=4096, unique=True):
+    if sparse and isinstance(value, dict):
+        if (not 1 <= len(value) <= maximum or any(not isinstance(key, str) or not key.isascii()
+                or not key.isdigit() or str(int(key)) != key or int(key) >= maximum for key in value)):
+            raise ValueError("Invalid sparse rig bone mapping.")
+        values = list(value.values())
+    elif isinstance(value, list) and 1 <= len(value) <= maximum:
+        values = value
+    else:
+        raise ValueError("Invalid rig bone mapping.")
+    if any(type(v) is not int or not 0 <= v < count for v in values) or (unique and len(set(values)) != len(values)):
+        raise ValueError("Invalid rig bone mapping.")
+    return dict(value) if isinstance(value, dict) else list(value)
+
+
 def _merged_palette(raw, palettes):
     if raw is None:
         return []
@@ -97,7 +113,7 @@ def _merged_palette(raw, palettes):
 def validate_rig(raw):
     """Normalize a bounded, topologically ordered skeleton and local palettes."""
     if (not isinstance(raw, dict) or raw.get("format") != "mod-viewer-rig"
-            or type(raw.get("version")) is not int or raw["version"] != 1
+            or type(raw.get("version")) is not int or raw["version"] not in (1, 2)
             or raw.get("coordinate_space") != "asset"):
         raise ValueError("Unsupported rig format.")
     bones = raw.get("bones")
@@ -119,7 +135,7 @@ def validate_rig(raw):
         # Game skeletons carry float noise (up to ~1e-3) on otherwise uniform scales, and mirrored
         # bones use a uniform negative scale (for example -1 on every axis).
         if (min(abs(value) for value in scale) < 1e-6
-                or any(abs(value - scale[0]) > 2e-3 * abs(scale[0]) for value in scale)):
+                or (raw["version"] == 1 and any(abs(value - scale[0]) > 2e-3 * abs(scale[0]) for value in scale))):
             raise ValueError("Reference bone scales must be uniform with a magnitude of at least 0.000001.")
         rotation = _vector(bone.get("rotation"), 4)
         length = math.sqrt(sum(v * v for v in rotation))
@@ -152,14 +168,11 @@ def validate_rig(raw):
             raise ValueError("Duplicate rig palette.")
         identities.add(identity)
         mapping = component.get("bone_map")
-        if (not isinstance(mapping, list) or not 1 <= len(mapping) <= _MAX_BONES
-                or any(type(v) is not int or not 0 <= v < len(bones) for v in mapping)
-                or len(set(mapping)) != len(mapping)):
-            raise ValueError("Invalid rig bone mapping.")
+        mapping = _bone_mapping(mapping, len(bones), sparse=raw["version"] == 2)
         for field in ("vertex_sha256", "index_sha256"):
             if not isinstance(component.get(field), str) or not _SHA256.fullmatch(component[field]):
                 raise ValueError("Invalid rig geometry fingerprint.")
-        palettes.append({**component, "bone_map": list(mapping)})
+        palettes.append({**component, "bone_map": mapping})
     skin_bindings = raw.get("skin_bindings", [])
     if not isinstance(skin_bindings, list) or len(skin_bindings) > 1024:
         raise ValueError("Invalid skin bindings.")
@@ -171,14 +184,14 @@ def validate_rig(raw):
         digest, encoding = profile.get("sha256"), profile.get("encoding")
         mapping = profile.get("bone_map")
         if (not isinstance(digest, str) or not _SHA256.fullmatch(digest)
-                or encoding not in ("wwmi_u8_4", "wwmi_u8_8")
-                or not isinstance(mapping, list) or not 1 <= len(mapping) <= 256
-                or any(type(v) is not int or not 0 <= v < len(bones) for v in mapping)
+                or encoding not in ("wwmi_u8_4", "wwmi_u8_8", "gimi_f32_u32_4", "rigid_u32_1")
                 or (digest, encoding) in profile_keys):
             raise ValueError("Invalid or duplicate skin binding.")
+        mapping = _bone_mapping(mapping, len(bones), sparse=raw["version"] == 2,
+                                maximum=256 if encoding.startswith("wwmi_") else _MAX_BONES, unique=False)
         profile_keys.add((digest, encoding))
-        profiles.append(dict(sha256=digest, encoding=encoding, bone_map=list(mapping)))
-    document = dict(format="mod-viewer-rig", version=1, coordinate_space="asset",
+        profiles.append(dict(sha256=digest, encoding=encoding, bone_map=mapping))
+    document = dict(format="mod-viewer-rig", version=raw["version"], coordinate_space="asset",
                     bones=normalized, components=palettes, skin_bindings=profiles)
     merged = _merged_palette(raw.get("wwmi_merged_palette"), palettes)
     if merged:
@@ -272,14 +285,15 @@ def _mod_morph_uv_triangles(reference, vertex_count, topology):
             unique[point] = None if point in unique else index
         triangles = {}
         for a, b, c in struct.iter_unpack(reference["index_format"], original_indices):
-            ids = (a, c, b)
-            for shift in range(3):
-                row = ids[shift:] + ids[:shift]
-                triangle = tuple(points[index] for index in row)
-                if triangle not in triangles:
-                    triangles[triangle] = row
-                elif triangles[triangle] != row:
-                    triangles[triangle] = None
+            for order in reference.get("triangle_orders", ((0, 2, 1),)):
+                ids = tuple((a, b, c)[index] for index in order)
+                for shift in range(3):
+                    row = ids[shift:] + ids[:shift]
+                    triangle = tuple(points[index] for index in row)
+                    if triangle not in triangles:
+                        triangles[triangle] = row
+                    elif triangles[triangle] != row:
+                        triangles[triangle] = None
         reference["triangles"], reference["unique_uvs"] = triangles, unique
     triangles, unique = reference["triangles"], reference["unique_uvs"]
     points = [uvs[offset:offset + 8] for offset in range(0, len(uvs), 8)]
@@ -303,12 +317,13 @@ def _mod_morph_uv_triangles(reference, vertex_count, topology):
     return mapping, conflicts
 
 
-def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, signature=(), topology=()):
+def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, signature=(), topology=(), *, reference=None):
     """Prefer proven topology, leaving ambiguous position/UV matches unmapped."""
     if not positions or len(positions) % 12:
         return None
     try:
-        reference = _morph_reference(directory, reference_dir, palette, cache)
+        if reference is None:
+            reference = _morph_reference(directory, reference_dir, palette, cache)
         if reference is None:
             return None
         exact_topology = len(signature) == 2 and len(positions) // 12 == reference["count"]
@@ -379,6 +394,9 @@ def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
     Unsupported skin namespaces, changed reference geometry and incomplete
     palettes keep the ordinary inferred-rig path. Authored weights are untouched.
     """
+    if binding is not None and binding.asset_type == "ZZMI":
+        return _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache,
+                                blend_sha256, captured_palette, positions, morph_signature, morph_topology)
     if (binding is None or binding.status != "exact"
             or binding.range_status != "exact" or binding.asset_type != "WWMI"
             or os.path.normcase(binding.root or "") not in enabled_roots
@@ -465,8 +483,102 @@ def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
         if not captured_palette:
             vertices = _mod_morph_vertices(directory, reference_dir, palette, positions, cache, morph_signature, morph_topology)
             morph_binding = {**morph_binding, "vertices": vertices} if vertices is not None else None
-        return dict(id=rig["id"], bones=rig["bones"], bone_map=mapping,
+        return dict(id=rig["id"], version=rig["version"], bones=rig["bones"], bone_map=mapping,
                     humanoid_controls=rig.get("humanoid_controls"),
                     morph_binding=morph_binding)
+    except (OSError, ValueError, TypeError, KeyError, IndexError, RecursionError):
+        return None
+
+
+def _zzz_morph_reference(directory, palette, cache):
+    key = "zzz-morph-reference", directory, palette["vertex_file"], palette["index_file"], palette["first_index"], palette["index_count"]
+    if key not in cache:
+        cache[key] = None
+        vb = paths.safe_asset_path(directory, palette["vertex_file"])
+        ib = paths.safe_asset_path(directory, palette["index_file"])
+        if not vb or not ib:
+            return None
+        dump_key = "zzz-morph-dump", vb
+        if dump_key not in cache:
+            cache[dump_key] = parse_vertex_dump(vb)
+        dump = cache[dump_key]
+        if dump.layout.vertex_count > 100000 or dump.uvs is None:
+            return None
+        index_key = "zzz-morph-indices", ib
+        if index_key not in cache:
+            cache[index_key] = parse_index_dump(ib, vertex_count=dump.layout.vertex_count)
+        index = cache[index_key]
+        first = palette["first_index"] - index.first_index
+        count = palette["index_count"]
+        if first < 0 or first % 3 or first + count > len(index.indices):
+            return None
+        packed = pack_indices(index.indices[first:first + count])
+        layout = MigotoBinaryLayout(12, "trianglelist", "R32_UINT", (MigotoElement("POSITION", 0, "R32G32B32_FLOAT", 0),))
+        cache[key] = dict(layout=layout, vertices=dump.positions, count=dump.layout.vertex_count,
+            topology=(packed, dump.uvs), index_format="<3I",
+            triangle_orders=((0, 1, 2), (0, 2, 1)),
+            signature=(hashlib.sha256(packed).hexdigest(), hashlib.sha256(dump.uvs).hexdigest()))
+    return cache[key]
+
+
+def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, captured, positions, signature, topology):
+    if (binding.status != "exact" or binding.range_status != "exact"
+            or os.path.normcase(binding.root or "") not in enabled_roots
+            or source.encoding != "gimi_f32_u32_4" or source.blend_remap or source.vertex_vg_file
+            or source.bone_id_offset):
+        return None
+    try:
+        directory = paths.safe_asset_dir(binding.root, binding.asset)
+        file = paths.safe_asset_path(directory, RIG_FILENAME) if directory else None
+        if not file:
+            return None
+        if file not in cache:
+            cache[file] = validate_rig(_json(file))
+        rig = cache[file]
+        if rig["version"] != 2:
+            return None
+        matches = [p for p in rig["components"] if (p["geometry_hash"], p["component_ordinal"], p["first_index"], p["index_count"])
+                   == (binding.geometry_hash, binding.component_ordinal, binding.first_index, binding.index_count)]
+        if len(matches) != 1:
+            return None
+        palette = matches[0]
+        metadata = paths.safe_asset_path(binding.root, binding.metadata)
+        expected = paths.safe_asset_path(directory, palette["metadata_file"])
+        if not metadata or metadata != expected:
+            return None
+        for relative, fingerprint in ((palette["metadata_file"], palette["metadata_sha256"]),
+                                      (palette["vertex_file"], palette["vertex_sha256"]),
+                                      (palette["index_file"], palette["index_sha256"])):
+            reference = paths.safe_asset_path(directory, relative)
+            if not reference or not isinstance(fingerprint, str) or not _SHA256.fullmatch(fingerprint):
+                return None
+            key = reference, fingerprint
+            if key not in cache:
+                if os.path.getsize(reference) > 512 * 1024 * 1024:
+                    return None
+                with open(reference, "rb") as stream:
+                    cache[key] = hashlib.file_digest(stream, "sha256").hexdigest() == fingerprint
+            if not cache[key]:
+                return None
+        mapping = palette["bone_map"]
+        # A captured palette is proven during extraction. A mod must retain the
+        # exact float Blend stream fingerprint; numeric IDs alone cannot admit it.
+        if not captured:
+            profiles = [p for p in rig["skin_bindings"] if p["encoding"] == source.encoding and p["sha256"] == digest]
+            if len(profiles) != 1:
+                return None
+            mapping = profiles[0]["bone_map"]
+        if not isinstance(mapping, dict):
+            mapping = {str(i): value for i, value in enumerate(mapping)}
+        if any(str(bone) not in mapping for bone in bone_ids):
+            return None
+        morph_binding = {key: palette[key] for key in ("vertex_sha256", "index_sha256")}
+        if not captured:
+            reference = _zzz_morph_reference(directory, palette, cache)
+            vertices = (_mod_morph_vertices(directory, directory, palette, positions, cache, signature, topology,
+                                            reference=reference) if reference is not None else None)
+            morph_binding = {**morph_binding, "vertices": vertices} if vertices is not None else None
+        return dict(id=rig["id"], version=2, bones=rig["bones"], bone_map=mapping,
+                    humanoid_controls=rig.get("humanoid_controls"), morph_binding=morph_binding)
     except (OSError, ValueError, TypeError, KeyError, IndexError, RecursionError):
         return None

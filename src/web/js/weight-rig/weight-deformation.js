@@ -402,7 +402,9 @@ export function applyWeightedNormalDeformationInto(
       const rotation = transformForBone(rotationByBoneId, indices[start + influence]);
       if (!rotation || !Number.isFinite(weight) || weight <= 0) continue;
       transformedWeight += weight;
-      transformed.copy(baseline).applyQuaternion(rotation);
+      transformed.copy(baseline);
+      if (rotation.isMatrix3) transformed.applyMatrix3(rotation);
+      else transformed.applyQuaternion(rotation);
       x += transformed.x * weight;
       y += transformed.y * weight;
       z += transformed.z * weight;
