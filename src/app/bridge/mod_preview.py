@@ -423,8 +423,8 @@ class ModPreview:
             game_rigs = {}
             rig_cache = {}
             enabled_roots = {os.path.normcase(item["path"]) for item in
-                             asset_folders.enabled_entries_for_type(
-                                 context.asset_folders, "WWMI")}
+                             [*asset_folders.enabled_entries_for_type(context.asset_folders, "WWMI"),
+                              *asset_folders.enabled_entries_for_type(context.asset_folders, "ZZMI")]}
             pieces = []
             offset = 0
             buffers = BufferStore(
@@ -456,7 +456,7 @@ class ModPreview:
                         rig_id = game_rig["id"]
                         if rig_id not in game_rigs:
                             game_rigs[rig_id] = {
-                                "id": rig_id, "bones": game_rig["bones"],
+                                "id": rig_id, "version": game_rig["version"], "bones": game_rig["bones"],
                                 "humanoid_controls": game_rig["humanoid_controls"],
                                 **self._animations.catalog(
                                     selected.asset_binding.root, selected.asset_binding.asset, game_rig,

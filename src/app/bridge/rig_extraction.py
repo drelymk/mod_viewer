@@ -241,6 +241,8 @@ class RigExtraction:
             except ExtractionCancelled:
                 raise
             except Exception:
+                if getattr(backend, "requires_index", False):
+                    raise
                 # The index is only an accelerator; native searches remain correct without it.
                 index = None
             result, fingerprints = backend.build(client, entry["path"], record, output, query, progress, cancel, index)

@@ -16,7 +16,7 @@ mod-analysis/
 
 __pycache__/
 *.pyc
-.pytest_tmp/
+.pytest_tmp*/
 
 # Application assets
 src/asset-index/
@@ -31,3 +31,10 @@ node_modules/
 /native/game-extract/bin/
 /native/game-extract/obj/
 /native/game-extract/packages.lock.json
+/native/zzz-extract/bin/
+/native/zzz-extract/obj/
+/native/zzz-extract/*.packages.lock.json
+/native/zzz-extract/packages.lock.json
+/native/zzz-extract/reader/bin/
+/native/zzz-extract/reader/obj/
+/native/zzz-extract/reader/*.packages.lock.json

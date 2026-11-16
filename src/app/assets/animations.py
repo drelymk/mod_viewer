@@ -33,15 +33,16 @@ def _read_clip(directory, entry, rig, *, validated_morphs=None):
     if not isinstance(raw, dict):
         raise ValueError("Invalid animation metadata.")
     frames, bones, duration = raw.get("frame_count"), raw.get("bone_count"), raw.get("duration")
-    if (raw.get("format") != "mod-viewer-animation" or type(raw.get("version")) is not int or raw["version"] != 1
-            or raw.get("coordinate_space") != "asset" or raw.get("layout") != "frame-major-tq-f32le"
+    width = {"frame-major-tq-f32le": 7, "frame-major-tqs-f32le": 10}.get(raw.get("layout"))
+    if (raw.get("format") != "mod-viewer-animation" or type(raw.get("version")) is not int or raw["version"] not in (1, 2)
+            or raw.get("coordinate_space") != "asset" or width != (7 if raw["version"] == 1 else 10)
             or raw.get("skeleton_id") != rig["id"]
             or type(frames) is not int or not 2 <= frames <= 60000
             or type(bones) is not int or bones != len(rig["bones"])
             or duration != entry["duration"] or type(duration) not in (int, float)
             or not math.isfinite(duration) or not 0 < duration <= 3600):
         raise ValueError("Animation does not match the loaded rig.")
-    bone_size = frames * bones * 28
+    bone_size = frames * bones * width * 4
     names = morph_names(raw.get("morphs"))
     size = bone_size + frames * len(names) * 4
     if size > _MAX_BYTES:
@@ -54,9 +55,9 @@ def _read_clip(directory, entry, rig, *, validated_morphs=None):
         data = stream.read(size + 1)
     if len(data) != size or hashlib.sha256(data).hexdigest() != raw.get("sha256"):
         raise ValueError("Animation data is incomplete or has changed.")
-    for row in struct.iter_unpack("<7f", memoryview(data)[:bone_size]):
+    for row in struct.iter_unpack("<" + str(width) + "f", memoryview(data)[:bone_size]):
         if (not all(math.isfinite(v) and abs(v) <= 1e6 for v in row)
-                or abs(sum(v * v for v in row[3:]) - 1) > 0.001):
+                or abs(sum(v * v for v in row[3:7]) - 1) > 0.001):
             raise ValueError("Animation contains invalid transforms.")
     morph_data = None
     if names:
@@ -149,6 +150,7 @@ class AnimationSessions:
                 if morph_url:
                     session["urls"].add(morph_url)
             clip = {"id": clip_id, "name": entry["name"], "skeleton_id": raw["skeleton_id"],
+                    "version": raw["version"], "layout": raw["layout"],
                     "frame_count": raw["frame_count"], "bone_count": raw["bone_count"], "duration": raw["duration"],
                     "data": {"url": url, "length": len(data)}}
             if morph_data is not None:

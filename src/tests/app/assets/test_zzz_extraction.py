@@ -1,0 +1,710 @@
+"""Synthetic ZZZ extraction, admission and clip contracts."""
+
+from copy import deepcopy
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import struct
+import threading
+from unittest.mock import patch
+
+import numpy as np
+import pytest
+
+from app.assets import index
+from app.assets.animations import AnimationSessions, read_clip
+from app.assets.animation_morphs import read_morphs
+from app.assets.game_extract import zzz_animation, zzz_index, zzz_morphs, zzz_native, zzz_pipeline, zzz_runtime
+from app.assets.game_extract.pipeline import rest_worlds
+from app.assets.loader.hash_asset import load_hash_asset
+from app.assets.rig import resolve_game_rig, validate_rig
+from app.assets.resolver import AssetComponentBinding
+from app.assets.skinning import decode_captured_skinning
+from app.settings import paths
+
+
+def fixture(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character01"
+    asset.mkdir(parents=True)
+    vertices = [[.2, .3, .4], [1.2, .4, .8], [.4, 1.2, .7]]
+    uv = [[.1, .2], [.3, .4], [.5, .6]]
+    vb = asset / "mesh-vb0=11111111.txt"
+    lines = ["stride: 52", "vertex count: 3",
+             "element[0]: POSITION0, format: R32G32B32_FLOAT",
+             "element[1]: TEXCOORD0, format: R32G32_FLOAT",
+             "element[2]: BLENDWEIGHTS0, format: R32G32B32A32_FLOAT",
+             "element[3]: BLENDINDICES0, format: R32G32B32A32_UINT"]
+    for number, (position, texcoord) in enumerate(zip(vertices, uv)):
+        for name, values in (("POSITION", position), ("TEXCOORD", texcoord),
+                             ("BLENDWEIGHTS", [.75, .25, 0, 0]), ("BLENDINDICES", [8, 12, 0, 0])):
+            lines.append(f"vb0[{number}]+000 {name}: " + ", ".join(map(str, values)))
+    vb.write_text("\n".join(lines) + "\n")
+    ib = asset / "mesh-ib=22222222.txt"
+    ib.write_text("first index: 0\nindex count: 3\ntopology: trianglelist\n0 1 2\n")
+    (asset / "hash.json").write_text(json.dumps([dict(component_name="Body01", position_vb="11111111",
+        ib="22222222", object_indexes=[0], object_indexes_count=[3], object_classifications=["A"],
+        vb_file=vb.name, ib_files=[ib.name])]))
+    record = index.build_index("ZZMI", str(root))["assets"][0]
+    avatar = dict(name="Avatar_Type01_Character01_ModelAvatar", bones=[
+        dict(path="", hash=0, parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
+        dict(path="Root/Joint01", hash=100, parent=0, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 2, 1])])
+    mesh = dict(name="SeparateMesh_Avatar_Type01_Character01_Model_Body", vertices=np.array(vertices).ravel().tolist(),
+        uv=np.array(uv).ravel().tolist(), indices=[0, 1, 2], weights=[[.75, .25, 0, 0]] * 3,
+        bone_indices=[[0, 1, 0, 0]] * 3, bone_hashes=[0, 100],
+        bind_poses=[matrix.ravel(order="C").tolist() for matrix in (np.eye(4), np.diag([1, .5, 1, 1]))],
+        sections=[dict(first=0, count=3, vertex_first=0, vertex_count=3)])
+    rows = [dict(name=value["name"], type=kind, block="ZenlessZoneZero_Data/StreamingAssets/Blocks/1.blk",
+                 cab="CAB-01", offset=0, file_ordinal=0, path_id=number)
+            for number, (kind, value) in enumerate((("Avatar", avatar), ("Mesh", mesh),
+                ("AnimationClip", dict(name="Avatar_Type01_Character01_Ani_Clip01"))))]
+    class Client:
+        def __init__(self):
+            self.work = tmp_path / "work"
+            self.work.mkdir(exist_ok=True)
+        def read(self, row):
+            if row["type"] == "Avatar":
+                return deepcopy(avatar)
+            if row["type"] == "Mesh":
+                return deepcopy(mesh)
+            values = np.array([[0, 0, 0, 0, 0, 0, 1, 1, 2, 1, 0],
+                               [1, 0, 0, 0, 0, 0, -1, 2, 3, 1, 1]], dtype="<f4")
+            (self.work / "samples-1.bin").write_bytes(values.tobytes())
+            return dict(name=row["name"], start=0, stop=1, file="samples-1.bin", times=[0, 1], acl_count=11,
+                streamed_count=0, streamed=[], dense=dict(count=0), constant=[], bindings=[
+                    dict(path=100, attribute=attribute, type="Transform", custom=0, pointer=0) for attribute in (1, 2, 3)]
+                    + [dict(path=0, attribute=0, type="Animator", custom=1, pointer=0)])
+    return str(root), asset, record, avatar, mesh, rows, Client()
+
+
+def facial_fixture(tmp_path):
+    root, asset, record, avatar, mesh, rows, client = fixture(tmp_path)
+    mesh["blend_shapes"] = dict(channels=[dict(name="Shape01", hash=123, first=0, count=1)],
+        weights=[100], frames=[dict(first=0, count=1, normals=True)],
+        vertices=[dict(index=0, position=[0, 0, 2], normal=[0, 1, 0])])
+    rows.append({**rows[0], "type": "SkinnedMeshRenderer", "path_id": 99, "name": "",
+        "renderer": dict(path="", mesh={key: rows[1][key] for key in ("cab", "path_id", "offset", "file_ordinal")},
+                         avatar={key: rows[0][key] for key in ("cab", "path_id", "offset", "file_ordinal")})})
+    read = client.read
+    def read_facial(row):
+        metadata = read(row)
+        if row["type"] == "AnimationClip":
+            file = client.work / metadata["file"]
+            values = np.frombuffer(file.read_bytes(), dtype="<f4").reshape(2, 11)
+            file.write_bytes(np.column_stack((values, [0, 100])).astype("<f4").tobytes())
+            metadata["acl_count"] = 12
+            metadata["blend_shape_clamp"] = True
+            metadata["bindings"].append(dict(path=0, attribute=123, type="SkinnedMeshRenderer", custom=20, pointer=0))
+        return metadata
+    client.read = read_facial
+    return root, asset, record, avatar, mesh, rows, client
+
+
+@pytest.mark.parametrize("short_names", [False, True])
+def test_zzz_package_reimport_and_exact_capture_admission_lifecycle(tmp_path, short_names):
+    root, asset, record, avatar, mesh, rows, client = fixture(tmp_path)
+    if short_names:
+        mesh["name"] = rows[1]["name"] = "Character01_Body"
+        rows[1]["shape"] = [[3, 3]]
+    cancel = threading.Event()
+    output = tmp_path / "output"
+    query = "UnmatchedQuery" if short_names else "Character01"
+    report, fingerprints = zzz_pipeline.build(client, root, record, output, query, lambda *_: None, cancel, rows)
+    assert report["proven_components"] == 1 and report["bones"] == 3 and report["imported"] == 1
+    rig = validate_rig(json.loads((output / "Rig.json").read_text()))
+    assert rig["components"][0]["bone_map"] == {"8": 1, "12": 2}
+    entry = json.loads((output / "Animation/manifest.json").read_text())["clips"][0]
+    metadata, data = read_clip(str(output / "Animation"), entry, rig)
+    samples = np.frombuffer(data, dtype="<f4").reshape(61, 3, 10)
+    assert metadata["version"] == 2 and metadata["omitted_non_transform_channels"] == 1
+    assert samples[30, 2, :3] == pytest.approx([.5, 0, 0])
+    assert samples[30, 2, 7:] == pytest.approx([1.5, 2.5, 1])
+    assert abs(samples[30, 2, 6]) == pytest.approx(1)
+    assert samples[0, 2, 7:] == pytest.approx(avatar["bones"][1]["scale"])
+    assert all(hashlib.sha256(Path(file).read_bytes()).hexdigest() == digest for file, digest in fingerprints.items())
+    for file in output.iterdir():
+        if file.is_dir():
+            shutil.copytree(file, asset / file.name)
+        else:
+            shutil.copyfile(file, asset / file.name)
+    (asset / "Animation/user.txt").write_text("preserve")
+    # A subsequent native read may differ only by serialized reference/bind noise.
+    avatar["bones"][1]["translation"][0] = 2e-7
+    for pose in mesh["bind_poses"]:
+        pose[3] = 2e-7
+    output2 = tmp_path / "output2"
+    report2, _ = zzz_pipeline.build(client, root, record, output2, "Character01", lambda *_: None, cancel, rows)
+    assert report2["clips"] == 1 and (output2 / "Animation/user.txt").read_text() == "preserve"
+    assert json.loads((output2 / "Animation/manifest.json").read_text())["clips"][0]["id"] == entry["id"]
+    assert validate_rig(json.loads((output2 / "Rig.json").read_text()))["id"] == rig["id"]
+    # An actual reference change must not adopt the previous pose or overwrite
+    # its clips, even when updated inverse binds prove the new native geometry.
+    original_catalog = (asset / "Animation/manifest.json").read_bytes()
+    avatar["bones"][1]["translation"][0] = .01
+    mesh["bind_poses"][1][3] = -.01 + 2e-7
+    with pytest.raises(ValueError, match="conflict with preserved"):
+        zzz_pipeline.build(client, root, record, tmp_path / "changed", "Character01", lambda *_: None, cancel, rows)
+    assert (asset / "Animation/manifest.json").read_bytes() == original_catalog
+    part = load_hash_asset("ZZMI", root, record).parts[0]
+    source, decoded = decode_captured_skinning(root, part.skinning)
+    binding = AssetComponentBinding(status="exact", range_status="exact", asset_type="ZZMI", root=root,
+        asset=record["path"], metadata=part.metadata_path, geometry_hash=part.geometry_hash,
+        component_ordinal=part.component_ordinal, first_index=part.first_index, index_count=part.index_count)
+    def resolve(**kwargs):
+        return resolve_game_rig(binding, source, decoded.bone_ids, {os.path.normcase(root)}, {}, **kwargs)
+    assert resolve(captured_palette=True)["bone_map"] == {"8": 1, "12": 2}
+    digest = rig["skin_bindings"][0]["sha256"]
+    assert resolve(blend_sha256=digest)["version"] == 2
+    assert resolve(blend_sha256="0" * 64) is None
+    assert resolve_game_rig(binding, source, [99], {root}, {}, captured_palette=True) is None
+    vb = Path(root) / part.skinning.file
+    vb.write_text(vb.read_text().replace("0.75", "0.7"))
+    assert resolve(captured_palette=True) is None
+
+
+def test_zzz_serialized_inverse_binds_preserve_affine_placement(tmp_path):
+    root, _asset, record, avatar, mesh, rows, client = fixture(tmp_path)
+    half = float(np.sqrt(.5))
+    avatar["bones"][0].update(translation=[3, -2, 1], rotation=[0, 0, half, half], scale=[1, 2, 1])
+    avatar["bones"][1].update(translation=[1, 2, -1], rotation=[half, 0, 0, half], scale=[2, 1, 3])
+    root_world = np.array([[0, -2, 0, 3], [1, 0, 0, -2], [0, 0, 1, 1], [0, 0, 0, 1]])
+    child_local = np.array([[2, 0, 0, 1], [0, 0, -3, 2], [0, 1, 0, -1], [0, 0, 0, 1]])
+    placement = np.array([[0, 0, 1, 4], [0, 1, 0, -3], [-1, 0, 0, 2], [0, 0, 0, 1]])
+    binds = [np.linalg.inv(world) @ placement for world in (root_world, root_world @ child_local)]
+    mesh["bind_poses"] = [matrix.ravel(order="C").tolist() for matrix in binds]
+    mapping, actual = zzz_native.mesh_placement(mesh, avatar)
+    assert mapping == [0, 1]
+    np.testing.assert_allclose(actual, placement, atol=1e-12)
+    captured, _ = zzz_native.capture(root, record)
+    chosen = zzz_pipeline.verify_candidates(client, captured, rows, "Character01", threading.Event())
+    worlds = rest_worlds(chosen["rig"]["bones"], affine=True)
+    np.testing.assert_allclose(worlds[0], np.linalg.inv(placement), atol=1e-12)
+    np.testing.assert_allclose(worlds[2], np.linalg.inv(placement) @ root_world @ child_local, atol=1e-12)
+    changed = deepcopy(mesh)
+    changed["bind_poses"] = [matrix.ravel(order="F").tolist() for matrix in binds]
+    assert zzz_native.mesh_placement(changed, avatar) is None
+    changed = deepcopy(mesh)
+    changed["bind_poses"][1][3] += .01
+    assert zzz_native.mesh_placement(changed, avatar) is None
+
+
+def test_zzz_native_proof_rejects_wrong_rest_weights_topology_and_ambiguous_palettes(tmp_path):
+    root, _asset, record, avatar, mesh, _rows, _client = fixture(tmp_path)
+    part = zzz_native.capture(root, record)[0][0]
+    placement = zzz_native.mesh_placement(mesh, avatar)
+    assert placement is not None
+    assert zzz_native.match_component(part, mesh)[0] == {"8": 0, "12": 1}
+    reordered = deepcopy(mesh)
+    order = [2, 0, 1]
+    reordered["vertices"] = np.asarray(mesh["vertices"]).reshape(-1, 3)[order].ravel().tolist()
+    reordered["uv"] = np.asarray(mesh["uv"]).reshape(-1, 2)[order].ravel().tolist()
+    reordered["weights"] = [mesh["weights"][i] for i in order]
+    reordered["bone_indices"] = [mesh["bone_indices"][i] for i in order]
+    reordered["indices"] = [order.index(i) for i in mesh["indices"]]
+    assert zzz_native.match_component(part, reordered)[0] == {"8": 0, "12": 1}
+    repeated = deepcopy(part)
+    repeated["blends"][0] = (.5, .5, 0, 0, 8, 8, 0, 0)
+    changed = deepcopy(mesh)
+    changed["weights"][0] = [.5, .5, 0, 0]
+    assert zzz_native.match_component(repeated, changed) is None
+    changed = deepcopy(mesh)
+    changed["bind_poses"][1][0] = 2
+    assert zzz_native.mesh_placement(changed, avatar) is None
+    changed = deepcopy(mesh)
+    changed["weights"][0] = [.5, .5, 0, 0]
+    assert zzz_native.match_component(part, changed) is None
+    changed["weights"] = [[.5, .5, 0, 0]] * 3
+    part["blends"] = [(.5, .5, 0, 0, 8, 12, 0, 0)] * 3
+    assert zzz_native.match_component(part, changed) is None
+    changed["indices"] = [0, 0, 1]
+    assert zzz_native.match_component(part, changed) is None
+
+
+def test_zzz_symmetric_component_requires_a_unique_model_wide_placement(tmp_path):
+    root, _asset, record, _avatar, mesh, rows, client = fixture(tmp_path)
+    anchor = zzz_native.capture(root, record)[0][0]
+    symmetric = deepcopy(anchor)
+    symmetric["positions"] = np.array([[-1, .3, .4], [1, .3, .4], [0, 1.2, .7]], dtype=np.float32)
+    symmetric["uv"] = np.tile([.1, .8], (3, 1))
+    symmetric_mesh = deepcopy(mesh)
+    symmetric_mesh["vertices"] = symmetric["positions"].ravel().tolist()
+    symmetric_mesh["uv"] = np.tile([.1, .2], (3, 1)).ravel().tolist()
+    original_read = client.read
+    def read(row):
+        return deepcopy(symmetric_mesh) if row["path_id"] == rows[1]["path_id"] else original_read(row)
+    client.read = read
+    cancel = threading.Event()
+    assert len(zzz_native.match_component_candidates(symmetric, symmetric_mesh)) == 2
+    with pytest.raises(ValueError, match="ambiguous"):
+        zzz_pipeline.verify_candidates(client, [symmetric], rows, "Character01", cancel)
+    # The asymmetric component proves which reflected hypothesis belongs to the
+    # shared Avatar placement, without discarding the symmetric component.
+    anchor["component_ordinal"] = 1
+    candidates = [*rows, {**rows[1], "path_id": 50}]
+    chosen = zzz_pipeline.verify_candidates(client, [symmetric, anchor], candidates, "Character01", cancel)
+    reordered = zzz_pipeline.verify_candidates(client, [symmetric, anchor], list(reversed(candidates)), "Character01", cancel)
+    assert len(chosen["matched"]) == 2 and chosen["rig"]["id"] == reordered["rig"]["id"]
+    assert chosen["rig"]["bones"][0]["scale"] == pytest.approx([1, 1, 1])
+
+
+def test_zzz_discovery_skips_unrelated_variants_before_native_avatar_reads(tmp_path):
+    root, _asset, record, _avatar, _mesh, rows, client = fixture(tmp_path)
+    captured, _files = zzz_native.capture(root, record)
+    alternate = {**rows[0], "name": "Avatar_Type01_Character01_Alternate_ModelAvatar", "path_id": 50}
+    alternate_mesh = {**rows[1], "name": "SeparateMesh_Avatar_Type01_Character01_Alternate_Model_Body", "shape": [[50, 60]], "path_id": 51}
+    no_mesh = {**rows[0], "name": "Avatar_Type01_Character01_Extra_ModelAvatar", "path_id": 52}
+    reads = []
+    original_read = client.read
+    def read(row):
+        reads.append(row["path_id"])
+        if row["path_id"] in (50, 51, 52):
+            raise ValueError("Synthetic unsupported candidate metadata.")
+        return original_read(row)
+    client.read = read
+    candidates = [*rows, alternate, alternate_mesh, no_mesh]
+    chosen = zzz_pipeline.verify_candidates(client, captured, candidates, "Character01", threading.Event())
+    assert chosen["family"] == "Avatar_Type01_Character01" and len(chosen["matched"]) == 1
+    assert not {50, 51, 52} & set(reads)
+    # A shape-compatible unreadable candidate must still fail closed rather than
+    # disappearing from the uniqueness check for the chosen native skeleton.
+    alternate_mesh["shape"] = [[3, 3]]
+    with pytest.raises(ValueError, match="unsupported candidate"):
+        zzz_pipeline.verify_candidates(client, captured, candidates, "Character01", threading.Event())
+
+
+def test_zzz_shape_fallback_keeps_body_avatar_when_a_prop_has_an_extra_legacy_mesh_hint(tmp_path):
+    root, _asset, record, avatar, mesh, rows, client = fixture(tmp_path)
+    mesh["name"] = rows[1]["name"] = "Character01_Body"
+    rows[1]["shape"] = [[3, 3]]
+    avatar["bones"].append(dict(path="Root/Joint02", hash=200, parent=0,
+        translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
+    # This prop has a standalone legacy-named mesh, but its skeleton proves only
+    # that prop; the body Avatar proves both parts and owns the animation family.
+    prop_avatar = deepcopy(avatar)
+    prop_avatar["bones"] = [prop_avatar["bones"][0], prop_avatar["bones"][2]]
+    prop_avatar["name"] = "Avatar_Type01_Character01_Prop_ModelAvatar"
+    prop_mesh = deepcopy(mesh)
+    prop_mesh["name"] = "SeparateMesh_Avatar_Type01_Character01_Prop_Model_Prop"
+    prop_mesh["bone_hashes"] = [0, 200]
+    prop_mesh["bind_poses"] = [np.eye(4).ravel(order="C").tolist()] * 2
+    prop_mesh["vertices"] = (np.asarray(mesh["vertices"]).reshape(-1, 3) + [0, 0, 2]).ravel().tolist()
+    prop_rows = [{**rows[0], "name": prop_avatar["name"], "path_id": 50},
+                 {**rows[1], "name": prop_mesh["name"], "path_id": 51}]
+    captured, _files = zzz_native.capture(root, record)
+    prop_part = deepcopy(captured[0])
+    prop_part["positions"] = prop_part["positions"] + [0, 0, 2]
+    prop_part["component_ordinal"] = 1
+    # A different triangle count makes the prop add to the shape discovery score.
+    prop_part["indices"] = np.concatenate([prop_part["indices"], prop_part["indices"]])
+    prop_part["index_count"] = 6
+    prop_mesh["indices"] *= 2
+    prop_mesh["sections"][0]["count"] = 6
+    prop_rows[1]["shape"] = [[3, 6]]
+    original_read = client.read
+    def read(row):
+        return deepcopy({50: prop_avatar, 51: prop_mesh}[row["path_id"]]) if row["path_id"] in (50, 51) else original_read(row)
+    client.read = read
+    chosen = zzz_pipeline.verify_candidates(client, [*captured, prop_part], [*rows, *prop_rows], "UnmatchedQuery", threading.Event())
+    assert chosen["family"] == "Avatar_Type01_Character01"
+    assert len(chosen["matched"]) == 2 and len(chosen["rig"]["bones"]) == 4
+    assert chosen["matched"][1]["bone_map"] == {"8": 1, "12": 3}
+
+
+@pytest.mark.parametrize("difference", ["roundoff", "rest", "family"])
+def test_zzz_equivalent_native_avatar_copies_and_genuine_ambiguity(tmp_path, difference):
+    root, _asset, record, avatar, mesh, rows, client = fixture(tmp_path)
+    mesh["name"] = rows[1]["name"] = "Character01_Body"
+    rows[1]["shape"] = [[3, 3]]
+    if difference == "rest":
+        avatar["bones"].append(dict(path="Root/Unused01", hash=200, parent=0,
+            translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
+    duplicate = deepcopy(avatar)
+    duplicate_row = {**rows[0], "path_id": 50}
+    if difference == "roundoff":
+        duplicate["bones"][1]["translation"][0] = 2e-7
+    elif difference == "rest":
+        duplicate["bones"][-1]["translation"][0] = .01
+    else:
+        duplicate["name"] = duplicate_row["name"] = "Avatar_Type01_Character01_Variant_ModelAvatar"
+    original_read = client.read
+    def read(row):
+        return deepcopy(duplicate) if row["path_id"] == 50 else original_read(row)
+    client.read = read
+    captured, _files = zzz_native.capture(root, record)
+    candidates = [*rows, duplicate_row]
+    if difference == "roundoff":
+        chosen = zzz_pipeline.verify_candidates(client, captured, candidates, "Character01", threading.Event())
+        reordered = zzz_pipeline.verify_candidates(client, captured, list(reversed(candidates)), "Character01", threading.Event())
+        assert len(chosen["matched"]) == 1 and chosen["rig"]["id"] == reordered["rig"]["id"]
+        assert chosen["source"] == min(zzz_index.identity(row) for row in (rows[0], duplicate_row))
+    else:
+        with pytest.raises(ValueError, match="ambiguous"):
+            zzz_pipeline.verify_candidates(client, captured, candidates, "Character01", threading.Event())
+
+
+def test_zzz_case_only_clip_names_keep_distinct_files_and_stable_reimport_ids(tmp_path):
+    root, asset, record, _avatar, _mesh, rows, client = fixture(tmp_path)
+    rows[-1]["name"] = "Avatar_Type01_Character01_Ani_Sequence"
+    rows.append({**rows[-1], "path_id": 50, "name": "Avatar_Type01_Character01_Ani_sequence"})
+    output = tmp_path / "output"
+    report, _ = zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, threading.Event(), rows)
+    assert report["clips"] == 2 and report["imported"] == 2
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    entries = manifest["clips"]
+    assert len({entry["file"].casefold() for entry in entries}) == 2
+    sources = [json.loads((output / "Animation" / entry["file"]).read_text())["source"] for entry in entries]
+    assert len(set(sources)) == 2
+    shutil.copyfile(output / "Rig.json", asset / "Rig.json")
+    shutil.copytree(output / "Animation", asset / "Animation")
+    second = tmp_path / "second"
+    zzz_pipeline.build(client, root, record, second, "Character01", lambda *_: None, threading.Event(), rows)
+    assert json.loads((second / "Animation/manifest.json").read_text())["clips"] == entries
+
+
+def test_zzz_index_composite_identity_staleness_and_failed_build_preserve_cache(tmp_path, monkeypatch):
+    folder = tmp_path / "game"
+    blocks = folder / zzz_runtime.BLOCK_DIRS[0]
+    blocks.mkdir(parents=True)
+    (blocks / "1.blk").write_bytes(b"block")
+    monkeypatch.setattr(paths, "asset_index_dir", lambda: str(tmp_path / "index"))
+    row = dict(name="Mesh01", type="Mesh", block="", cab="CAB-01", offset=0, file_ordinal=0, path_id=1, shape=[[3, 3]])
+    class Client:
+        def scan_many(self, files):
+            return [{**row, "block": file.relative_to(folder).as_posix()} for file in files]
+    cancel = threading.Event()
+    client = Client()
+    assert zzz_index.status(folder)["state"] == "missing"
+    rows, count = zzz_index.build(client, folder, lambda *_: None, cancel)
+    assert count == 1 and zzz_index.status(folder)["state"] == "ready"
+    with patch.object(client, "scan_many", side_effect=AssertionError("A ready index must be reused.")):
+        assert zzz_index.ensure(client, folder, lambda *_: None, cancel) == rows
+        monkeypatch.setattr(zzz_runtime, "VERSION", "synthetic-clip-runtime-update")
+        assert zzz_index.ensure(client, folder, lambda *_: None, cancel) == rows
+    # A schema upgrade needs one completed rebuild; subsequent extractions use
+    # that persisted result, including after the indexing client is replaced.
+    file = zzz_index.index_path(folder)
+    previous = json.loads(file.read_bytes())
+    previous["format"] = 0
+    file.write_text(json.dumps(previous))
+    assert zzz_index.status(folder)["state"] == "stale"
+    assert zzz_index.ensure(client, folder, lambda *_: None, cancel) == rows
+    replacement = Client()
+    with patch.object(replacement, "scan_many", side_effect=AssertionError("The rebuilt index must be reused.")):
+        assert zzz_index.ensure(replacement, folder, lambda *_: None, cancel) == rows
+    assert zzz_index.identity(rows[0]) != zzz_index.identity({**rows[0], "offset": 4})
+    assert zzz_index.identity(rows[0]) != zzz_index.identity({**rows[0], "file_ordinal": 1})
+    before = zzz_index.index_path(folder).read_bytes()
+    row["offset"] = -1
+    with pytest.raises(ValueError, match="incomplete"):
+        zzz_index.build(Client(), folder, lambda *_: None, cancel)
+    assert zzz_index.index_path(folder).read_bytes() == before
+    (blocks / "1.blk").write_bytes(b"updated block")
+    assert zzz_index.status(folder)["state"] == "stale"
+    zzz_index.remove(folder)
+    assert zzz_index.status(folder)["state"] == "missing"
+
+
+def test_zzz_clip_rejects_unknown_transform_and_uncontained_native_samples(tmp_path):
+    _root, _asset, _record, avatar, _mesh, rows, client = fixture(tmp_path)
+    metadata = client.read(rows[-1])
+    rig = dict(bones=[dict(translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])] * 3)
+    metadata["bindings"][0]["path"] = 999
+    with pytest.raises(ValueError, match="unsupported transform"):
+        zzz_animation.convert(metadata, client.work, rig, avatar)
+    metadata["file"] = "../samples.bin"
+    with pytest.raises(ValueError, match="incomplete"):
+        zzz_animation.convert(metadata, client.work, rig, avatar)
+
+
+def test_zzz_index_pools_exact_renderer_paths_and_reuses_complete_cache(tmp_path, monkeypatch):
+    folder = tmp_path / "game"
+    blocks = folder / zzz_runtime.BLOCK_DIRS[0]
+    blocks.mkdir(parents=True)
+    (blocks / "1.blk").write_bytes(b"block")
+    monkeypatch.setattr(paths, "asset_index_dir", lambda: str(tmp_path / "index"))
+    bones = ["Root/" + "Joint01/" * 64 + f"Joint{i:02d}" for i in range(32)] + [None, "", "Root/Joint\u00e9"]
+    rows = [dict(name="", type="SkinnedMeshRenderer", block=f"{zzz_runtime.BLOCK_DIRS[0]}/1.blk", cab="CAB-01",
+                 offset=0, file_ordinal=0, path_id=i, renderer=dict(path=f"Root/Part{i:03d}", bone_paths=list(bones),
+                    mesh=dict(cab="CAB-01", path_id=0), avatar=dict(cab="CAB-01", path_id=500), blend_shape_count=0))
+            for i in range(128)]
+    expected = deepcopy(rows)
+    cancel = threading.Event()
+    client = type("Client", (), {"scan_many": lambda self, files: deepcopy(rows)})()
+    monkeypatch.setattr(zzz_index, "MAX_BYTES", 96 * 1024)
+    assert len(json.dumps(rows).encode()) > zzz_index.MAX_BYTES * 10
+    built, count = zzz_index.build(client, folder, lambda *_: None, cancel)
+    assert built == expected and rows == expected and count == 0
+    file = zzz_index.index_path(folder)
+    saved = json.loads(file.read_bytes())
+    assert file.stat().st_size < zzz_index.MAX_BYTES and saved["bone_paths"] == bones
+    assert all("bone_paths" not in row["renderer"] for row in saved["rows"])
+    with patch.object(client, "scan_many", side_effect=AssertionError("A complete cache must be reused.")):
+        loaded = zzz_index.ensure(client, folder, lambda *_: None, cancel)
+    assert loaded == expected
+    assert loaded[0]["renderer"]["bone_paths"][0] is loaded[-1]["renderer"]["bone_paths"][0]
+    before = file.read_bytes()
+    monkeypatch.setattr(zzz_index, "MAX_BYTES", 16)
+    with pytest.raises(ValueError, match="size limit"):
+        zzz_index.build(client, folder, lambda *_: None, cancel)
+    assert file.read_bytes() == before
+    # A ready unpooled index remains compatible with the lossless storage change.
+    monkeypatch.setattr(zzz_index, "MAX_BYTES", 4 * 1024 * 1024)
+    saved.pop("bone_paths")
+    saved["format"] = 3
+    saved["rows"] = expected
+    file.write_text(json.dumps(saved))
+    with patch.object(client, "scan_many", side_effect=AssertionError("Legacy cache must be reused.")):
+        assert zzz_index.ensure(client, folder, lambda *_: None, cancel) == expected
+
+
+@pytest.mark.parametrize("case", ["missing", "table", "entry", "negative", "range", "boolean", "mixed", "budget"])
+def test_zzz_index_rejects_invalid_pooled_bone_paths(tmp_path, monkeypatch, case):
+    folder = tmp_path / "game"
+    blocks = folder / zzz_runtime.BLOCK_DIRS[0]
+    blocks.mkdir(parents=True)
+    (blocks / "1.blk").write_bytes(b"block")
+    monkeypatch.setattr(paths, "asset_index_dir", lambda: str(tmp_path / "index"))
+    renderer = dict(path="Root/Part01", bone_path_ids=[0])
+    value = dict(format=zzz_index.FORMAT, fingerprint=zzz_index.fingerprint(folder), bone_paths=["Root/Joint01"], rows=[
+        dict(name="", type="SkinnedMeshRenderer", block="1.blk", cab="CAB-01", offset=0, file_ordinal=0, path_id=1, renderer=renderer)])
+    if case == "missing":
+        del value["bone_paths"]
+    elif case == "table":
+        value["bone_paths"] = {}
+    elif case == "entry":
+        value["bone_paths"] = [1]
+    elif case in ("negative", "range", "boolean"):
+        renderer["bone_path_ids"] = [{"negative": -1, "range": 1, "boolean": True}[case]]
+    elif case == "mixed":
+        renderer["bone_paths"] = ["Root/Joint01"]
+    else:
+        monkeypatch.setattr(zzz_index, "MAX_BONE_REFERENCES", 0)
+    file = zzz_index.index_path(folder)
+    file.parent.mkdir()
+    file.write_text(json.dumps(value))
+    assert zzz_index.read(folder) == ("stale", None, 0)
+
+
+@pytest.mark.parametrize("step,translation", [(False, .15625), (True, 0)])
+def test_zzz_mixed_streamed_dense_constant_tracks_without_acl(tmp_path, step, translation):
+    _root, _asset, _record, avatar, _mesh, rows, client = fixture(tmp_path)
+    metadata = client.read(rows[-1])
+    (client.work / metadata["file"]).write_bytes(b"")
+    metadata.update(acl_count=0, times=[], streamed_count=3,
+        dense=dict(count=4, frames=2, rate=1, start=0, values=[0, 0, 0, 1, 0, 0, 1, 0]),
+        constant=[1, 2, 1], bindings=metadata["bindings"][:3], streamed=[dict(time=time, keys=[
+            dict(index=i, value=time if i == 0 else 0, incoming=0, outgoing="Infinity" if step else 0)
+            for i in range(3)]) for time in (0, 1)])
+    rig = dict(bones=[dict(translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])] * 3)
+    data, frames, duration, omitted, morph = zzz_animation.convert(metadata, client.work, rig, avatar)
+    samples = np.frombuffer(data, dtype="<f4").reshape(frames, 3, 10)
+    assert duration == 1 and omitted == 0 and morph is None
+    assert samples[15, 2, 0] == pytest.approx(translation)
+    assert samples[15, 2, 3:7] == pytest.approx([0, 0, np.sin(np.pi / 8), np.cos(np.pi / 8)])
+    assert samples[-1, 2, 0] == 1 and list(samples[-1, 2, 7:]) == [1, 2, 1]
+
+
+@pytest.mark.parametrize("triangles,sections,accepted", [
+    ([0, 1, 2, 0, 1, 3, 0, 1, 3], [(0, 9)], True),
+    ([0, 1, 2, 0, 1, 3, 0, 2, 3], [(0, 9)], False),
+    ([0, 1, 2, 0, 1, 3, 0, 1, 3], [(0, 3), (3, 6)], False),
+    ([0, 2, 3, 0, 1, 2, 0, 1, 3, 0, 1, 3], [(0, 3), (3, 9)], True),
+])
+def test_zzz_geometry_proof_preserves_complete_section_triangle_multiplicity(triangles, sections, accepted):
+    positions = np.array([[.2, .3, .4], [1.2, .4, .8], [.4, 1.2, .7], [.9, .8, .6]])
+    uv = np.array([[.1, .2], [.3, .4], [.5, .6], [.7, .8]])
+    part = dict(positions=positions, uv=uv, source_vertices=[0, 1, 2, 3],
+        indices=np.array([[0, 1, 2], [0, 1, 3], [0, 1, 3]]), blends=[(.75, .25, 0, 0, 8, 12, 0, 0)] * 4)
+    mesh = dict(vertices=positions.ravel().tolist(), uv=(uv * [1, -1] + [0, 1]).ravel().tolist(),
+        indices=triangles, weights=[[.75, .25, 0, 0]] * 4, bone_indices=[[0, 1, 0, 0]] * 4,
+        sections=[dict(first=first, count=count) for first, count in sections])
+    assert (zzz_native.match_component(part, mesh) is not None) == accepted
+    # Reordered vertices take the geometric correspondence path and need the
+    # same multiset proof as the direct source-index fast path.
+    part["source_vertices"] = [3, 2, 1, 0]
+    assert (zzz_native.match_component(part, mesh) is not None) == accepted
+
+
+def test_zzz_scalar_sampling_budget_rejects_before_native_read_or_allocation(tmp_path):
+    _root, _asset, _record, avatar, _mesh, rows, client = fixture(tmp_path)
+    metadata = client.read(rows[-1])
+    (client.work / metadata["file"]).write_bytes(b"")
+    metadata.update(stop=999, acl_count=0, times=[], constant=[1] * 65536, bindings=[])
+    rig = dict(bones=[dict(translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])] * 3)
+    with patch.object(zzz_animation.np, "empty") as allocate, patch.object(zzz_animation.np, "fromfile") as read:
+        with pytest.raises(ValueError, match="sampling memory budget"):
+            zzz_animation.convert(metadata, client.work, rig, avatar)
+    allocate.assert_not_called()
+    read.assert_not_called()
+
+
+@pytest.mark.parametrize("policy", [True, False, None, 1])
+def test_zzz_facial_weights_follow_verified_player_policy(tmp_path, policy):
+    _root, _asset, _record, avatar, _mesh, rows, client = facial_fixture(tmp_path)
+    metadata = client.read(rows[2])
+    metadata["blend_shape_clamp"] = policy
+    file = client.work / metadata["file"]
+    values = np.frombuffer(file.read_bytes(), dtype="<f4").reshape(2, 12).copy()
+    values[:, -1] = [-25, 150]
+    file.write_bytes(values.tobytes())
+    rig = dict(bones=[dict(translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])] * 3)
+    if type(policy) is not bool:
+        with pytest.raises(ValueError, match="weight policy is unavailable"):
+            zzz_animation.convert(metadata, client.work, rig, avatar, {(0, 123): ("Shape01", 100)})
+        return
+    raw, frames, _duration, _omitted, morph = zzz_animation.convert(metadata, client.work, rig, avatar, {(0, 123): ("Shape01", 100)})
+    weights = np.frombuffer(raw, dtype="<f4")[-frames:]
+    assert weights[[0, -1]] == pytest.approx([0, 1] if policy else [-.25, 1.5])
+    assert weights[30] == pytest.approx(.625)
+    assert np.array_equal(weights, morph["weights"][:, 0]) and morph["clamp"] is policy
+
+
+def test_zzz_facial_glb_extraction_publication_reimport_and_mod_mapping_lifecycle(tmp_path, monkeypatch):
+    root, asset, record, _avatar, _mesh, rows, client = facial_fixture(tmp_path)
+    packed, strings = zzz_index._pack_rows(rows)
+    restored = zzz_index._unpack_rows(json.loads(json.dumps(dict(rows=packed, bone_paths=strings))))
+    assert restored == rows
+    rows = restored
+    output = tmp_path / "output"
+    report, _ = zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, threading.Event(), rows)
+    rig = validate_rig(json.loads((output / "Rig.json").read_text()))
+    entry = json.loads((output / "Animation/manifest.json").read_text())["clips"][0]
+    metadata, data = read_clip(str(output / "Animation"), entry, rig)
+    morph = metadata["morphs"]
+    assert morph["format"] == "glb" and morph["file"].endswith(".glb")
+    assert report["animations"][0]["facial_glb"] == morph["file"]
+    assert metadata["omitted_non_transform_channels"] == 1
+    assert metadata["blend_shape_clamp"] is True
+    assert np.frombuffer(data, dtype="<f4")[-61:][30] == pytest.approx(.5)
+    targets = read_morphs(str(output / "Animation"), morph)
+    assert list(struct.iter_unpack("<I6f", targets)) == [(0, 0, 0, 2, 0, 1, 0)]
+    glb = (output / "Animation" / morph["file"]).read_bytes()
+    assert struct.unpack_from("<3I", glb) == (0x46546C67, 2, len(glb))
+    document = json.loads(glb[20:20 + struct.unpack_from("<I", glb, 12)[0]])
+    assert len(document["animations"][0]["channels"]) == len(document["meshes"]) == 1
+    assert document["meshes"][0]["extras"]["targetNames"] == morph["names"]
+    shutil.copytree(output / "Animation", asset / "Animation")
+    shutil.copyfile(output / "Rig.json", asset / "Rig.json")
+    published = []
+    monkeypatch.setattr("app.assets.animations.server.publish_geometry", lambda data, **_: published.append(data) or f"/geometry/{len(published)}")
+    monkeypatch.setattr("app.assets.animations.server.release_geometry", lambda _: None)
+    sessions = AnimationSessions()
+    catalog = sessions.catalog(root, record["path"], rig, lambda: True)
+    response = sessions.load(catalog["animation_session"], entry["id"])
+    assert response["status"] == "ok" and published == [data, targets]
+    part = load_hash_asset("ZZMI", root, record).parts[0]
+    source, decoded = decode_captured_skinning(root, part.skinning)
+    binding = AssetComponentBinding(status="exact", range_status="exact", asset_type="ZZMI", root=root,
+        asset=record["path"], metadata=part.metadata_path, geometry_hash=part.geometry_hash,
+        component_ordinal=part.component_ordinal, first_index=part.first_index, index_count=part.index_count)
+    resolved = resolve_game_rig(binding, source, decoded.bone_ids, {os.path.normcase(root)}, {},
+        blend_sha256=rig["skin_bindings"][0]["sha256"], positions=part.positions,
+        morph_topology=(part.indices, part.uvs))
+    assert resolved["morph_binding"]["vertices"] == [0, 1, 2]
+    second = tmp_path / "second"
+    zzz_pipeline.build(client, root, record, second, "Character01", lambda *_: None, threading.Event(), rows)
+    assert json.loads((second / "Animation/manifest.json").read_text())["clips"] == [entry]
+    assert (second / "Animation" / morph["file"]).read_bytes() == glb
+    (asset / "Animation" / morph["file"]).write_bytes(b"changed")
+    assert sessions.load(catalog["animation_session"], entry["id"])["status"] == "error"
+    assert len(published) == 2
+    sessions.clear()
+
+
+@pytest.mark.parametrize("route", ["direct", "streamed", "empty_defaults", "equivalent_avatar", "wrong_bones", "wrong_count", "wrong_avatar", "ambiguous_cab"])
+def test_zzz_facial_renderer_routes_require_native_pointer_or_unique_palette_proof(tmp_path, route):
+    root, _asset, record, _avatar, _mesh, rows, client = facial_fixture(tmp_path)
+    renderer = rows[-1]["renderer"]
+    if route in ("streamed", "empty_defaults", "wrong_bones", "wrong_count"):
+        renderer["mesh"]["path_id"] = 0
+        renderer.update(bone_paths=["", "Root/Joint01"], blend_shape_count=1)
+        if route == "wrong_bones":
+            renderer["bone_paths"].reverse()
+        elif route == "wrong_count":
+            renderer["blend_shape_count"] = 2
+        elif route == "empty_defaults":
+            renderer["blend_shape_count"] = 0
+        # The synthetic Avatar hashes must match its actual path CRCs.
+        import zlib
+        original = client.read
+        def read(row):
+            data = original(row)
+            if row["type"] == "Avatar":
+                data["bones"][1]["hash"] = zlib.crc32(b"Root/Joint01")
+            if row["type"] == "Mesh":
+                data["bone_hashes"][1] = zlib.crc32(b"Root/Joint01")
+            return data
+        client.read = read
+    elif route == "wrong_avatar":
+        renderer["avatar"]["path_id"] = 1000
+    elif route == "equivalent_avatar":
+        renderer["avatar"] = {key: renderer["avatar"][key] for key in ("cab", "path_id")}
+        rows.append({**rows[0], "block": "ZenlessZoneZero_Data/StreamingAssets/Blocks/2.blk"})
+    elif route == "ambiguous_cab":
+        renderer["mesh"] = {key: renderer["mesh"][key] for key in ("cab", "path_id")}
+        rows.append({**rows[1], "name": "UnrelatedMesh01", "block": "ZenlessZoneZero_Data/StreamingAssets/Blocks/2.blk"})
+    captured, _ = zzz_native.capture(root, record)
+    chosen = zzz_pipeline.verify_candidates(client, captured, rows, "Character01", threading.Event())
+    prepared = zzz_morphs.prepare(chosen, captured, rows)
+    assert bool(prepared["bindings"]) == bool(prepared["components"]) == (route in ("direct", "streamed", "empty_defaults", "equivalent_avatar"))
+
+
+@pytest.mark.parametrize("change", ["header", "range", "descriptor", "external"])
+def test_zzz_facial_glb_rejects_invalid_embedded_runtime_data(tmp_path, change):
+    root, _asset, record, _avatar, _mesh, rows, client = facial_fixture(tmp_path)
+    output = tmp_path / "output"
+    zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, threading.Event(), rows)
+    metadata = json.loads(next(file for file in (output / "Animation").glob("*.json") if file.name != "manifest.json").read_text())
+    morph = metadata["morphs"]
+    file = output / "Animation" / morph["file"]
+    data = file.read_bytes()
+    if change == "header":
+        data = b"BAD!" + data[4:]
+    else:
+        size = struct.unpack_from("<I", data, 12)[0]
+        document = json.loads(data[20:20 + size])
+        runtime = document["extras"]["mod_viewer_morphs"]
+        if change == "range":
+            document["bufferViews"][runtime["buffer_view"]]["byteLength"] += 28
+        elif change == "descriptor":
+            runtime["names"] = ["OtherShape01"]
+        else:
+            document["buffers"][0]["uri"] = "../outside.bin"
+        raw = json.dumps(document, separators=(",", ":")).encode()
+        raw += b" " * (-len(raw) % 4)
+        data = struct.pack("<5I", 0x46546C67, 2, len(data) - size + len(raw), len(raw), 0x4E4F534A) + raw + data[20 + size:]
+    file.write_bytes(data)
+    morph["sha256"] = hashlib.sha256(data).hexdigest()
+    with pytest.raises(ValueError, match="facial GLB|Facial GLB"):
+        read_morphs(str(file.parent), morph)
+
+
+def test_zzz_runtime_manifest_integrity_containment_and_cancellation(tmp_path):
+    from app.assets.game_extract.runtime import ExtractionCancelled
+
+    bundle = tmp_path / "runtime"
+    bundle.mkdir()
+    names = ("ModViewer.ZzzExtract.exe", "UnityReader.dll", "AnimeStudio.ACL.ZZZV2.dll", "oodle-data-shared.dll",
+             "ModViewer.ZzzExtract.deps.json", "ModViewer.ZzzExtract.runtimeconfig.json")
+    files = {}
+    for name in names:
+        (bundle / name).write_bytes(b"synthetic runtime")
+        files[name] = hashlib.sha256(b"synthetic runtime").hexdigest()
+    record = dict(version=zzz_runtime.VERSION, parser=zzz_runtime.PARSER_COMMIT, files=files)
+    manifest = bundle / "runtime.json"
+    manifest.write_text(json.dumps(record))
+    cancel = threading.Event()
+    assert zzz_runtime.ensure_runtime(cancel, bundle) == bundle / names[0]
+    (bundle / names[1]).write_bytes(b"changed")
+    with pytest.raises(ValueError, match="checksum"):
+        zzz_runtime.ensure_runtime(cancel, bundle)
+    record["files"]["../outside.dll"] = "0" * 64
+    manifest.write_text(json.dumps(record))
+    (bundle / names[1]).write_bytes(b"synthetic runtime")
+    with pytest.raises(ValueError, match="Unsafe"):
+        zzz_runtime.ensure_runtime(cancel, bundle)
+    cancel.set()
+    with pytest.raises(ExtractionCancelled):
+        zzz_runtime.ensure_runtime(cancel, bundle)

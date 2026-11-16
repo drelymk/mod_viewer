@@ -1,4 +1,4 @@
-import { Quaternion } from 'three';
+import { Matrix3 } from 'three';
 import { t } from '../i18n/index.js';
 import { isGameRigSkeleton } from './game-rig.js';
 import { getLooseParts } from '../mesh/loose-parts.js';
@@ -86,8 +86,8 @@ export function createAnimationMeshSession({
   }
   function apply(transforms, { finalize = false } = {}) {
     for (const [bone, matrix] of transforms) {
-      if (!rotations.has(bone)) rotations.set(bone, new Quaternion());
-      rotations.get(bone).setFromRotationMatrix(matrix).normalize();
+      if (!rotations.has(bone)) rotations.set(bone, new Matrix3());
+      rotations.get(bone).getNormalMatrix(matrix);
     }
     let changed = false;
     for (const [mesh, participant] of participants) {

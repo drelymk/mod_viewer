@@ -36,12 +36,43 @@ export function isGameRigSkeleton(reference) {
           Number.isFinite(v) &&
           Math.abs(v) >= 1e-6 &&
           Math.abs(v) <= 1e6 &&
-          Math.abs(v - scale[0]) <= 2e-3 * Math.abs(scale[0]),
+          (reference.version === 2 || Math.abs(v - scale[0]) <= 2e-3 * Math.abs(scale[0])),
       )
     )
       return false;
   }
   return true;
+}
+
+export function mergeGameRigBindings(members = []) {
+  const reference = members[0]?.gameRig;
+  if (!isGameRigSkeleton(reference)) return null;
+  const boneMap = {};
+  const skeletons = new Map([[reference.bones, true]]);
+  let bones = null;
+  for (const member of members) {
+    const candidate = member?.gameRig;
+    if (candidate?.id !== reference.id || !member.boneIds?.length) return null;
+    if (!skeletons.has(candidate.bones)) {
+      bones ??= JSON.stringify(reference.bones);
+      skeletons.set(candidate.bones, JSON.stringify(candidate.bones) === bones);
+    }
+    if (!skeletons.get(candidate.bones)) return null;
+    for (const bone of member.boneIds) {
+      const target = candidate.boneMap?.[bone];
+      if (
+        !Number.isInteger(bone) ||
+        bone < 0 ||
+        !Number.isInteger(target) ||
+        target < 0 ||
+        target >= reference.bones.length ||
+        (Object.hasOwn(boneMap, bone) && boneMap[bone] !== target)
+      )
+        return null;
+      boneMap[bone] = target;
+    }
+  }
+  return { ...reference, boneMap };
 }
 
 export function buildGameRigReconciliation(sourceRigs = []) {
@@ -65,7 +96,7 @@ export function buildGameRigReconciliation(sourceRigs = []) {
     const worldScale = new Vector3();
     world.decompose(new Vector3(), frame, worldScale);
     // A mirrored (uniform negative) world scale makes decompose turn the frame 180° about its X axis.
-    if (worldScale.x < 0) frame.multiply(new Quaternion(1, 0, 0, 0));
+    if (reference.version !== 2 && worldScale.x < 0) frame.multiply(new Quaternion(1, 0, 0, 0));
     frame.normalize();
     pivots.set(jointId, position);
     frames.set(jointId, frame);

@@ -1,9 +1,42 @@
 import pytest
 import struct
 
-from app.runtime import server
 from .payloads import model_payload, weighted_payload
 from .support import bridge_calls, open_model, wait_loaded
+
+
+def test_affine_clip_preserves_reference_scale_and_normal_inverse_transpose(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three');
+      const {sampleAnimation} = await import('./js/weight-rig/rig-animation.js');
+      const {sampleMorphWeights} = await import('./js/weight-rig/animation-morphs.js');
+      const {isGameRigSkeleton,buildGameRigReconciliation} = await import('./js/weight-rig/game-rig.js');
+      const {applyWeightedNormalDeformationInto} = await import('./js/weight-rig/weight-deformation.js');
+      const rig = {id:'rig01',version:2,bones:[{name:'Root',parent:-1,
+        translation:[0,0,0],rotation:[0,0,0,1],scale:[1,2,1]}]};
+      const clip = {version:2,layout:'frame-major-tqs-f32le',duration:1,
+        frame_count:2,bone_count:1,morphs:{names:['Shape01'],weights:new Float32Array(1)}};
+      const values = new Float32Array([0,0,0,0,0,0,1,1,2,1, 0,0,0,0,0,0,1,3,4,1, 0,1]);
+      const transform = sampleAnimation(rig,clip,values,.5).get(0);
+      const normalMatrix = new T.Matrix3().getNormalMatrix(transform);
+      const normals = new Float32Array(3);
+      applyWeightedNormalDeformationInto(normals,new Float32Array([1,1,0]),
+        new Uint32Array([0]),new Float32Array([1]),1,new Map([[0,normalMatrix]]));
+      const mirrored = {...rig,bones:[{...rig.bones[0],scale:[-1,2,1]}]};
+      const reconciled = buildGameRigReconciliation([{sourceKey:'Blend01',boneIds:[0],
+        gameRig:{...mirrored,boneMap:{0:0}}}]);
+      return {accepted:isGameRigSkeleton(rig),legacyRejected:!isGameRigSkeleton({...rig,version:1}),
+        mirroredFrame:reconciled.authoredRestFrames.get(0).toArray(),
+        position:new T.Vector3(1,1,0).applyMatrix4(transform).toArray(),normal:Array.from(normals),
+        rest:new T.Vector3(1,1,0).applyMatrix4(sampleAnimation(rig,clip,values,0).get(0)).toArray(),
+        morph:Array.from(sampleMorphWeights(clip,values,.5).weights)};
+    }''')
+    assert result['accepted'] and result['legacyRejected']
+    assert result['position'] == pytest.approx([2, 1.5, 0])
+    assert result['normal'] == pytest.approx([.6, .8, 0])
+    assert result['rest'] == pytest.approx([1, 1, 0])
+    assert result['morph'] == pytest.approx([.5])
+    assert result['mirroredFrame'] == pytest.approx([0, 0, 0, 1])
 
 
 def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_page):
@@ -138,6 +171,11 @@ def test_animation_mesh_preparation_is_lazy_and_frame_maps_are_reused(module_pag
 @pytest.mark.parametrize('kind', ['asset', 'mod'])
 @pytest.mark.parametrize('partial', [False, True])
 def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, partial):
+    import hashlib
+    import json
+    import numpy as np
+    from app.assets.animations import AnimationSessions
+    from app.assets.game_extract.zzz_morphs import export_glb
     from tests.support.animations import compute_mod, load_mod
 
     payload, weights = weighted_payload()
@@ -150,7 +188,7 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
         weights['meshes']['mesh-02']['source'].update(key='stream-02.buf|offset=0', file='stream-02.buf')
     bones = [dict(name='Root', parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1]),
              dict(name='Joint01', parent=0, translation=[1, 0, 0], rotation=[0, 0, 0, 1])]
-    weights['game_rigs'] = {'rig01': dict(id='rig01', bones=bones, animation_session='session01',
+    weights['game_rigs'] = {'rig01': dict(id='rig01', version=2, bones=bones, animation_session='session01',
         animations=[dict(id='clip01', name='Clip 01', duration=1)])}
     weights['meshes']['mesh-00'].update(game_rig_id='rig01', game_bone_map={'0': 0, '1': 1})
     weights['meshes']['mesh-00']['game_morph_binding'] = dict(vertex_sha256='a' * 64, index_sha256='b' * 64,
@@ -162,14 +200,23 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
         payload['metadata'].update(source_kind='asset', asset=dict(rig_session='asset-session', path='Asset01'))
     data = struct.pack('<28f', *([0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1]
                               + [2, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1]))
-    clip = dict(status='ok', clip=dict(id='clip01', name='Clip 01', skeleton_id='rig01',
-        frame_count=2, bone_count=2, duration=1, data=dict(length=len(data))))
-    morph_data = struct.pack('<I6f', 2, 0, 0, 2, 0, 0, 0)
+    data = b''.join(struct.pack('<10f', *row, 1, 1, 1) for row in struct.iter_unpack('<7f', data))
     data += struct.pack('<2f', 0, 1)
-    clip['clip']['data']['length'] = len(data)
-    clip['clip']['morphs'] = dict(names=['Shape01'], data=dict(length=len(morph_data)), components=[
-        dict(vertex_sha256='a' * 64, index_sha256='b' * 64, vertex_count=3,
-             targets=[dict(name='Shape01', offset=0, count=1)])])
+    library = tmp_path / 'Asset01/Animation'
+    library.mkdir(parents=True)
+    facial = dict(components=[dict(part=dict(positions=np.array([[0,0,0],[1,0,0],[0,1,0]]),
+        normals=None, uv=None, indices=np.array([[0,1,2]]), source_vertices=[0,1,2], source_vertex_count=3,
+        vertex_sha256='a' * 64, index_sha256='b' * 64), targets={'Shape01': {2: [0,0,2,0,0,0]}})])
+    morph = export_glb(facial, dict(names=['Shape01'], weights=np.array([[0],[1]])), 2, 1, library)
+    metadata = dict(format='mod-viewer-animation', version=2, layout='frame-major-tqs-f32le', coordinate_space='asset',
+        skeleton_id='rig01', frame_count=2, bone_count=2, duration=1, data_file='clip01.bin',
+        sha256=hashlib.sha256(data).hexdigest(), morphs=morph)
+    (library / 'clip01.bin').write_bytes(data)
+    (library / 'clip01.json').write_text(json.dumps(metadata))
+    (library / 'manifest.json').write_text(json.dumps(dict(format='mod-viewer-animations', version=1,
+        skeleton_id='rig01', clips=[dict(id='clip01', name='Clip 01', file='clip01.json', duration=1)])))
+    sessions = AnimationSessions()
+    token = sessions.catalog(str(tmp_path), 'Asset01', dict(id='rig01', bones=bones), lambda: True)['animation_session']
     ini = compute_mod(tmp_path / 'mod')
     parsed, built = load_mod(ini, ini.parent)
     replacement = model_payload()
@@ -180,9 +227,7 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     def load_clip(_source):
-        clip['clip']['data']['url'] = server.publish_geometry(data, replace=False)
-        clip['clip']['morphs']['data']['url'] = server.publish_geometry(morph_data, replace=False)
-        return clip
+        return sessions.load(token, 'clip01')
     page.expose_binding('__animationClip', load_clip)
     page.evaluate('''() => {
       window.pywebview.api.get_asset_skinning_preview = () => window.__fixtureLoad('fixture-weights');
@@ -349,6 +394,7 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
       const rig=window.__animationApi.getModelRigState();
       return result.stale && !rig.loading && !rig.loaded && !window.__animationApi.getRigAnimationState().clips.length;
     }''')
+    sessions.clear()
 
 
 def test_morph_compaction_interpolation_cpu_skinning_and_release(module_page):

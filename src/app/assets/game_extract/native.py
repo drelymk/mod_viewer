@@ -184,77 +184,105 @@ def capture(root, record):
 
 
 def match_components(captured, mesh):
+    """Prove one native section per component, independent of captured IB offsets."""
     palettes = []
     for component in captured:
-        first, count = component["first_index"], component["index_count"]
-        if (first, count) not in mesh["sections"]:
-            raise ValueError("Native mesh component ranges differ from the Asset.")
-        resource = component["resources"]
-        layout, vertices = resource["fmt"], resource["vb"]
-        if not layout.stride or len(vertices) % layout.stride:
-            raise ValueError("Captured vertex stride is invalid.")
-        vertex_count = len(vertices) // layout.stride
-        position = layout.semantic("POSITION")
-        if not position or position.format.removeprefix("DXGI_FORMAT_") != "R32G32B32_FLOAT":
-            raise ValueError("Unsupported captured position layout.")
-        index_format = layout.index_format.removeprefix("DXGI_FORMAT_")
-        kind = {"R16_UINT": "H", "R32_UINT": "I"}.get(index_format)
-        if not kind:
-            raise ValueError("Unsupported captured index layout.")
-        indices = [row[0] for row in struct.iter_unpack("<" + kind, resource["ib"])]
-        if len(indices) != count or first + count > len(mesh["indices"]):
-            raise ValueError("Native mesh triangle counts differ from the Asset.")
-        correspondence = {}
-        for local, native in zip(indices, mesh["indices"][first:first + count]):
-            if not 0 <= local < vertex_count or (local in correspondence and correspondence[local] != native):
-                raise ValueError("Captured vertex correspondence is ambiguous.")
-            correspondence[local] = native
-        if len(correspondence) != vertex_count:
-            raise ValueError("Captured vertices are not completely covered by native geometry.")
-        channels = []
-        for index in (0, 1):
-            ids = layout.semantic("BLENDINDICES", index)
-            amounts = layout.semantic("BLENDWEIGHTS", index) or layout.semantic("BLENDWEIGHT", index)
-            if ids is None and amounts is None:
-                break
-            if (not ids or not amounts or ids.format.removeprefix("DXGI_FORMAT_") != "R8G8B8A8_UINT"
-                    or amounts.format.removeprefix("DXGI_FORMAT_") != "R8G8B8A8_UNORM"):
-                raise ValueError("Unsupported captured skin layout.")
-            channels.append((ids.offset, amounts.offset))
-        if not channels:
-            raise ValueError("Captured component has no skin weights.")
-        candidates = {}
-        captured_weights = []
-        for local in range(vertex_count):
-            native, offset = correspondence[local], local * layout.stride
-            if struct.unpack_from("<3f", vertices, offset + position.offset) != mesh["positions"][native]:
-                raise ValueError("Native mesh positions differ from the Asset.")
-            for channel in range(16):
-                element = layout.semantic("TEXCOORD", channel)
-                if element is None:
-                    break
-                uv_format = {"R16G16_FLOAT": "<2e", "R32G32_FLOAT": "<2f"}.get(element.format.removeprefix("DXGI_FORMAT_"))
-                if not uv_format or channel >= len(mesh["uv"]) or struct.unpack_from(uv_format, vertices, offset + element.offset) != mesh["uv"][channel][native]:
-                    raise ValueError("Native texture coordinates differ from the Asset.")
-            influences = [(bone, weight) for ids, amounts in channels
-                          for bone, weight in zip(vertices[offset + ids:offset + ids + 4], vertices[offset + amounts:offset + amounts + 4]) if weight]
-            expected = mesh["weights"][native]
-            if sorted(weight for _, weight in influences) != sorted(weight for _, weight in expected):
-                raise ValueError("Native weight values differ from the Asset.")
-            for bone, weight in influences:
-                possible = {target for target, value in expected if value == weight}
-                candidates[bone] = candidates.get(bone, possible) & possible
-            captured_weights.append((influences, expected))
-        if not candidates or set(candidates) != set(range(max(candidates) + 1)) or any(len(v) != 1 for v in candidates.values()):
-            raise ValueError("Captured bone palettes cannot be mapped unambiguously.")
-        mapping = [next(iter(candidates[i])) for i in range(len(candidates))]
-        if len(set(mapping)) != len(mapping):
-            raise ValueError("Captured bone palettes contain conflicting aliases.")
-        for influences, expected in captured_weights:
-            if sorted((mapping[bone], weight) for bone, weight in influences) != sorted(expected):
-                raise ValueError("Native skin influence pairs differ from the Asset.")
-        palettes.append({key: value for key, value in component.items() if key != "resources"} | {"bone_map": mapping})
+        matches = []
+        for first, count in mesh["sections"]:
+            if count != component["index_count"]:
+                continue
+            try:
+                matches.append(_match_component_section(component, mesh, first))
+            except (ValueError, KeyError, IndexError):
+                continue
+        if len(matches) != 1:
+            raise ValueError("Captured component cannot be mapped to one unique native mesh section.")
+        palettes.append(matches[0])
     return palettes
+
+
+def _match_component_section(component, mesh, first):
+    count = component["index_count"]
+    resource = component["resources"]
+    layout, vertices = resource["fmt"], resource["vb"]
+    if not layout.stride or len(vertices) % layout.stride:
+        raise ValueError("Captured vertex stride is invalid.")
+    vertex_count = len(vertices) // layout.stride
+    position = layout.semantic("POSITION")
+    if not position or position.format.removeprefix("DXGI_FORMAT_") != "R32G32B32_FLOAT":
+        raise ValueError("Unsupported captured position layout.")
+    index_format = layout.index_format.removeprefix("DXGI_FORMAT_")
+    kind = {"R16_UINT": "H", "R32_UINT": "I"}.get(index_format)
+    if not kind:
+        raise ValueError("Unsupported captured index layout.")
+    indices = [row[0] for row in struct.iter_unpack("<" + kind, resource["ib"])]
+    if len(indices) != count or first + count > len(mesh["indices"]):
+        raise ValueError("Native mesh triangle counts differ from the Asset.")
+    correspondence = {}
+    for local, native in zip(indices, mesh["indices"][first:first + count]):
+        if not 0 <= local < vertex_count or (local in correspondence and correspondence[local] != native):
+            raise ValueError("Captured vertex correspondence is ambiguous.")
+        correspondence[local] = native
+    if len(correspondence) != vertex_count:
+        raise ValueError("Captured vertices are not completely covered by native geometry.")
+    channels = []
+    for index in (0, 1):
+        ids = layout.semantic("BLENDINDICES", index)
+        amounts = layout.semantic("BLENDWEIGHTS", index) or layout.semantic("BLENDWEIGHT", index)
+        if ids is None and amounts is None:
+            break
+        if (not ids or not amounts or ids.format.removeprefix("DXGI_FORMAT_") != "R8G8B8A8_UINT"
+                or amounts.format.removeprefix("DXGI_FORMAT_") != "R8G8B8A8_UNORM"):
+            raise ValueError("Unsupported captured skin layout.")
+        channels.append((ids.offset, amounts.offset))
+    if not channels:
+        raise ValueError("Captured component has no skin weights.")
+    candidates = {}
+    captured_weights = []
+    for local in range(vertex_count):
+        native, offset = correspondence[local], local * layout.stride
+        if struct.unpack_from("<3f", vertices, offset + position.offset) != mesh["positions"][native]:
+            raise ValueError("Native mesh positions differ from the Asset.")
+        for channel in range(16):
+            element = layout.semantic("TEXCOORD", channel)
+            if element is None:
+                break
+            uv_format = {"R16G16_FLOAT": "<2e", "R32G32_FLOAT": "<2f"}.get(element.format.removeprefix("DXGI_FORMAT_"))
+            if not uv_format or channel >= len(mesh["uv"]) or struct.unpack_from(uv_format, vertices, offset + element.offset) != mesh["uv"][channel][native]:
+                raise ValueError("Native texture coordinates differ from the Asset.")
+        influences = [(bone, weight) for ids, amounts in channels
+                      for bone, weight in zip(vertices[offset + ids:offset + ids + 4], vertices[offset + amounts:offset + amounts + 4]) if weight]
+        expected = mesh["weights"][native]
+        if sorted(weight for _, weight in influences) != sorted(weight for _, weight in expected):
+            raise ValueError("Native weight values differ from the Asset.")
+        for bone, weight in influences:
+            possible = {target for target, value in expected if value == weight}
+            candidates[bone] = candidates.get(bone, possible) & possible
+        captured_weights.append((influences, expected))
+    if not candidates or set(candidates) != set(range(max(candidates) + 1)):
+        raise ValueError("Captured bone palettes cannot be mapped unambiguously.")
+    mapping = _unique_bone_map(candidates)
+    for influences, expected in captured_weights:
+        if sorted((mapping[bone], weight) for bone, weight in influences) != sorted(expected):
+            raise ValueError("Native skin influence pairs differ from the Asset.")
+    return {key: value for key, value in component.items() if key != "resources"} | {
+        "bone_map": mapping, "native_first_index": first}
+
+
+def _unique_bone_map(candidates):
+    """Resolve only mappings forced by the complete one-to-one palette."""
+    remaining = {bone: set(targets) for bone, targets in candidates.items()}
+    mapping = [None] * len(remaining)
+    while remaining:
+        forced = {bone: next(iter(targets)) for bone, targets in remaining.items() if len(targets) == 1}
+        if (not forced or any(not targets for targets in remaining.values())
+                or len(set(forced.values())) != len(forced)):
+            raise ValueError("Captured bone palettes cannot be mapped unambiguously.")
+        for bone, target in forced.items():
+            mapping[bone] = target
+        occupied = set(forced.values())
+        remaining = {bone: targets - occupied for bone, targets in remaining.items() if bone not in forced}
+    return mapping
 
 
 _HUMANOID_NAMES = dict(pelvis="Bip001Pelvis", chest="Bip001Spine2", neck="Bip001Neck", head="Bip001Head")
@@ -279,6 +307,8 @@ def humanoid_controls(raw):
 
 
 def make_rig(mesh, palettes, previous=None):
+    palettes = [{key: value for key, value in palette.items() if key != "native_first_index"}
+                for palette in palettes]
     raw = dict(format="mod-viewer-rig", version=1, coordinate_space="asset",
                bones=mesh["bones"], components=palettes, skin_bindings=[])
     merged, cursors = [], {}

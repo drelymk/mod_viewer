@@ -26,6 +26,38 @@ def morph_names(raw):
     return names
 
 
+def _glb_targets(data, raw):
+    """Read only the embedded runtime view; never resolve GLB URI resources."""
+    if len(data) < 28 or struct.unpack_from("<3I", data) != (0x46546C67, 2, len(data)):
+        raise ValueError("Invalid facial GLB header.")
+    length, kind = struct.unpack_from("<2I", data, 12)
+    if kind != 0x4E4F534A or length % 4 or not 0 < length <= 4 * 1024 * 1024 or length + 28 > len(data):
+        raise ValueError("Invalid facial GLB metadata.")
+    document = json.loads(data[20:20 + length])
+    size, kind = struct.unpack_from("<2I", data, 20 + length)
+    start = 28 + length
+    if kind != 0x004E4942 or size % 4 or size != len(data) - start or not isinstance(document, dict):
+        raise ValueError("Invalid facial GLB buffer.")
+    try:
+        runtime = document["extras"]["mod_viewer_morphs"]
+        if (runtime["version"] != 1 or runtime["components"] != raw["components"]
+                or runtime["names"] != raw["names"] or type(runtime["buffer_view"]) is not int
+                or not 0 <= runtime["buffer_view"] < len(document["bufferViews"])):
+            raise ValueError("Facial GLB does not match its clip.")
+        buffers = document["buffers"]
+        if (len(buffers) != 1 or set(buffers[0]) != {"byteLength"}
+                or type(buffers[0]["byteLength"]) is not int or not size - 3 <= buffers[0]["byteLength"] <= size):
+            raise ValueError("Invalid facial GLB buffer.")
+        view = document["bufferViews"][runtime["buffer_view"]]
+        offset, count = view["byteOffset"], view["byteLength"]
+        if (view["buffer"] != 0 or type(offset) is not int or type(count) is not int
+                or offset < 0 or offset % 4 or count < 1 or offset + count > buffers[0]["byteLength"]):
+            raise ValueError("Invalid facial GLB runtime range.")
+    except (KeyError, IndexError, TypeError) as error:
+        raise ValueError("Invalid facial GLB runtime view.") from error
+    return data[start + offset:start + offset + count]
+
+
 def read_morphs(directory, raw, *, validated=None):
     """Read targets, or reuse a validation marker during one extraction operation.
 
@@ -37,7 +69,7 @@ def read_morphs(directory, raw, *, validated=None):
         raise ValueError("Animation morph data is unavailable.")
     key = None
     if validated is not None:
-        descriptor = json.dumps([raw.get("sha256"), raw.get("components")], sort_keys=True,
+        descriptor = json.dumps([raw.get("sha256"), raw.get("components"), raw.get("format"), raw.get("names")], sort_keys=True,
                                 separators=(",", ":"), allow_nan=False).encode()
         key = (file, _file_identity(file), hashlib.sha256(descriptor).digest())
         if key in validated:
@@ -46,6 +78,10 @@ def read_morphs(directory, raw, *, validated=None):
         data = stream.read(128 * 1024 * 1024 + 1)
     if len(data) > 128 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != raw.get("sha256"):
         raise ValueError("Animation morph data is incomplete or has changed.")
+    if raw.get("format") == "glb":
+        data = _glb_targets(data, raw)
+    elif raw.get("format") is not None:
+        raise ValueError("Unsupported animation morph format.")
     components = raw.get("components")
     if not isinstance(components, list) or not 1 <= len(components) <= 4096:
         raise ValueError("Invalid animation morph components.")

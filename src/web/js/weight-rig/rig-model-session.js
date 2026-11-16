@@ -5,6 +5,7 @@
 import { aggregateInfluenceGraphs, buildInferredRigForest, jointPivotMap } from './weight-rig.js';
 import { createWorkBudget } from './cooperative-scheduler.js';
 import { weightRigStatus } from './weight-rig-status.js';
+import { mergeGameRigBindings } from './game-rig.js';
 
 function clockNow() {
   return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
@@ -164,17 +165,7 @@ export function createRigSourceSession({
 
   function assembleSourceSkinningRig(sourceKey, members, influenceGraph, inferredForest) {
     const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
-    const gameRigs = members.map((mesh) => states.get(mesh)?.gameRig);
-    const firstGameRig = gameRigs[0];
-    const gameRig =
-      firstGameRig &&
-      gameRigs.every(
-        (candidate) =>
-          candidate?.id === firstGameRig.id &&
-          JSON.stringify(candidate.boneMap) === JSON.stringify(firstGameRig.boneMap),
-      )
-        ? firstGameRig
-        : null;
+    const gameRig = mergeGameRigBindings(members.map((mesh) => states.get(mesh)));
     const jointPivotByBoneId = jointPivotMap(inferredForest, influenceGraph.relationships);
     const rig = {
       key: sourceKey,

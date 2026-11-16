@@ -105,9 +105,10 @@ def animation_reference(client, skeleton, rig):
 def clip_id(name, package, used):
     stem = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:48].strip("_") or "clip"
     result = stem
-    if result in used:
+    occupied = {key.casefold() for key in used}
+    if result.casefold() in occupied:
         result = stem + "_" + hashlib.sha256(package.encode()).hexdigest()[:12]
-    if result in used:
+    if result.casefold() in occupied:
         raise ValueError("Game clip identities are ambiguous.")
     used.add(result)
     return result
@@ -246,7 +247,7 @@ def verify_candidates(client, captured, candidates, cancel):
     return [row for row in matches if len(row[3]) == best]
 
 
-def rest_worlds(bones):
+def rest_worlds(bones, *, affine=False):
     """Compose validated reference transforms, rejecting malformed or cyclic hierarchies."""
     import numpy as np
 
@@ -261,7 +262,7 @@ def rest_worlds(bones):
             raise ValueError("Invalid companion reference transform.")
         length = np.linalg.norm(rotation)
         if (abs(length - 1) > .001 or np.min(np.abs(scale)) < 1e-6
-                or np.any(np.abs(scale - scale[0]) > .002 * abs(scale[0]))):
+                or (not affine and np.any(np.abs(scale - scale[0]) > .002 * abs(scale[0])))):
             raise ValueError("Invalid companion reference rotation or scale.")
         x, y, z, w = rotation / length
         matrix = np.eye(4)
@@ -291,7 +292,7 @@ def rest_worlds(bones):
     return worlds
 
 
-def sub_skeleton_map(primary, mesh):
+def sub_skeleton_map(primary, mesh, *, affine=False):
     """Prove named bones, the induced parent hierarchy and identical world reference transforms."""
     import numpy as np
 
@@ -300,7 +301,7 @@ def sub_skeleton_map(primary, mesh):
     if not names or len(index) != len(primary["bones"]) or len(names) != len(mesh["bones"]):
         return None
     try:
-        primary_worlds, mesh_worlds = rest_worlds(primary["bones"]), rest_worlds(mesh["bones"])
+        primary_worlds, mesh_worlds = rest_worlds(primary["bones"], affine=affine), rest_worlds(mesh["bones"], affine=affine)
     except (ValueError, TypeError, KeyError):
         return None
     result = []
@@ -486,7 +487,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     library = output / "Animation"
     library.mkdir()
     entries = preserve_library(asset, library, rig, previous, validated_morphs=validated_morphs)
-    morph_targets = export_morphs(mesh, [captured[index] for index in proven
+    morph_targets = export_morphs(mesh, [{**captured[index],
+                                       "first_index": palette_by_component[index]["native_first_index"]} for index in proven
                                        if index not in companions], library)
     existing = {key: document(library / entry["file"]) for key, entry in entries.items()}
     used, imported, secondary = set(entries), 0, 0

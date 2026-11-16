@@ -1,3 +1,87 @@
+import pytest
+
+
+@pytest.mark.parametrize('variant', ['disjoint', 'overlap', 'superset', 'detached', 'conflict', 'missing', 'unproven', 'skeleton', 'changed_rest'])
+def test_shared_source_rig_palette_admission_matrix(module_page, variant):
+    result = module_page.evaluate('''async variant => {
+      const {mergeGameRigBindings,buildGameRigReconciliation}=await import('./js/weight-rig/game-rig.js');
+      const bones=[{name:'Root',parent:-1,translation:[0,0,0],rotation:[0,0,0,1]},
+        {name:'Joint01',parent:0,translation:[2,0,0],rotation:[0,0,0,1]},
+        {name:'Joint02',parent:0,translation:[-2,0,0],rotation:[0,0,0,1]}];
+      const reference={id:'rig01',version:2,bones};
+      const first={boneIds:[7],gameRig:{...reference,boneMap:{7:1}}};
+      const second={boneIds:[9],gameRig:{...reference,boneMap:{9:2}}};
+      if(variant==='overlap')second.boneIds=[7,9],second.gameRig.boneMap={9:2,7:1};
+      if(variant==='superset')first.gameRig.boneMap={9:2,7:1};
+      if(variant==='detached')second.gameRig.bones=structuredClone(bones);
+      if(variant==='conflict')second.boneIds=[7,9],second.gameRig.boneMap[7]=2;
+      if(variant==='missing')second.gameRig.boneMap={7:1};
+      if(variant==='unproven')second.gameRig=null;
+      if(variant==='skeleton')second.gameRig.id='rig02';
+      if(variant==='changed_rest')second.gameRig.bones=[{...bones[0],translation:[1,0,0]},...bones.slice(1)];
+      const original=JSON.stringify([first,second]);
+      const merged=mergeGameRigBindings([first,second]);
+      const reversed=mergeGameRigBindings([second,first]);
+      const rig=merged&&buildGameRigReconciliation([{sourceKey:'Weights01.buf',boneIds:[7,9],gameRig:merged}]);
+      return {map:merged?.boneMap||null,reversed:reversed?.boneMap||null,
+        aliases:rig?[...rig.sourceBoneToModelJointMap]:null,
+        unchanged:JSON.stringify([first,second])===original};
+    }''', variant)
+    assert result['unchanged']
+    if variant in ('disjoint', 'overlap', 'superset', 'detached'):
+        assert result['map'] == result['reversed'] == {'7': 1, '9': 2}
+        assert result['aliases'] == [['Weights01.buf#bone=7', 1], ['Weights01.buf#bone=9', 2]]
+    else:
+        assert result['map'] is result['reversed'] is result['aliases'] is None
+
+
+def test_asset_shared_weight_buffer_adopts_extracted_sparse_rig_lifecycle(viewer):
+    from .payloads import weighted_payload
+    from .support import open_model, wait_loaded
+
+    payload, weights = weighted_payload(include_second_member=True)
+    payload['metadata'].update(source_kind='asset', asset=dict(rig_session='asset-session', path='Asset01'))
+    bones = [dict(name=name, parent=parent, translation=position, rotation=[0, 0, 0, 1],
+                  scale=[1, 2, 1] if index == 0 else [1, 1, 1])
+             for index, (name, parent, position) in enumerate([
+                 ('BindRoot', -1, [0, 0, 0]), ('Root', 0, [0, 0, 0]),
+                 ('Joint01', 1, [2, 0, 0]), ('Joint02', 2, [0, 2, 0]),
+                 ('Joint03', 1, [-2, 0, 0]), ('Joint04', 4, [0, 2, 0])])]
+    weights['game_rigs'] = {'rig01': dict(id='rig01', version=2, bones=bones, animations=[])}
+    weights['meshes']['mesh-00'].update(game_rig_id='rig01', game_bone_map={'0': 2, '1': 3})
+    weights['meshes']['mesh-01'].update(game_rig_id='rig01', game_bone_map={'2': 4, '3': 5})
+    page = viewer({'model01': payload, 'fixture-weights': weights})
+    page.evaluate("window.pywebview.api.get_asset_skinning_preview = () => window.__fixtureLoad('fixture-weights')")
+    open_model(page, 'model01')
+    wait_loaded(page, 2)
+    page.locator('#weight-rig-tab').click()
+    page.evaluate('''async () => {
+      const {weightRigApi}=await import('./js/weight-rig/weight-rig-core.js');
+      window.__rigApi=weightRigApi;
+    }''')
+    page.wait_for_function('''() => {
+      const state=window.__rigApi.getModelRigState();return !!state.model&&!state.loading;
+    }''')
+    snapshot = page.evaluate('window.__rigApi.getModelRigState()')
+    state = snapshot['model']
+    assert state is not None, snapshot
+    assert [joint['name'] for joint in state['joints']] == [bone['name'] for bone in bones]
+    assert state['joints'][3]['restPivot'] == [2, 4, 0]
+    assert all(edge['relationshipType'] == 'authored' for edge in state['forestEdges'])
+    assert len(state['forestEdges']) == 5
+    page.evaluate('''() => {
+      window.__rigBaseline=window.modViewer.activeMeshes.map(mesh=>[...mesh.geometry.attributes.position.array]);
+      window.__rigApi.setRigJointRotation(2,[0,0,Math.SQRT1_2,Math.SQRT1_2]);
+      window.__rigApi.setRigJointRotation(4,[0,0,Math.SQRT1_2,Math.SQRT1_2]);
+      window.__rigApi.finishRigJointPose(4);
+    }''')
+    assert page.evaluate('''() => window.modViewer.activeMeshes.every((mesh,index)=>
+      [...mesh.geometry.attributes.position.array].some((value,vertex)=>Math.abs(value-window.__rigBaseline[index][vertex])>1e-5))''')
+    page.evaluate('window.__rigApi.resetRigPose()')
+    assert page.evaluate('''() => window.modViewer.activeMeshes.every((mesh,index)=>
+      [...mesh.geometry.attributes.position.array].every((value,vertex)=>Math.abs(value-window.__rigBaseline[index][vertex])<1e-5))''')
+
+
 def test_game_rig_source_identity_rest_pose_and_fallback_lifecycle(module_page):
     result = module_page.evaluate('''async () => {
       const T = await import('three');

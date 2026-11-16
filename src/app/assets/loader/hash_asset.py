@@ -13,6 +13,7 @@ from core.textures import normalize_texture_role
 
 from app.assets import paths as asset_paths
 from app.assets.metadata import entries as _entries, texture_role
+from app.assets.skinning import capture_dump_skinning
 from . import gimi_face_alignment
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      make_texture, part_filter_matches)
@@ -356,7 +357,7 @@ def _remap(vertex_dump, indices):
         return bytes(result)
 
     return (select(positions, 3), select(normals, 3), select(uvs, 2),
-            pack_indices(valid_indices))
+            pack_indices(valid_indices), tuple(unique))
 
 
 def _warning(component, classification, reason, message):
@@ -735,7 +736,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                     f"{component or geometry_hash} range {first} has no complete triangles."))
                 continue
             try:
-                positions, normals, uvs, indices = _remap(vertex_dump, selected)
+                positions, normals, uvs, indices, used_vertices = _remap(vertex_dump, selected)
             except (AssetLoadError, MigotoDumpError) as error:
                 warnings.append(_warning(
                     component, classification, "part_invalid",
@@ -783,7 +784,9 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 indices=indices,
                 uvs=uvs, normals=normals, textures=textures,
                 texture_candidates=texture_candidates, metadata_path=item.metadata_path,
-                metadata_entry=item.entry_index, texture_range=ordinal))
+                metadata_entry=item.entry_index, texture_range=ordinal,
+                skinning=(capture_dump_skinning(root, item.vb_file, vertex_dump.layout, used_vertices, _ib_file)
+                          if asset_type == "ZZMI" else None)))
     if not parts:
         raise AssetLoadError("Asset contains no complete renderable parts.")
     return AssetAdapterResult(tuple(parts), tuple(warnings))

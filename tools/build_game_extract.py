@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -81,6 +82,47 @@ def run(command, **options):
     subprocess.run([str(part) for part in command], check=True, **options)
 
 
+class MissingDotnetSdk(RuntimeError):
+    """A required build prerequisite is unavailable."""
+
+
+def resolve_dotnet(project, requested="dotnet"):
+    """Verify the SDK selected by .NET under the project's global.json policy."""
+    version = json.loads((project / "global.json").read_text(encoding="utf-8"))["sdk"][
+        "version"
+    ]
+    resolved = shutil.which(str(requested))
+    if resolved:
+        resolved = str(Path(resolved).resolve())
+        try:
+            result = subprocess.run(
+                [resolved, "--version"],
+                cwd=project,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                env={**os.environ, "DOTNET_CLI_TELEMETRY_OPTOUT": "1"},
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if (
+            result is not None
+            and result.returncode == 0
+            and re.fullmatch(r"\d+\.\d+\.\d+", result.stdout.strip())
+            and tuple(map(int, result.stdout.strip().split(".")))
+            >= tuple(map(int, version.split(".")))
+        ):
+            selected = result.stdout.strip()
+            print(f"Using .NET SDK {selected}: {resolved}", flush=True)
+            return resolved
+    raise MissingDotnetSdk(
+        f".NET SDK {version} or a newer stable SDK allowed by global.json is required to build the native helpers. "
+        "Install a compatible SDK and make dotnet available on PATH, or pass --dotnet <path-to-dotnet>. "
+        "A runtime-only installation or an older SDK cannot build the helpers."
+    )
+
+
 def dependency_notices(package_cache, output):
     """Keep upstream license texts and package metadata alongside the helper."""
     notices = output / "licenses/packages"
@@ -115,6 +157,7 @@ def dependency_notices(package_cache, output):
 
 
 def build(dotnet="dotnet", *, update_locks=False, verify_format=False):
+    dotnet = resolve_dotnet(PROJECT, dotnet)
     cache = ROOT / ".quality-reports/game-extract-build"
     cache.mkdir(parents=True, exist_ok=True)
     parser, acl, rtm = (source(name, cache) for name in ("parser", "acl", "rtm"))
@@ -245,8 +288,23 @@ def main():
         help="explicit dependency-lock maintenance",
     )
     ap.add_argument("--verify-format", action="store_true")
+    ap.add_argument(
+        "--check-sdk",
+        action="store_true",
+        help="check the required SDK without building",
+    )
     args = ap.parse_args()
-    build(args.dotnet, update_locks=args.update_locks, verify_format=args.verify_format)
+    try:
+        if args.check_sdk:
+            resolve_dotnet(PROJECT, args.dotnet)
+        else:
+            build(
+                args.dotnet,
+                update_locks=args.update_locks,
+                verify_format=args.verify_format,
+            )
+    except MissingDotnetSdk as error:
+        ap.exit(1, f"[build] WARNING: {error}\n")
 
 
 if __name__ == "__main__":
