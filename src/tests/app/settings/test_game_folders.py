@@ -41,9 +41,17 @@ def test_api_selects_and_clears_game_directories(tmp_path, monkeypatch):
 
     api = ModViewerAPI()
     api._window = Window()
+    assert "error" in api.select_game_directory("ZZMI")
+    assert api.get_game_folders() == {"value": {}}
+    blocks = folder / "ZenlessZoneZero_Data/StreamingAssets/Blocks"
+    blocks.mkdir(parents=True)
+    assert "error" in api.select_game_directory("ZZMI")
+    assert api.get_game_folders() == {"value": {}}
+    (blocks / "archive01.blk").write_bytes(b"synthetic archive")
     assert api.select_game_directory("ZZMI") == {"value": {"ZZMI": str(folder.resolve())}}
     assert api.get_game_folders() == {"value": {"ZZMI": str(folder.resolve())}}
     assert "error" in api.select_game_directory("Other")
     assert api.select_game_directory("WWMI")["error"]
+    assert api.get_game_folders() == {"value": {"ZZMI": str(folder.resolve())}}
     assert api.get_saved_game_folder() is None
     assert api.clear_game_directory("ZZMI") == {"value": {}}
