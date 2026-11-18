@@ -273,6 +273,7 @@ export function createRigSourceSession({
   function groupLoadedMeshes() {
     const groups = new Map();
     for (const mesh of knownMeshes) {
+      if (mesh.userData?.assetFill) continue;
       const state = states.get(mesh);
       if (!state?.loaded || !state.skinningSourceKey) continue;
       const members = groups.get(state.skinningSourceKey) || [];

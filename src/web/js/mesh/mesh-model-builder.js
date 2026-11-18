@@ -30,6 +30,7 @@ export function buildPayloadMeshes(entries = {}, modPath = null, meshNames = {},
     mesh.userData.meshNames = meshNames;
     mesh.userData.modPath = modPath;
     mesh.userData.assetFill = entry.asset_fill === true;
+    mesh.userData.animationSkinningToken = entry.animation_skinning_available ? options.animationRigToken : null;
     // Diagnostic-only projection. Operational identity remains the semantic
     // key and component grouping resolved by the panel.
     mesh.userData.assetEntry = entry;

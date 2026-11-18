@@ -9,6 +9,105 @@ from tests.support.model_data import standard_component_resources
 from tests.support.provenance import visible
 
 
+@pytest.mark.parametrize("change,accepted", [
+    ("stock", True), ("guarded", True), ("legacy", True), ("unconditional", True),
+    ("pixel_helper", True), ("multiple", True), ("ui_shader", True), ("compute", True),
+    ("local_binder", True), ("conditional_position", True), ("input_aliases", True),
+    ("wrong_phase", False), ("different_blend", True), ("alias", False), ("outgoing_alias", False),
+    ("writable_buffer", False),
+    ("second_writer", True), ("matrix", False), ("compute_blend", False),
+    ("unknown_helper", False), ("local_shadow", False), ("sibling", False),
+])
+def test_stock_zzz_palette_proof_retains_native_hash_only_for_supported_programs(change, accepted):
+    from core.ini.zzz_skeleton import stock_zzz_palette_sources
+
+    text = """[TextureOverrideComponent01Blend]
+hash = 33333333
+handling = skip
+if DRAW_TYPE == 2 || DRAW_TYPE == 4
+vb1 = ResourceComponent01Texcoord
+vb2 = ResourceComponent01Blend
+checktextureoverride = ib
+elif DRAW_TYPE == 1
+vb0 = ResourceComponent01Position
+vb2 = ResourceComponent01Blend
+draw = 4, 0
+endif
+[TextureOverrideComponent01A]
+hash = 22222222
+match_first_index = 0
+match_index_count = 3
+ib = ResourceComponent01IB
+drawindexed = 6, 0, 0
+[ResourceComponent01Blend]
+type = Buffer
+stride = 32
+filename = blend.buf
+""" + standard_component_resources(position_stride=40) + "\n[TextureOverrideComponent01Texcoord]\nvb1 = ResourceComponent01Texcoord\n"
+    if change == "guarded":
+        text = text.replace("handling = skip", "if $enabled == 1\nhandling = skip\n$active = 1")
+        text = text.replace("[TextureOverrideComponent01A]", "endif\n[TextureOverrideComponent01A]")
+    elif change in ("legacy", "unconditional"):
+        binder = ("handling = skip\nvb2 = ResourceComponent01Blend\nif DRAW_TYPE == 1\n"
+                  "vb0 = ResourceComponent01Position\ndraw = 4, 0\nendif\n") if change == "legacy" else (
+                  "vb0 = ResourceComponent01Position\nvb2 = ResourceComponent01Blend\nhandling = skip\ndraw = 4, 0\n")
+        text = "[TextureOverrideComponent01Blend]\nhash = 33333333\n" + binder + text[text.index("[TextureOverrideComponent01A]"):]
+    elif change == "wrong_phase":
+        text = text.replace("checktextureoverride = ib", "post checktextureoverride = ib")
+    elif change == "different_blend":
+        text = text.replace("vb0 = ResourceComponent01Position\nvb2 = ResourceComponent01Blend",
+                            "vb0 = ResourceComponent01Position\nvb2 = ResourceOtherBlend")
+    elif change == "alias":
+        text += "\n[CommandListOther]\nResourceComponent01Blend = copy ResourceOther\n"
+    elif change == "outgoing_alias":
+        text += "\n[CommandListOther]\nResourceOther = ref ResourceComponent01Blend\n"
+    elif change == "writable_buffer":
+        text = text.replace("type = Buffer", "type = RWStructuredBuffer")
+    elif change == "multiple":
+        text += text.replace("Component01", "Component02").replace("component01", "component02").replace("blend.buf", "blend02.buf")
+    elif change == "local_binder":
+        first, rest = text.split("[TextureOverrideComponent01A]", 1)
+        binder = first[first.index("handling = skip"):]
+        text = "[TextureOverrideComponent01Blend]\nhash = 33333333\nrun = CommandListBinder\n[TextureOverrideComponent01A]" + rest
+        text += "\n[CommandListBinder]\n" + binder
+    elif change == "conditional_position":
+        text = text.replace("vb0 = ResourceComponent01Position", "if $mode == 1\nvb0 = ResourceAlternatePosition\nelse\nvb0 = ResourceComponent01Position\nendif")
+        text += "\n[ResourceAlternatePosition]\nfilename = alternate.buf\nstride = 40\n"
+    elif change == "input_aliases":
+        text += "\n[TextureOverrideOriginalPosition]\nhash = 11111111\nvb0 = ResourceComponent01Position\nvb2 = ResourceComponent01Blend\n"
+    elif change == "second_writer":
+        text += "\n[CommandListOther]\nvb2 = ResourceComponent01Blend\n"
+    elif change == "matrix":
+        text = text.replace("drawindexed = 6, 0, 0", "run = CommandListOther\ndrawindexed = 6, 0, 0")
+        text += "\n[CommandListOther]\npost vs-cb0 = ResourceOther\n"
+    elif change == "compute":
+        text += "\n[CustomShaderOther]\ncs = shader.hlsl\n"
+    elif change == "compute_blend":
+        text += "\n[CustomShaderOther]\ncs-u0 = ResourceComponent01Blend\n"
+    elif change == "ui_shader":
+        text += "\n[CustomShaderMenu]\nvs = menu.hlsl\n"
+    elif change in ("pixel_helper", "unknown_helper", "local_shadow"):
+        target = r"CommandList\ZZMI\SetTextures" if change != "unknown_helper" else r"CommandList\Other\Run"
+        text = text.replace("drawindexed = 6, 0, 0", f"run = {target}\ndrawindexed = 6, 0, 0")
+        if change == "local_shadow":
+            text += f"\n[{target}]\nrun = CommandListMissing\n"
+    sections = parse_sections("source-01.ini", text=text)
+    if change == "sibling":
+        sections.update(parse_sections("source-02.ini", text="[CommandListOther]\n$active = 1\n"))
+    from core.ini.draw_resources import _resolve_component_buffers
+
+    resources = extract_resources(sections)
+    scanned = _scan_sections_for_draws(sections, resources=resources)
+    buffers = _resolve_component_buffers(scanned, resources, {}, sections=sections)
+    hashes, _positions, safe = stock_zzz_palette_sources(sections, resources, scanned, buffers["resolve_vertex_info"])
+    assert bool(hashes and "textureoverridecomponent01a" in safe) is accepted
+    if change == "multiple":
+        assert len(hashes) == 2
+    if accepted:
+        draw = build_draw_groups(sections, extract_resources(sections))[0]["draws"][0]
+        assert draw.skinning_source.native_palette_hashes == (("11111111", "33333333") if change == "input_aliases" else ("33333333",))
+
+
 @pytest.mark.parametrize("guard", ["$mode == 1", "$Ready == 1"])
 @pytest.mark.parametrize("initial", [False, True])
 def test_index_branch_join_keeps_sources_and_untouched_fallback(guard, initial):

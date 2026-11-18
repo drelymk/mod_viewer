@@ -269,7 +269,7 @@ def analyze(dump, context=None):
         from .profiles.gimi_faces import classify_faces
         from .profiles.gimi_placement import placement_resolver, record_placements
         resolve = placement_resolver(inv, calls, components, ctx)
-        components.extend(classify_faces(decoded_meshes, ctx, resolve_placement=resolve))
+        classify_faces(decoded_meshes, ctx)
         record_placements(inv, calls, components, ctx, resolve=resolve)
     for component in components:
         if component.status == "included" and component.requires_review:

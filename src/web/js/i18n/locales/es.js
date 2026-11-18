@@ -1,4 +1,10 @@
 export default {
+  'settings.autoLoadWeightRig': 'Cargar pesos/rig automáticamente',
+  'settings.autoLoadWeightRigDescription':
+    'Carga los pesos/rig cuando finalicen el modelo, las texturas y la restauración automática de piezas. Reproduce la primera animación disponible.',
+  'animation.select': 'Seleccionar animación',
+  'animation.previous': 'Animación anterior',
+  'animation.next': 'Animación siguiente',
   'animation.unavailable': 'La animación no está disponible.',
   'animation.rigMismatch': 'La animación no coincide con el rig cargado.',
   'animation.downloadFailed': 'Error al descargar la animación.',

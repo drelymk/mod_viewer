@@ -273,6 +273,15 @@
 
   <div id="animation-playback" class="animation-playback" role="group"
        aria-label="Animation playback" data-i18n-aria-label="animation.playback" hidden>
+    <div id="animation-clip-controls" class="animation-clip-controls" hidden>
+      <button id="animation-previous" class="tool-btn" type="button" data-i18n-title="animation.previous" data-i18n-aria-label="animation.previous">
+        <svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-left"></use></svg>
+      </button>
+      <select id="animation-clip" data-i18n-aria-label="animation.select"></select>
+      <button id="animation-next" class="tool-btn" type="button" data-i18n-title="animation.next" data-i18n-aria-label="animation.next">
+        <svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+      </button>
+    </div>
     <button id="animation-play-pause" class="tool-btn" type="button"
             aria-label="Pause animation" title="Pause animation" hidden>
       <svg class="ui-icon" aria-hidden="true"><use href="#icon-pause"></use></svg>
@@ -690,6 +699,14 @@
       </span>
       <input id="settings-auto-restore" type="checkbox" role="switch" aria-labelledby="settings-auto-restore-label"
              aria-describedby="settings-auto-restore-description">
+    </label>
+    <label class="settings-option" for="settings-auto-load-weight-rig">
+      <span class="settings-option-copy">
+        <span id="settings-auto-load-weight-rig-label" class="settings-option-title" data-i18n="settings.autoLoadWeightRig">Auto load Weight/Rig</span>
+        <span id="settings-auto-load-weight-rig-description" class="modal-field-hint" data-i18n="settings.autoLoadWeightRigDescription">Load Weight/Rig after the model, textures and automatic part restoration finish. Play the first available animation.</span>
+      </span>
+      <input id="settings-auto-load-weight-rig" type="checkbox" role="switch" aria-labelledby="settings-auto-load-weight-rig-label"
+             aria-describedby="settings-auto-load-weight-rig-description">
     </label>
     <section class="settings-game-folders" aria-labelledby="settings-game-folders-title">
       <h5 id="settings-game-folders-title" class="settings-option-title" data-i18n="settings.gameFolders">Game directory</h5>

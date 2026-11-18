@@ -12,6 +12,7 @@ from core.geometry.migoto_format import MigotoBinaryLayout, MigotoElement, parse
 from core.geometry.migoto_dump import parse_vertex_dump, parse_index_dump, pack_indices
 
 from . import paths
+from .metadata import entries as metadata_entries
 
 
 RIG_FILENAME = "Rig.json"
@@ -537,14 +538,16 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
         rig = cache[file]
         if rig["version"] != 2:
             return None
-        matches = [p for p in rig["components"] if (p["geometry_hash"], p["component_ordinal"], p["first_index"], p["index_count"])
-                   == (binding.geometry_hash, binding.component_ordinal, binding.first_index, binding.index_count)]
+        matches = [p for p in rig["components"]
+                   if (p["geometry_hash"], p["first_index"], p["index_count"])
+                   == (binding.geometry_hash, binding.first_index, binding.index_count)
+                   and (binding.component_ordinal is None or p["component_ordinal"] == binding.component_ordinal)]
         if len(matches) != 1:
             return None
         palette = matches[0]
         metadata = paths.safe_asset_path(binding.root, binding.metadata)
         expected = paths.safe_asset_path(directory, palette["metadata_file"])
-        if not metadata or metadata != expected:
+        if not metadata or not expected or os.path.normcase(metadata) != os.path.normcase(expected):
             return None
         for relative, fingerprint in ((palette["metadata_file"], palette["metadata_sha256"]),
                                       (palette["vertex_file"], palette["vertex_sha256"]),
@@ -561,13 +564,21 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
             if not cache[key]:
                 return None
         mapping = palette["bone_map"]
-        # A captured palette is proven during extraction. A mod must retain the
-        # exact float Blend stream fingerprint; numeric IDs alone cannot admit it.
+        # Captured palettes are proven during extraction. Edited stock streams
+        # require verified native input bindings, not just matching numeric IDs.
         if not captured:
             profiles = [p for p in rig["skin_bindings"] if p["encoding"] == source.encoding and p["sha256"] == digest]
-            if len(profiles) != 1:
+            if len(profiles) == 1:
+                mapping = profiles[0]["bone_map"]
+            elif source.native_palette_hashes:
+                key = "zzz-metadata", metadata
+                if key not in cache:
+                    cache[key] = metadata_entries(_json(metadata))
+                component = cache[key][palette["metadata_entry"]]
+                if not set(source.native_palette_hashes) <= {component.get("blend_vb"), component.get("position_vb")}:
+                    return None
+            else:
                 return None
-            mapping = profiles[0]["bone_map"]
         if not isinstance(mapping, dict):
             mapping = {str(i): value for i, value in enumerate(mapping)}
         if any(str(bone) not in mapping for bone in bone_ids):

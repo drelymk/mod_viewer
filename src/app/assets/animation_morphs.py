@@ -58,10 +58,11 @@ def _glb_targets(data, raw):
     return data[start + offset:start + offset + count]
 
 
-def read_morphs(directory, raw, *, validated=None):
+def read_morphs(directory, raw, *, validated=None, full_validation=True):
     """Read targets, or reuse a validation marker during one extraction operation.
 
-    A cache hit returns no bytes; publication callers must use the default fresh read.
+    A cache hit returns no bytes; publication callers use fresh bounded reads.
+    Playback retains descriptor/range checks; extraction also checks every delta.
     """
     morph_names(raw)
     file = paths.safe_asset_path(directory, raw.get("file")) if isinstance(raw.get("file"), str) else None
@@ -76,7 +77,7 @@ def read_morphs(directory, raw, *, validated=None):
             return None
     with open(file, "rb") as stream:
         data = stream.read(128 * 1024 * 1024 + 1)
-    if len(data) > 128 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != raw.get("sha256"):
+    if len(data) > 128 * 1024 * 1024 or (full_validation and hashlib.sha256(data).hexdigest() != raw.get("sha256")):
         raise ValueError("Animation morph data is incomplete or has changed.")
     if raw.get("format") == "glb":
         data = _glb_targets(data, raw)
@@ -107,12 +108,13 @@ def read_morphs(directory, raw, *, validated=None):
                     or type(length) is not int or not 1 <= length <= count or cursor + length * 28 > len(data)):
                 raise ValueError("Invalid morph target range.")
             seen.add(name)
-            vertices = set()
-            for row in struct.iter_unpack("<I6f", memoryview(data)[cursor:cursor + length * 28]):
-                if (row[0] >= count or row[0] in vertices
-                        or any(not math.isfinite(value) or abs(value) > 1e6 for value in row[1:])):
-                    raise ValueError("Invalid morph vertex delta.")
-                vertices.add(row[0])
+            if full_validation:
+                vertices = set()
+                for row in struct.iter_unpack("<I6f", memoryview(data)[cursor:cursor + length * 28]):
+                    if (row[0] >= count or row[0] in vertices
+                            or any(not math.isfinite(value) or abs(value) > 1e6 for value in row[1:])):
+                        raise ValueError("Invalid morph vertex delta.")
+                    vertices.add(row[0])
             cursor += length * 28
     if cursor != len(data):
         raise ValueError("Invalid morph data length.")

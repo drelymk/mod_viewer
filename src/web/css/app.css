@@ -1450,11 +1450,14 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .animation-playback {
   position: fixed; left: 50%; bottom: calc(var(--footer-height) + 64px);
   transform: translateX(-50%); z-index: 200;
-  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 5px 8px;
   box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-md);
   background: var(--panel-background); backdrop-filter: blur(var(--panel-blur));
 }
 .animation-playback[hidden] { display: none; }
+.animation-clip-controls { display: flex; align-items: center; gap: 8px; width: 100%; }
+.animation-clip-controls[hidden] { display: none; }
+.animation-clip-controls select { flex: 1; min-width: 0; width: 0; }
 .animation-playback .tool-btn { width: 30px; height: 30px; min-width: 30px; }
 .animation-playback .ui-icon { width: 17px; height: 17px; }
 .animation-playback .range-control-slider { flex: 1; min-width: 0; width: auto; }

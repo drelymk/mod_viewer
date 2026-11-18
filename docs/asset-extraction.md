@@ -164,48 +164,22 @@ resource/version/payload. Other eye layers remain selectable candidates. This
 family takes priority over inherited primary bindings; replaced ramp snapshots
 are not used to establish it.
 
-There is no special `Face/` output folder. Facial geometry follows the same
-hash-folder and texture-ownership rules as body, hair and weapon geometry.
-GIMI face recognition accepts shared diffuse/light payloads with consistent
-verified captured head-local placement, without requiring a particular eye-hole
-layout. This evidence also retains companion parts when anchor choice is ambiguous.
-Without that placement proof, recognition requires a connected face surface with
-two comparable open eye boundaries inside its enclosing contour. Legacy split
-eye rings can instead use a bilateral native Eyes reference and matching eye-loop fit.
-Additional recognized maps, such as NormalMap, and unclassified texture candidates
-do not prevent grouping; duplicate passes still require matching recognized maps.
-Small additional internal openings do not prevent recognition when their diagonal
-is at most half the smaller eye opening's diagonal. Their geometry remains intact.
-When several supported facial anchors compete, extraction selects one best-effort
-anchor, preferring greater connected-surface coverage and fewer small openings,
-with a stable content/resource tie break. Companion parts in its material family
-remain included only when the entire family has consistent verified placement.
-Other candidates and unproven attachments stay excluded. The report records this
-ambiguity and the result is marked partial; captured-matrix placement must still
-pass its existing checks.
-Related nearby direct meshes receive facial labels independently of placement.
-Equivalent captured facial passes are excluded by default while their
-provenance remains in the report; differing UVs or ambiguous references stay separate.
-Some GIMI face captures also contain a separate shell over the eye openings.
-When its UV tags, contiguous index range, bounds and shared outer boundary prove
-that separation, extraction keeps it as an optional `FaceEyeOverlay` component
-and excludes it by default. The report retains its source range and streams.
-The shell may use matching primary UV channels or a separately mapped UV2/UV3
-pair. The latter also requires additional closed boundaries in the retained
-surface; both layouts require matching primary UVs along the shared outer rim.
-Only explicit selection through the internal extractor API can export it; the
-Add/Update dialog currently has no component or overlay selector. Facial vertices are unchanged.
-Boundary matching allows a small shell offset within 0.01% of the face bounds'
-diagonal, with one-to-one vertex and matching UV checks. The report records the
-measured errors and tolerance; larger offsets and ambiguous matches stay included.
-Other decodable direct geometry has unproven asset membership and is excluded
-from default extraction. It remains in the analysis report and contributes only
-to `unproven_candidates`, without triggering a partial warning or increasing
-`skipped`. Unresolved or unsupported geometry still triggers the warning; it
-does not establish that the missing geometry belongs to the asset. A non-partial
-result is not a completeness guarantee. Supported direct candidates can also be
-explicitly selected through the internal API; no new component-selection UI is
-provided. A proven open-eye face can establish its family without native Eyes.
+GIMI extraction keeps every supported direct facial candidate, including closed
+and open eyes, alternate passes and complete overlay shells. It does not choose
+an open-eye anchor, remove competing expressions, or reconstruct a neutral face.
+Candidates remain available even when material roles cannot be identified.
+They use the same root-level position-buffer hash folders as the other objects,
+with self-contained geometry, textures and metadata. No `Face/` or `Faces/`
+container is created. Delete unwanted owning hash folders manually, or use the
+Asset source-header Remove action and Export to disable them. Rebuild the Asset
+Folder index after changing folders outside the viewer. Other hash folders keep
+working independently. Alternate passes sharing one position-buffer hash stay
+inside that same owning folder; distinct captured resources retain their hashes.
+
+Material identity groups placement checks without selecting an expression.
+Missing-material candidates validate placement independently. Unsupported or
+missing placement retains captured coordinates, warns, and marks the extraction
+partial rather than dropping those candidates.
 Extraction derives placement from captured face/body object matrices and a native
 bone palette verified by replaying the captured stream-output positions. One
 consistent transform must satisfy the supported head-local axis convention across

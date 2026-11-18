@@ -71,16 +71,16 @@ export function createAnimationMeshSession({
   }
   function prepare(binding, { deform = false } = {}) {
     if (!binding) return;
-    if (deform) {
-      for (const [mesh, mapping] of binding.meshes) {
-        participants.set(mesh, {
-          state: states.get(mesh),
-          mapping,
-          vertices: null,
-          transforms: new Map(),
-          rotations: new Map(),
-        });
-      }
+    participants.clear();
+    for (const [mesh, mapping] of binding.meshes) {
+      if (!deform && !mesh.userData?.assetFill) continue;
+      participants.set(mesh, {
+        state: states.get(mesh),
+        mapping,
+        vertices: null,
+        transforms: new Map(),
+        rotations: new Map(),
+      });
     }
     setVisibility(new Set(binding.meshes.keys()));
   }

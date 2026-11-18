@@ -102,6 +102,128 @@ def facial_fixture(tmp_path):
     return root, asset, record, avatar, mesh, rows, client
 
 
+def test_stock_zzz_mod_loads_captured_rig_and_clips_with_edited_blend_stream(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from app.bridge.mod_preview import ModPreview
+    from tests.support.model_data import standard_component_resources
+
+    root, asset, record, _avatar, mesh, rows, client = facial_fixture(tmp_path)
+    metadata = json.loads((asset / "hash.json").read_text())
+    metadata[0].update(blend_vb="33333333", object_index_counts=[3])
+    (asset / "hash.json").write_text(json.dumps(metadata))
+    snapshot = index.build_index("ZZMI", root)
+    record = snapshot["assets"][0]
+    output = tmp_path / "output"
+    zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, threading.Event(), rows)
+    shutil.copytree(output, asset, dirs_exist_ok=True)
+    # A second captured component is restored by Asset Fill rather than the mod.
+    shutil.copyfile(next(asset.glob("*-ib=*.txt")), asset / "part02-ib=88888888.txt")
+    metadata.append({**metadata[0], "ib": "88888888", "component_name": "Part02",
+                     "vb_file": next(asset.glob("*-vb0=*.txt")).name,
+                     "ib_files": ["part02-ib=88888888.txt"]})
+    (asset / "hash.json").write_text(json.dumps(metadata))
+    raw_rig = json.loads((asset / "Rig.json").read_text())
+    for palette in raw_rig["components"]:
+        palette["metadata_sha256"] = hashlib.sha256((asset / "hash.json").read_bytes()).hexdigest()
+    raw_rig["components"].append({**raw_rig["components"][0], "geometry_hash": "88888888", "metadata_entry": 1,
+                                   "index_file": "part02-ib=88888888.txt"})
+    (asset / "Rig.json").write_text(json.dumps(raw_rig))
+    snapshot = index.build_index("ZZMI", root)
+    mod = tmp_path / "mod"
+    mod.mkdir()
+    # An added vertex changes the whole-stream fingerprint without changing its palette.
+    positions = np.asarray(mesh["vertices"]).reshape(-1, 3).tolist()
+    positions.append(positions[0])
+    (mod / "position.buf").write_bytes(b"".join(struct.pack("<10f", *p, 0, 0, 1, 1, 0, 0, 1) for p in positions))
+    (mod / "texcoord.buf").write_bytes(struct.pack("<8f", .1, .2, .3, .4, .5, .6, .1, .2))
+    (mod / "blend.buf").write_bytes(struct.pack("<4f4I", .75, .25, 0, 0, 8, 12, 0, 0) * 4)
+    (mod / "mesh.ib").write_bytes(struct.pack("<6I", 0, 1, 2, 3, 1, 2))
+    (mod / "mod.ini").write_text("""[TextureOverrideComponent01Blend]
+hash = 33333333
+handling = skip
+if DRAW_TYPE == 2 || DRAW_TYPE == 4
+vb1 = ResourceComponent01Texcoord
+vb2 = ResourceComponent01Blend
+checktextureoverride = ib
+elif DRAW_TYPE == 1
+vb0 = ResourceComponent01Position
+vb2 = ResourceComponent01Blend
+draw = 4, 0
+endif
+[TextureOverrideComponent01A]
+hash = 22222222
+match_first_index = 0
+match_index_count = 3
+ib = ResourceComponent01IB
+drawindexed = 6, 0, 0
+[ResourceComponent01Blend]
+type = Buffer
+stride = 32
+filename = blend.buf
+""" + standard_component_resources(position_file="position.buf", texcoord_file="texcoord.buf",
+                                    ib_file="mesh.ib", position_stride=40))
+    monkeypatch.setattr(index, "load_index", lambda *_: snapshot)
+    monkeypatch.setattr(ModPreview, "_load_asset_folders", staticmethod(
+        lambda: [dict(type="ZZMI", path=root, enabled=True)]))
+    preview = ModPreview(SimpleNamespace(mod_folder=lambda _: str(mod)))
+    loaded = preview.load_mod(str(mod))
+    assert not loaded.get("error")
+    retained = next(iter(preview._skinning_manifests[str(mod)].values()))
+    assert retained.asset_binding.component_ordinal is None
+    assert retained.skinning_source.native_palette_hashes == ("33333333",)
+    # Weight access uses the retained proof, not another INI/resource scan.
+    monkeypatch.setattr("core.ini.draw_groups.build_draw_groups", lambda *_args, **_kwargs: pytest.fail("Unexpected draw scan"))
+    weights = preview.get_model_skinning_preview(str(mod))
+    assert weights["status"] == "ok" and len(weights["game_rigs"]) == 1
+    skin = next(iter(weights["meshes"].values()))
+    rig = weights["game_rigs"][skin["game_rig_id"]]
+    assert skin["bone_ids"] == [8, 12] and skin["game_bone_map"] == {"8": 1, "12": 2}
+    assert len(rig["animations"]) == 1
+    clip = preview.get_animation(rig["animation_session"], rig["animations"][0]["id"])
+    assert clip["status"] == "ok" and clip["clip"]["morphs"]["names"]
+    from app.bridge.asset_preview import AssetPreview
+
+    originals = AssetPreview(SimpleNamespace(mod_folder=lambda _: str(mod)))
+    context = preview.authoritative_context(str(mod))[2]
+    fill = originals.load_missing_asset_parts(str(mod), context)
+    assert fill["status"] == "loaded", fill
+    fill_entry = next(iter(fill["payload"]["meshes"].values()))
+    assert not fill_entry["skinning_available"] and fill_entry["animation_skinning_available"]
+    fill_token = fill["payload"]["metadata"]["asset"]["rig_session"]
+    captured_weights = originals.get_skinning_preview(fill_token)
+    assert captured_weights["status"] == "ok" and len(captured_weights["meshes"]) == 1
+    assert next(iter(captured_weights["meshes"])).startswith("asset-fill::")
+    captured_rig = captured_weights["game_rigs"][rig["id"]]
+    captured_clip = originals.get_animation(captured_rig["animation_session"], captured_rig["animations"][0]["id"])
+    assert captured_clip["status"] == "ok" and captured_clip["clip"]["morphs"]["names"]
+    originals.remove_missing_asset_parts(str(mod), fill["fill_id"])
+    assert originals.get_skinning_preview(fill_token)["status"] == "error"
+    assert originals.get_animation(captured_rig["animation_session"], captured_rig["animations"][0]["id"])["status"] == "error"
+    manifest = preview._skinning_manifests[str(mod)]
+    key = next(iter(manifest))
+    manifest[key] = replace(retained, skinning_source=replace(retained.skinning_source, native_palette_hashes=("33333333", "44444444")))
+    assert preview.get_model_skinning_preview(str(mod))["game_rigs"] == {}
+    manifest[key] = retained
+    # Missing ordinals may resolve only when the captured hash/range is unique.
+    rig_file = asset / "Rig.json"
+    original = rig_file.read_bytes()
+    ambiguous = json.loads(original)
+    ambiguous["components"].append({**ambiguous["components"][0], "component_ordinal": 1})
+    rig_file.write_text(json.dumps(ambiguous))
+    assert preview.get_model_skinning_preview(str(mod))["game_rigs"] == {}
+    rig_file.write_bytes(original)
+    # An unknown positively weighted ID must fall back instead of adopting a palette.
+    (mod / "blend.buf").write_bytes(struct.pack("<4f4I", .75, .25, 0, 0, 8, 99, 0, 0) * 4)
+    rejected = preview.get_model_skinning_preview(str(mod))
+    assert rejected["status"] == "ok" and rejected["game_rigs"] == {}
+    # Changed captured metadata must invalidate even an otherwise matching stock program.
+    (mod / "blend.buf").write_bytes(struct.pack("<4f4I", .75, .25, 0, 0, 8, 12, 0, 0) * 4)
+    (asset / "hash.json").write_text(json.dumps(metadata) + "\n")
+    assert preview.get_model_skinning_preview(str(mod))["game_rigs"] == {}
+    preview.clear_loaded_model()
+
+
 @pytest.mark.parametrize("short_names", [False, True])
 def test_zzz_package_reimport_and_exact_capture_admission_lifecycle(tmp_path, short_names):
     root, asset, record, avatar, mesh, rows, client = fixture(tmp_path)
@@ -220,6 +342,51 @@ def test_zzz_native_proof_rejects_wrong_rest_weights_topology_and_ambiguous_pale
     assert zzz_native.match_component(part, changed) is None
     changed["indices"] = [0, 0, 1]
     assert zzz_native.match_component(part, changed) is None
+
+
+@pytest.mark.parametrize("uv,accepted", [
+    (None, False), ([], False), (0, False), ([0, 0, 0], False),
+    ([.1, .2, .3, .4, .5], False),
+    ([float("nan"), .2, .3, .4, .5, .6], False),
+    ([.1, .2, .3, .4, .5, .6], True),
+    ([.1, .2, 0, .3, .4, 0, .5, .6, 0], True),
+    ([.1, .2, 0, 0, .3, .4, 0, 0, .5, .6, 0, 0], True),
+])
+def test_zzz_native_uv_layout_must_prove_two_coordinates_per_vertex(tmp_path, uv, accepted):
+    root, _asset, record, _avatar, mesh, _rows, _client = fixture(tmp_path)
+    part = zzz_native.capture(root, record)[0][0]
+    mesh["uv"] = uv
+    assert bool(zzz_native.match_component_candidates(part, mesh)) == accepted
+
+
+def test_zzz_extraction_rejects_uvless_candidate_and_keeps_verified_rig_and_clips(tmp_path):
+    root, asset, record, _avatar, _mesh, rows, client = fixture(tmp_path)
+    helper = {**rows[1], "name": rows[1]["name"] + "_Helper", "path_id": 99}
+    rows.insert(1, helper)
+    read = client.read
+    visited = []
+    def read_candidate(row):
+        data = read(row)
+        visited.append(zzz_index.identity(row))
+        if row is helper:
+            data["uv"] = None
+        return data
+    client.read = read_candidate
+    before = {file.name: file.read_bytes() for file in asset.iterdir()}
+    output = tmp_path / "output"
+    report, _ = zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, threading.Event(), rows)
+    assert zzz_index.identity(helper) in visited
+    assert report["meshes"] == [zzz_index.identity(rows[2])]
+    assert report["proven_components"] == report["imported"] == report["clips"] == 1
+    rig = validate_rig(json.loads((output / "Rig.json").read_text()))
+    entry = json.loads((output / "Animation/manifest.json").read_text())["clips"][0]
+    metadata, data = read_clip(str(output / "Animation"), entry, rig)
+    assert metadata["frame_count"] == 61 and data
+    assert before == {file.name: file.read_bytes() for file in asset.iterdir()}
+    # Without a UV-verifiable mesh, fail with the ordinary proof diagnostic.
+    captured, _ = zzz_native.capture(root, record)
+    with pytest.raises(ValueError, match="No ZZZ mesh could be verified"):
+        zzz_pipeline.verify_candidates(client, captured, [rows[0], helper], "Character01", threading.Event())
 
 
 def test_zzz_symmetric_component_requires_a_unique_model_wide_placement(tmp_path):

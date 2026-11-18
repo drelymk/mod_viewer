@@ -79,7 +79,8 @@ def test_asset_fill_uses_non_replacing_publication(monkeypatch):
     monkeypatch.setattr(
         "app.bridge.asset_preview.build_asset_fill_payload",
         lambda *_args, **_kwargs: {"geometry": {"url": "/geometry/fill"},
-                                   "meshes": {"Component02": {}}},
+                                   "meshes": {"Component02": {}},
+                                   "metadata": {"asset": {}}},
     )
     published = []
     monkeypatch.setattr(

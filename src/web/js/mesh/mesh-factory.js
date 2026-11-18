@@ -25,6 +25,15 @@ const failedTextures = new Set();
 const textureUsers = new Map();
 const reloadTokens = new Map();
 const previewIdentities = new Map();
+const pendingTextureLoads = new Map();
+
+// Wait only for textures already requested by visible meshes, without making
+// hidden maps eager or changing the texture pipeline's concurrency.
+export async function waitForModelTextures(isCurrent) {
+  while (isCurrent() && pendingTextureLoads.size) {
+    await Promise.all([...pendingTextureLoads.values()].map((load) => load.promise));
+  }
+}
 // all: every authored map; diffuse-normal: color + the material's actual
 // normal source; diffuse: color only; none: flat colour.
 let textureMode = 'all';
@@ -34,6 +43,7 @@ function disposeTexture(texture) {
 }
 
 export function setTextures(textures) {
+  for (const load of pendingTextureLoads.values()) load.finish();
   clearDDSPreviews();
   registry = {};
   for (const [key, uri] of Object.entries(textures || {})) {
@@ -55,6 +65,7 @@ export function setTextures(textures) {
  * web/js/panels/mesh-panel.js). View-only/session-scoped: never reaches the ini. */
 export function addTexture(key, uri) {
   if (!splitTextureKey(key)) return false;
+  pendingTextureLoads.get(key)?.finish();
   const previousSource = getTexturePreviewSource(key);
   if (previousSource) clearDDSPreviews(previousSource);
   previewIdentities.set(key, {});
@@ -72,6 +83,7 @@ export function removeTextures(keys) {
   let removed = 0;
   for (const key of keys || []) {
     if (!Object.hasOwn(registry, key)) continue;
+    pendingTextureLoads.get(key)?.finish();
     clearDDSPreviews(getTexturePreviewSource(key));
     delete registry[key];
     disposeTexture(loaders[key]);
@@ -348,7 +360,19 @@ function getTexture(mesh, key) {
     let texture;
     let failedBeforeAssignment = false;
     let readyBeforeAssignment = false;
+    let resolveLoad;
+    const load = {
+      promise: new Promise((resolve) => {
+        resolveLoad = resolve;
+      }),
+      finish() {
+        if (pendingTextureLoads.get(key) === load) pendingTextureLoads.delete(key);
+        resolveLoad();
+      },
+    };
+    pendingTextureLoads.set(key, load);
     const onError = () => {
+      load.finish();
       if (!texture) {
         failedBeforeAssignment = true;
         return;
@@ -356,6 +380,7 @@ function getTexture(mesh, key) {
       handleTextureError(key, texture, uri);
     };
     const onReady = () => {
+      load.finish();
       if (!texture) {
         readyBeforeAssignment = true;
         return;

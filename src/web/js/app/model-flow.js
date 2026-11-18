@@ -9,14 +9,14 @@ import {
   stageAssetSectionRemoval,
 } from './asset-texture-export.js';
 import { loadMissingAssetParts, resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
-import { shouldAutoRestoreMissingAssetParts } from '../ui/settings.js';
+import { shouldAutoLoadWeightRig, shouldAutoRestoreMissingAssetParts } from '../ui/settings.js';
 import { fitTo, isRendererAvailable, setBloomSuppressedByDebug } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { setRightDockEnabled } from '../panels/right-dock.js';
 import { clearSelection } from '../scene/selection.js';
 import { clearInspector } from '../panels/inspector-panel.js';
 import { activeMeshes, refreshAll, removeMesh, reset, setStateRules } from '../mesh/visibility.js';
-import { activateMeshTextures, setTextures } from '../mesh/mesh-factory.js';
+import { activateMeshTextures, setTextures, waitForModelTextures } from '../mesh/mesh-factory.js';
 import { buildPayloadMeshes } from '../mesh/mesh-model-builder.js';
 import { resetAnimationRuntime } from '../mesh/animation-runtime.js';
 import { buildMeshPanel, hasUnappliedMeshChanges, removeMeshPanelMeshes } from '../panels/mesh-panel.js';
@@ -31,6 +31,7 @@ import {
   setPendingHumanoidRigMetadata,
   setPendingRigMetadata,
   setWeightRigAssetContext,
+  loadWeightRigFeature,
 } from '../weight-rig/weight-rig-feature.js';
 import { setIniEditorContext } from '../editing/ini-editor.js';
 import { setOutlineSuppressedByDebug } from '../scene/outline-renderer.js';
@@ -437,15 +438,17 @@ async function loadModAt(path, disabledIni, handlers = {}, importing = false) {
   // Optional restoration must not hold the mod transition open. A delayed
   // preference read still belongs to this load, including same-path reloads.
   const assetFillEpoch = viewerState.assetFill.epoch;
-  void shouldAutoRestoreMissingAssetParts().then((enabled) => {
+  const source = viewerState.currentSource;
+  void shouldAutoRestoreMissingAssetParts().then(async (enabled) => {
     if (
       enabled &&
       viewerState.assetFill.epoch === assetFillEpoch &&
       samePath(viewerState.currentModPath, path) &&
       viewerState.assetFill.available
     ) {
-      return loadMissingAssetParts({ automatic: true });
+      await loadMissingAssetParts({ automatic: true });
     }
+    await autoLoadWeightRig(source);
   });
   return true;
 }
@@ -484,7 +487,25 @@ async function loadAssetAt(path, entry = {}, handlers = {}) {
       detail: { path, entry, source: viewerState.displayedSource },
     }),
   );
+  void autoLoadWeightRig(viewerState.currentSource);
   return true;
+}
+
+async function autoLoadWeightRig(source) {
+  try {
+    const isCurrent = () => viewerState.currentSource === source;
+    if (!(await shouldAutoLoadWeightRig()) || !isCurrent()) return;
+    await waitForModelTextures(isCurrent);
+    if (!isCurrent()) return;
+    const feature = await loadWeightRigFeature();
+    if (!isCurrent()) return;
+    const activation = await feature.loadWeightRigForModel();
+    if (!isCurrent() || activation?.stale) return;
+    const animation = feature.getRigAnimationState();
+    if (!animation.selected && animation.clips.length) await feature.selectRigAnimation(animation.clips[0].id);
+  } catch (error) {
+    console.error('Automatic Weight/Rig loading failed:', error);
+  }
 }
 
 async function performModSwitch(path, handlers = {}, importing = false) {

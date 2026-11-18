@@ -89,10 +89,10 @@ class Component:
 
     @property
     def default_included(self):
+        if self.provenance.get("gimi_face_candidate"):
+            return self.status == "included"
         return (self.status == "included" and not self.requires_review
-                and not self.provenance.get("duplicate_outline_pass")
-                and not self.provenance.get("duplicate_capture_pass")
-                and not self.provenance.get("auxiliary_face_layer"))
+                and not self.provenance.get("duplicate_outline_pass"))
 
 
 @dataclass

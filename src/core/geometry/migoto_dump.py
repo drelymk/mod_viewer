@@ -82,6 +82,8 @@ _OFFSET_RE = re.compile(
     r"(?:aligned[_ ]byte[_ ]offset|byte[_ ]offset|offset)\s*[:=]\s*(\d+)",
     re.I)
 _FORMAT_RE = re.compile(r"\bformat\s*[:=]\s*([A-Za-z0-9_]+)", re.I)
+_ELEMENT_RE = re.compile(r"^element\[\d+\]\s*:\s*$", re.I)
+_SEMANTIC_INDEX_RE = re.compile(r"^SemanticIndex\s*:\s*(\d+)\s*$", re.I)
 _INDEX_HEADER_RE = re.compile(
     r"^\s*(byte\s+offset|first\s+index|index\s+count)\s*[:=]\s*(\d+)\b",
     re.I)
@@ -137,6 +139,18 @@ def _vertex_index(line):
     return None
 
 
+def _finish_layout_element(semantics, state):
+    element = state.pop("element", None)
+    if not element or not element.get("semantic"):
+        return
+    name, index = element["semantic"]
+    index = element.get("index", index)
+    if len(semantics) >= MAX_SEMANTICS and (name, index) not in semantics:
+        raise MigotoDumpError("Dump semantic declaration exceeds the safety limit.")
+    semantics[(name, index)] = DumpSemantic(
+        name, index, element.get("offset"), element.get("format"))
+
+
 def _layout_declaration(line, semantics, state):
     header = _HEADER_INT.match(line)
     if header:
@@ -147,6 +161,27 @@ def _layout_declaration(line, semantics, state):
             state["count"] = value
             if value > MAX_VERTEX_COUNT:
                 raise MigotoDumpError("Dump vertex count exceeds the safety limit.")
+        return
+    if _ELEMENT_RE.match(line):
+        _finish_layout_element(semantics, state)
+        state["element"] = {}
+        return
+    if line.casefold() == "vertex-data:":
+        _finish_layout_element(semantics, state)
+        return
+    if "element" in state:
+        element = state["element"]
+        if re.match(r"^SemanticName\s*:", line, re.I):
+            element["semantic"] = _semantic_from_line(line)
+        index_match = _SEMANTIC_INDEX_RE.match(line)
+        offset_match = _OFFSET_RE.search(line)
+        format_match = _FORMAT_RE.search(line)
+        if index_match:
+            element["index"] = int(index_match.group(1))
+        if offset_match:
+            element["offset"] = int(offset_match.group(1))
+        if format_match:
+            element["format"] = format_match.group(1)
         return
     semantic = _semantic_from_line(line)
     if not semantic:
@@ -189,6 +224,8 @@ def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT, include_skinning=F
                 if vertex is None:
                     _layout_declaration(line, declarations, state)
                     continue
+                if "element" in state:
+                    _finish_layout_element(declarations, state)
                 semantic = _semantic_from_line(line)
                 if not semantic:
                     continue
@@ -209,6 +246,7 @@ def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT, include_skinning=F
     except OSError as error:
         raise MigotoDumpError(f"Could not read dump: {error}") from error
 
+    _finish_layout_element(declarations, state)
     declared_count = state["count"]
     highest = max((index for group in values.values() for index in group), default=-1)
     vertex_count = declared_count or highest + 1

@@ -1,4 +1,10 @@
 export default {
+  'settings.autoLoadWeightRig': '웨이트/리그 자동 로드',
+  'settings.autoLoadWeightRigDescription':
+    '모델, 텍스처 및 자동 부품 복원이 완료되면 웨이트/리그를 로드하고 첫 번째 애니메이션을 재생합니다.',
+  'animation.select': '애니메이션 선택',
+  'animation.previous': '이전 애니메이션',
+  'animation.next': '다음 애니메이션',
   'animation.unavailable': '애니메이션을 사용할 수 없습니다.',
   'animation.rigMismatch': '애니메이션이 로드된 리그와 일치하지 않습니다.',
   'animation.downloadFailed': '애니메이션 다운로드에 실패했습니다.',

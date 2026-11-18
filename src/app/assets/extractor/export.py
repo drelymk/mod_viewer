@@ -249,9 +249,7 @@ def extract(analysis, selection=None, context=None):
     unplaced = [mesh for mesh in meshes if mesh.component.provenance.get(
         "gimi_face_placement", {}).get("status") == "unresolved"]
     unproven = sum(c.unproven_direct and c.id not in selected_ids for c in analysis.components)
-    fallback_faces = [mesh for mesh in meshes if mesh.component.provenance.get(
-        "gimi_face_selection", {}).get("status") == "best_effort"]
-    partial = bool(unresolved or unplaced or fallback_faces)
+    partial = bool(unresolved or unplaced)
     if unresolved:
         diagnostics.append(f"Partial capture coverage: {len(unresolved)} unresolved or unsupported geometry candidates are not exported. Static attachments may be missing.")
     if unplaced:

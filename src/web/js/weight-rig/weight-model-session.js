@@ -155,6 +155,7 @@ export function createWeightModelSession({
   syncPhysicsToSelection,
   serializeBoneSelection,
   eligibleSkinningMesh,
+  onWeightsInstalled = () => {},
   getAssetContext = () => null,
   notifyChanged,
   requestRender,
@@ -186,13 +187,20 @@ export function createWeightModelSession({
   }
 
   function loadModelWeights() {
-    if (modelWeightState.loaded) return Promise.resolve(modelWeightSnapshot());
+    const meshes = [...knownMeshes].filter(
+      (mesh) => eligibleSkinningMesh(mesh) || (mesh.userData?.assetFill && mesh.userData.animationSkinningToken),
+    );
+    const pendingFill = meshes.filter(
+      (mesh) => mesh.userData.assetFill && !states.get(mesh)?.loaded && !states.get(mesh)?.error,
+    );
+    // Loaded editable weights stay installed; a later Asset Fill only adds its own meshes.
+    const fillOnly = modelWeightState.loaded;
+    if (fillOnly && !pendingFill.length) return Promise.resolve(modelWeightSnapshot());
     if (modelWeightState.promise) return modelWeightState.promise;
     const generation = getGeneration();
     const loadStartedAt = clockNow();
     const performance = {};
     modelWeightState.performance = performance;
-    const meshes = [...knownMeshes].filter(eligibleSkinningMesh);
     if (!meshes.length) {
       modelWeightState.loaded = true;
       modelWeightState.noWeights = true;
@@ -202,7 +210,6 @@ export function createWeightModelSession({
       notifyChanged();
       return Promise.resolve(modelWeightSnapshot());
     }
-    const folderPath = meshes[0].userData.modPath;
     modelWeightState.loading = true;
     modelWeightState.error = null;
     modelWeightState.noWeights = false;
@@ -211,45 +218,69 @@ export function createWeightModelSession({
       const api = await bridgeReady();
       if (generation !== getGeneration()) return modelWeightSnapshot();
       const assetContext = getAssetContext();
-      const preview = assetContext
-        ? await api.get_asset_skinning_preview(assetContext.token)
-        : await api.get_model_skinning_preview(folderPath);
+      const editableMeshes = fillOnly ? [] : meshes.filter(eligibleSkinningMesh);
+      const fillMeshes = fillOnly ? pendingFill : meshes.filter((mesh) => mesh.userData.assetFill);
+      const tokens = [...new Set(fillMeshes.map((mesh) => mesh.userData.animationSkinningToken))];
+      const requests = await Promise.all([
+        ...(editableMeshes.length
+          ? [
+              (assetContext
+                ? api.get_asset_skinning_preview(assetContext.token)
+                : api.get_model_skinning_preview(editableMeshes[0].userData.modPath)
+              ).then((preview) => [editableMeshes, preview]),
+            ]
+          : []),
+        ...tokens.map((token) =>
+          api
+            .get_asset_skinning_preview(token)
+            .then((preview) => [fillMeshes.filter((mesh) => mesh.userData.animationSkinningToken === token), preview]),
+        ),
+      ]);
       if (generation !== getGeneration()) return modelWeightSnapshot();
-      modelWeightState.savedBonesBySource = selectionMapFromEntries(preview?.saved_bones);
-      const bufferResponse = preview?.data?.url ? await fetch(preview.data.url, { cache: 'no-store' }) : null;
-      if (bufferResponse && !bufferResponse.ok) {
-        throw new Error(`Skin data download failed (${bufferResponse.status}).`);
+      if (!fillOnly) {
+        modelWeightState.savedBonesBySource = selectionMapFromEntries(
+          editableMeshes.length ? requests[0][1]?.saved_bones : undefined,
+        );
       }
-      const buffer = bufferResponse ? await bufferResponse.arrayBuffer() : null;
-      if (buffer && buffer.byteLength !== Number(preview.data.length)) {
-        throw new Error('Skin data download was incomplete.');
-      }
-      performance.fetchMs = clockNow() - loadStartedAt;
       const installStartedAt = clockNow();
       const installBudget = createWorkBudget();
-      for (const mesh of meshes) {
-        if (generation !== getGeneration() || !knownMeshes.has(mesh)) return modelWeightSnapshot();
-        const state = stateFor(mesh);
-        const entry = preview?.meshes?.[mesh.userData.semanticKey];
-        if (!entry || entry.status !== 'ok') {
-          state.error = entry?.error || 'No usable skin weights were returned.';
-          state.loaded = false;
-          continue;
+      for (const [members, preview] of requests) {
+        const bufferResponse = preview?.data?.url ? await fetch(preview.data.url, { cache: 'no-store' }) : null;
+        if (bufferResponse && !bufferResponse.ok) {
+          throw new Error(`Skin data download failed (${bufferResponse.status}).`);
         }
-        try {
-          const installed = installSkinningEntry(
-            mesh,
-            { ...entry, game_rig: preview?.game_rigs?.[entry.game_rig_id] || null },
-            buffer,
-          );
-          modelWeightState.sourceDescriptors.set(installed.source.sourceKey, installed.source);
-        } catch (error) {
-          state.error = error instanceof Error ? error.message : String(error);
-          state.loaded = false;
+        const buffer = bufferResponse ? await bufferResponse.arrayBuffer() : null;
+        if (buffer && buffer.byteLength !== Number(preview.data.length)) {
+          throw new Error('Skin data download was incomplete.');
         }
-        await installBudget.checkpoint();
+        performance.fetchMs = clockNow() - loadStartedAt;
+        for (const mesh of members) {
+          if (generation !== getGeneration()) return modelWeightSnapshot();
+          if (!knownMeshes.has(mesh)) continue;
+          const state = stateFor(mesh);
+          const entry = preview?.meshes?.[mesh.userData.semanticKey];
+          if (!entry || entry.status !== 'ok') {
+            state.error = entry?.error || 'No usable skin weights were returned.';
+            state.loaded = false;
+            continue;
+          }
+          try {
+            const installed = installSkinningEntry(
+              mesh,
+              { ...entry, game_rig: preview?.game_rigs?.[entry.game_rig_id] || null },
+              buffer,
+            );
+            if (!mesh.userData.assetFill)
+              modelWeightState.sourceDescriptors.set(installed.source.sourceKey, installed.source);
+          } catch (error) {
+            state.error = error instanceof Error ? error.message : String(error);
+            state.loaded = false;
+          }
+          await installBudget.checkpoint();
+        }
       }
       if (generation !== getGeneration()) return modelWeightSnapshot();
+      onWeightsInstalled();
       modelWeightState.loaded = true;
       refreshModelWeightSummary({ refreshStats: true });
       performance.basicInstallMs = clockNow() - installStartedAt;
@@ -350,6 +381,7 @@ export function createWeightModelSession({
     let loadedMeshCount = 0;
     let failedMeshCount = 0;
     knownMeshes.forEach((mesh) => {
+      if (mesh.userData?.assetFill) return;
       const state = states.get(mesh);
       if (state?.loaded) {
         loadedMeshCount += 1;

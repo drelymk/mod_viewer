@@ -112,6 +112,7 @@ function initGameFolders(root) {
     .catch((failure) => apply({ error: failure.message }));
 }
 let autoRestoreMissingAssetParts = false;
+let autoLoadWeightRig = false;
 let persistence = null;
 
 export async function shouldAutoRestoreMissingAssetParts() {
@@ -119,24 +120,39 @@ export async function shouldAutoRestoreMissingAssetParts() {
   return autoRestoreMissingAssetParts;
 }
 
+export async function shouldAutoLoadWeightRig() {
+  await persistence?.ready;
+  return autoLoadWeightRig;
+}
+
 export function initSettingsDialog() {
   const button = $('settings-btn');
   const backdrop = $('settings-backdrop');
   const checkbox = $('settings-auto-restore');
+  const weightRigCheckbox = $('settings-auto-load-weight-rig');
   const applyAppearance = initAppearanceControls((...args) => persistence.change(...args));
   persistence = createPreferencePersistence({
     getMethod: 'get_viewer_preferences',
     setMethod: 'set_viewer_preferences',
     apply(name, value) {
       applyAppearance(name, value);
-      if (name !== 'autoRestoreMissingAssetParts' || typeof value !== 'boolean') return;
-      autoRestoreMissingAssetParts = value;
-      checkbox.checked = value;
+      if (typeof value !== 'boolean') return;
+      if (name === 'autoRestoreMissingAssetParts') {
+        autoRestoreMissingAssetParts = value;
+        checkbox.checked = value;
+      } else if (name === 'autoLoadWeightRig') {
+        autoLoadWeightRig = value;
+        weightRigCheckbox.checked = value;
+      }
     },
   });
   checkbox.addEventListener('change', () => {
     autoRestoreMissingAssetParts = checkbox.checked;
     persistence.change('autoRestoreMissingAssetParts', checkbox.checked);
+  });
+  weightRigCheckbox.addEventListener('change', () => {
+    autoLoadWeightRig = weightRigCheckbox.checked;
+    persistence.change('autoLoadWeightRig', autoLoadWeightRig);
   });
   initGameFolders(backdrop);
 

@@ -1,4 +1,10 @@
 export default {
+  'settings.autoLoadWeightRig': 'Auto load Weight/Rig',
+  'settings.autoLoadWeightRigDescription':
+    'Load Weight/Rig after the model, textures and automatic part restoration finish. Play the first available animation.',
+  'animation.select': 'Select animation',
+  'animation.previous': 'Previous animation',
+  'animation.next': 'Next animation',
   'animation.unavailable': 'Animation is unavailable.',
   'animation.rigMismatch': 'Animation does not match the loaded rig.',
   'animation.downloadFailed': 'Animation download failed.',

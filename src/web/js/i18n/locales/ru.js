@@ -1,4 +1,10 @@
 export default {
+  'settings.autoLoadWeightRig': 'Автозагрузка весов/рига',
+  'settings.autoLoadWeightRigDescription':
+    'Загружать веса/риг после модели, текстур и автоматического восстановления частей. Воспроизводить первую доступную анимацию.',
+  'animation.select': 'Выбрать анимацию',
+  'animation.previous': 'Предыдущая анимация',
+  'animation.next': 'Следующая анимация',
   'animation.unavailable': 'Анимация недоступна.',
   'animation.rigMismatch': 'Анимация не соответствует загруженному ригу.',
   'animation.downloadFailed': 'Не удалось загрузить анимацию.',

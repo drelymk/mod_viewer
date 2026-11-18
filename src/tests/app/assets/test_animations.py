@@ -228,17 +228,27 @@ def test_animation_library_containment_integrity_and_session_lifecycle(tmp_path,
     assert sessions.load("invented", "clip01")["status"] == "error"
     assert sessions.load(token, "../Clip01")["status"] == "error"
     assert sessions.load(token, "clip01")["clip"]["data"]["length"] == len(data)
+    # Playback reads fresh bounded bytes without a clip cache or integrity rescan.
+    replacement = bytearray(data)
+    struct.pack_into("<f", replacement, 0, 3)
+    (directory / "Clip01.bin").write_bytes(replacement)
+    assert sessions.load(token, "clip01")["status"] == "ok"
+    assert published[-1] == replacement
+    from app.assets.animations import read_clip
+
+    with pytest.raises(ValueError, match="incomplete or has changed"):
+        read_clip(str(directory), manifest["clips"][0], rig)
     metadata["data_file"] = "../../outside.bin"
     write_metadata()
     assert sessions.load(token, "clip01")["status"] == "error"
     metadata["data_file"] = "Clip01.bin"
     write_metadata()
-    (directory / "Clip01.bin").write_bytes(b"x" * len(data))
+    (directory / "Clip01.bin").write_bytes(data[:-4])
     assert sessions.load(token, "clip01")["status"] == "error"
     current = False
     assert sessions.load(token, "clip01")["status"] == "error"
     sessions.clear()
-    assert released == ["/geometry/1"]
+    assert released == ["/geometry/1", "/geometry/2"]
     manifest["skeleton_id"] = "b" * 64
     (directory / "manifest.json").write_text(json.dumps(manifest))
     assert sessions.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animations"] == []
@@ -294,7 +304,7 @@ def test_direct_asset_weight_rig_preview_and_stale_token(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("change", ["valid", "path", "checksum", "index", "nonfinite", "overlap", "duplicate", "weight", "names", "publication"])
-def test_optional_morph_publication_validates_contained_geometry_and_weights(tmp_path, monkeypatch, change):
+def test_optional_morph_extraction_validation_and_runtime_publication(tmp_path, monkeypatch, change):
     rig, source = sample()
     frames, bone_data = converter()(source, rig, 1)
     directory = tmp_path / "Asset01/Animation"
@@ -342,9 +352,21 @@ def test_optional_morph_publication_validates_contained_geometry_and_weights(tmp
     token = catalog["animation_session"]
     from unittest.mock import patch
     from app.assets.animation_morphs import read_morphs
+    from app.assets.animations import read_clip
+
+    if change not in ("valid", "publication"):
+        with pytest.raises(ValueError):
+            read_clip(str(directory), dict(file="Clip01.json", duration=1), rig)
+        if change in ("checksum", "index", "nonfinite", "weight"):
+            return
 
     with patch("app.assets.animations.read_morphs", wraps=read_morphs) as reader:
-        response = sessions.load(token, "clip01")
+        if change == "valid":
+            with patch("app.assets.animations.hashlib.sha256", side_effect=AssertionError("Unexpected checksum scan")), \
+                    patch("app.assets.animations.struct.iter_unpack", side_effect=AssertionError("Unexpected sample scan")):
+                response = sessions.load(token, "clip01")
+        else:
+            response = sessions.load(token, "clip01")
     if change == "valid":
         assert reader.call_count == 1
     if change == "publication":

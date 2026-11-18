@@ -1,4 +1,10 @@
 export default {
+  'settings.autoLoadWeightRig': 'ウェイト/リグを自動読み込み',
+  'settings.autoLoadWeightRigDescription':
+    'モデル、テクスチャ、パーツの自動復元が完了した後にウェイト/リグを読み込み、最初のアニメーションを再生します。',
+  'animation.select': 'アニメーションを選択',
+  'animation.previous': '前のアニメーション',
+  'animation.next': '次のアニメーション',
   'animation.unavailable': 'アニメーションを利用できません。',
   'animation.rigMismatch': 'アニメーションが読み込まれたリグと一致しません。',
   'animation.downloadFailed': 'アニメーションのダウンロードに失敗しました。',
