@@ -1,6 +1,17 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
-import { t } from '../i18n/index.js';
+import { getLocale, t } from '../i18n/index.js';
 import { sampleMorphWeights } from './animation-morphs.js';
+
+// Every clip picker shows the same locale-sorted order after the Rest option.
+export function fillRigClipSelect(select, clips) {
+  const locale = getLocale();
+  const sorted = [...clips].sort((left, right) =>
+    left.name.localeCompare(right.name, locale, { numeric: true, sensitivity: 'base' }),
+  );
+  select.replaceChildren(new Option(t('weightRig.animationRest'), ''));
+  sorted.forEach((clip) => select.add(new Option(clip.name, clip.id)));
+  return sorted;
+}
 
 function animationError(key) {
   return Object.assign(new Error(t(key)), { translationKey: key });
@@ -106,7 +117,7 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
     frame = requestAnimationFrame(tick);
   }
   function setPlaying(value) {
-    playing = !!value && !!clip;
+    playing = !!value && !!clip && !loading;
     cancel();
     if (playing) {
       last = performance.now();
@@ -130,9 +141,16 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
     changed();
   }
   async function select(id) {
-    stop();
     const rig = getRig();
-    if (!id || !rig?.animations?.some((entry) => entry.id === id)) return;
+    if (!id || !rig?.animations?.some((entry) => entry.id === id)) {
+      stop();
+      return;
+    }
+    // Hold the displayed pose until the replacement is ready.
+    cancel();
+    playing = false;
+    error = null;
+    errorKey = null;
     const current = ++generation;
     selected = id;
     loading = true;
@@ -174,6 +192,7 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
       }
       clip = metadata;
       values = new Float32Array(buffer);
+      time = 0;
       loading = false;
       prepare();
       suspendPhysics(true);
@@ -185,6 +204,7 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
       playing = false;
       clip = null;
       values = null;
+      time = 0;
       applyPose(null);
       suspendPhysics(false);
       loading = false;

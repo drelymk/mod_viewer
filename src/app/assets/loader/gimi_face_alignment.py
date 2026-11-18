@@ -152,17 +152,6 @@ def _cluster_two_means(positions):
             tuple(groups[index] for index in order))
 
 
-def find_two_eye_centers(positions):
-    """Return the consistently ordered centers of two point clusters.
-
-    The largest geometric span seeds a deterministic two-means fit.  Centers
-    are ordered along their dominant separation axis, which gives callers a
-    stable left-to-right bilateral axis without relying on vertex order.
-    """
-    centers, _groups = _cluster_two_means(positions)
-    return centers
-
-
 def _boundary_components(mesh):
     """Return closed triangle-boundary components as vertex-index tuples."""
     positions = mesh.positions
@@ -594,7 +583,7 @@ def transform_normal_bytes(data, matrix):
 
 __all__ = [
     "AlignmentMesh", "GimiFaceAlignment", "Matrix4", "Vec3",
-    "find_two_eye_centers", "solve", "solve_face_alignment",
+    "solve", "solve_face_alignment",
     "transform_normal_bytes", "transform_point", "transform_position_bytes",
     "unpack_f32x3",
 ]

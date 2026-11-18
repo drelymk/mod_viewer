@@ -5,6 +5,164 @@ from .payloads import model_payload, weighted_payload
 from .support import bridge_calls, open_model, wait_loaded
 
 
+@pytest.mark.parametrize('stage', ['texture', 'fill', 'weights'])
+def test_auto_weight_rig_cancels_deferred_work_on_model_switch(viewer, stage):
+    payload, weights = weighted_payload()
+    payload['asset_resolution'] = {'configured_roots': 1}
+    if stage == 'texture':
+        payload['textures'] = {'diffuse::texture01.png': '/fixture-pending.png'}
+        payload['meshes']['mesh-00']['tex_key'] = 'diffuse::texture01.png'
+    page = viewer({'model01': payload, 'model02': model_payload(), 'fixture-weights': weights},
+                  preferences={'autoLoadWeightRig': True, 'autoRestoreMissingAssetParts': True},
+                  native={'fill': {'status': 'nothing_missing'}})
+    requests = []
+    page.route('**/fixture-pending.png', lambda route: requests.append(route))
+    page.evaluate('''stage => {
+      window.__bridge.blocked[stage]=true;
+      const original=window.pywebview.api.get_model_skinning_preview;
+      window.pywebview.api.get_model_skinning_preview=async (...args)=>{
+        const result=await original(...args);window.__weightRequestFinished=true;return result;
+      };
+    }''', stage)
+    open_model(page, 'model01')
+    wait_loaded(page)
+    if stage == 'texture':
+        page.wait_for_function("performance.getEntriesByType('resource').length > 0")
+        assert requests
+    else:
+        page.wait_for_function("stage=>window.__bridge.calls.some(call=>call.name===stage)", arg=stage)
+    if stage != 'weights':
+        assert bridge_calls(page, 'weights') == []
+    open_model(page, 'model02')
+    wait_loaded(page)
+    if stage == 'texture':
+        requests[0].abort()
+    else:
+        page.evaluate('stage=>window.__bridge.release(stage)', stage)
+    if stage == 'weights':
+        page.wait_for_function('window.__weightRequestFinished')
+    page.evaluate('''async () => {
+      window.__weightFeatureModule=await import('./js/weight-rig/weight-rig-feature.js');
+    }''')
+    page.wait_for_function('''() => {
+      const feature=window.__weightFeatureModule.getLoadedWeightRigFeature();
+      return feature && !feature.isWeightRigActivating() && !feature.getModelRigState().loading;
+    }''')
+    assert page.evaluate('''async () => {
+      const {getLoadedWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
+      const feature=getLoadedWeightRigFeature();
+      return !feature.getModelRigState().loaded && !feature.getRigAnimationState().clips.length &&
+        feature.getModelWeightState().sources.length===0;
+    }''')
+    assert bridge_calls(page, 'weights') == ([['model01']] if stage == 'weights' else [])
+    assert page.locator('#animation-playback').is_hidden()
+
+
+@pytest.mark.parametrize('kind', ['mod', 'asset'])
+def test_auto_weight_rig_load_order_and_viewport_playback_lifecycle(viewer, kind):
+    payload, weights = weighted_payload()
+    payload['asset_resolution'] = {'configured_roots': 1}
+    if kind == 'asset':
+        payload['metadata'].update(source_kind='asset', asset=dict(rig_session='session01', path='Asset01'))
+    bones = [dict(name='Root', parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1]),
+             dict(name='Joint01', parent=0, translation=[1, 0, 0], rotation=[0, 0, 0, 1])]
+    weights['game_rigs'] = {'rig01': dict(id='rig01', version=2, bones=bones, animation_session='session01',
+        animations=[dict(id=clip, name=clip, duration=1) for clip in ['clip01', 'clip02']])}
+    weights['meshes']['mesh-00'].update(game_rig_id='rig01', game_bone_map={'0': 0, '1': 1})
+    page = viewer({'model01': payload, 'model02': model_payload(), 'fixture-weights': weights},
+                  preferences={'autoLoadWeightRig': True, 'autoRestoreMissingAssetParts': True},
+                  native={'fill': {'status': 'nothing_missing'}})
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.evaluate('''() => {
+      const weights=window.pywebview.api.get_model_skinning_preview;
+      const preview=async (...args)=>{
+        const value=await weights(...args);
+        if(window.__noClips)value.game_rigs.rig01.animations=[];
+        return value;
+      };
+      window.pywebview.api.get_model_skinning_preview=preview;
+      window.pywebview.api.get_asset_skinning_preview=preview;
+      const values=new Float32Array([
+        0,0,0,0,0,0,1, 1,0,0,0,0,0,1,
+        1,0,0,0,0,0,1, 1,0,0,0,0,0,1,
+      ]);
+      const url=URL.createObjectURL(new Blob([values]));
+      const load=async (token,id)=>({status:'ok',clip:{skeleton_id:'rig01',frame_count:2,
+        bone_count:2,duration:1,data:{url,length:values.byteLength}}});
+      window.pywebview.api.get_model_animation=load;
+      window.pywebview.api.get_asset_animation=load;
+      window.__bridge.blocked.fill=true;
+      window.__bridge.blocked.weights=true;
+    }''')
+    if kind == 'mod':
+        open_model(page, 'model01')
+        wait_loaded(page)
+        page.wait_for_function("window.__bridge.calls.some(call=>call.name==='fill')")
+        assert bridge_calls(page, 'weights') == []
+        page.evaluate("window.__bridge.release('fill')")
+    else:
+        assert page.evaluate("window.modViewer.switchAsset('model01',{asset:true})")
+        wait_loaded(page)
+        assert bridge_calls(page, 'fill') == []
+    page.wait_for_function("window.__bridge.calls.some(call=>call.name==='weights')")
+    assert page.locator('#weight-rig-panel').is_hidden()
+    assert not page.evaluate('''async () => {
+      const {getLoadedWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
+      return getLoadedWeightRigFeature().getRigAnimationState().playing;
+    }''')
+    page.evaluate("window.__bridge.release('weights')")
+    page.wait_for_function("document.querySelector('#animation-clip').value==='clip01'")
+    page.wait_for_function("!document.querySelector('#animation-play-pause').disabled")
+    assert page.locator('#animation-playback').is_visible()
+    assert page.evaluate('''async () => {
+      const {getLoadedWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
+      window.__autoRig=getLoadedWeightRigFeature();
+      return window.__autoRig.getModelRigState().loaded && window.__autoRig.getRigAnimationState().playing;
+    }''')
+    revision = page.evaluate('window.__autoRig.getModelRigState().structureRevision')
+    page.locator('#animation-next').click()
+    page.wait_for_function("window.__autoRig.getRigAnimationState().selected==='clip02' && window.__autoRig.getRigAnimationState().playing")
+    page.locator('#animation-next').click()
+    page.wait_for_function("window.__autoRig.getRigAnimationState().selected==='clip01' && window.__autoRig.getRigAnimationState().playing")
+    page.locator('#animation-previous').click()
+    page.wait_for_function("window.__autoRig.getRigAnimationState().selected==='clip02' && window.__autoRig.getRigAnimationState().playing")
+    page.locator('#animation-play-pause').click()
+    assert page.evaluate('!window.__autoRig.getRigAnimationState().playing')
+    page.locator('#animation-frame').evaluate("node=>{node.value='0.5';node.dispatchEvent(new Event('input'));}")
+    assert page.evaluate('window.__autoRig.getRigAnimationState().time') == .5
+    page.locator('#animation-clip').select_option('clip01')
+    page.wait_for_function('window.__autoRig.getRigAnimationState().playing')
+    assert page.evaluate('window.__autoRig.getModelRigState().structureRevision') == revision
+    page.locator('#animation-clip').select_option('')
+    assert page.evaluate('!window.__autoRig.getRigAnimationState().selected')
+    page.locator('#animation-play-pause').click()
+    page.wait_for_function('window.__autoRig.getRigAnimationState().playing')
+    open_model(page, 'model02')
+    wait_loaded(page)
+    page.wait_for_function('!window.__autoRig.isWeightRigActivating()')
+    assert page.locator('#animation-playback').is_hidden()
+    assert page.evaluate('!window.__autoRig.getRigAnimationState().playing')
+    page.locator('#settings-btn').click()
+    checkbox = page.locator('#settings-auto-load-weight-rig')
+    assert checkbox.is_checked()
+    checkbox.uncheck()
+    page.locator('#settings-done').click()
+    previous_loads = len(bridge_calls(page, 'weights'))
+    open_model(page, 'model01')
+    wait_loaded(page)
+    assert len(bridge_calls(page, 'weights')) == previous_loads
+    page.evaluate('window.__noClips=true')
+    page.locator('#settings-btn').click()
+    checkbox.check()
+    page.locator('#settings-done').click()
+    assert page.evaluate('window.modViewer.reloadCurrentMod()')
+    page.wait_for_function('window.__autoRig.getModelRigState().loaded && !window.__autoRig.isWeightRigActivating()')
+    assert page.locator('#animation-playback').is_hidden()
+    assert bridge_calls(page, 'export') == []
+    assert errors == []
+
+
 def test_affine_clip_preserves_reference_scale_and_normal_inverse_transpose(module_page):
     result = module_page.evaluate('''async () => {
       const T = await import('three');
@@ -46,7 +204,7 @@ def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_p
       const rig = {id:'rig01',bones:[
         {name:'Root',parent:-1,translation:[0,0,0],rotation:[0,0,0,1]},
         {name:'Joint01',parent:0,translation:[1,0,0],rotation:[0,0,0,1]},
-      ],animations:[{id:'clip01',name:'Clip 01',duration:1}],animation_session:'session01'};
+      ],animations:['clip01','clip02','clip03'].map(id=>({id,name:id,duration:1})),animation_session:'session01'};
       const clip = {skeleton_id:rig.id,frame_count:2,bone_count:2,duration:1};
       const values = new Float32Array([
         0,0,0,0,0,0,1, 1,0,0,0,0,0,1,
@@ -84,7 +242,18 @@ def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_p
       runtime.setPlaying(false);runtime.seek(.5);
       const paused=runtime.snapshot();
       const posed=latest instanceof Map;
-      runtime.stop();
+      const heldPose=latest;
+      const switching=runtime.select('clip02'), resolveSecond=resolve;
+      const held=latest===heldPose&&suspended&&prepared===1&&scheduled===null&&runtime.snapshot().loading;
+      const newest=runtime.select('clip03'), resolveNewest=resolve;
+      resolveSecond(response);await switching;
+      const superseded=latest===heldPose&&prepared===1&&runtime.snapshot().selected==='clip03';
+      resolveNewest(response);await newest;
+      const replaced=runtime.snapshot().playing&&runtime.snapshot().time===0&&latest!==heldPose&&prepared===2;
+      const brokenSwitch=runtime.select('clip02');resolve({status:'error',error:'Fixture unavailable'});await brokenSwitch;
+      const failedSwitch=latest===null&&!suspended&&!filtered&&!runtime.snapshot().loading&&!!runtime.snapshot().error;
+      const retry=runtime.select('clip03');resolve(response);await retry;
+      const cancelledSwitch=runtime.select('clip02');runtime.stop();resolve(response);await cancelledSwitch;
       const stopped=latest===null&&!suspended&&!runtime.snapshot().selected;
       failPrepare=true;
       const failed=runtime.select('clip01');resolve(response);await failed;
@@ -98,11 +267,12 @@ def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_p
         t(runtime.snapshot().errorKey)!==runtime.snapshot().error;
       runtime.stop();
       URL.revokeObjectURL(url);
-      return {point,endpoint,stale,started,firstFrame,secondFrame,paused,posed,stopped,recovered,translatedError};
+      return {point,endpoint,stale,started,firstFrame,secondFrame,paused,posed,held,superseded,replaced,failedSwitch,stopped,recovered,translatedError};
     }''')
     assert result['point'] == pytest.approx([1, 2, 0], abs=1e-6)
     assert result['endpoint'] == pytest.approx([0, 0, 0], abs=1e-6)
     assert result['stale'] and result['started'] and result['posed'] and result['stopped'] and result['recovered']
+    assert result['held'] and result['superseded'] and result['replaced'] and result['failedSwitch']
     assert result['translatedError']
     assert result['firstFrame'] == pytest.approx(.0166)
     assert result['secondFrame'] == pytest.approx(.0334)
@@ -163,9 +333,16 @@ def test_animation_mesh_preparation_is_lazy_and_frame_maps_are_reused(module_pag
       session.apply(new Map([[0,new Matrix4()]]),{finalize:true});
       const finalized=prepared.length;
       session.stop();
-      return {before,live,finalized,cleared:[...states.values()].every(state=>!state.poseTransforms&&!state.poseActiveVertices.length)};
+      const cleared=[...states.values()].every(state=>!state.poseTransforms&&!state.poseActiveVertices.length);
+      meshes[1].userData.assetFill=true;
+      prepared.length=0;applied.length=0;
+      session.prepare(binding,{deform:false});
+      session.apply(new Map([[0,new Matrix4()]]),{finalize:true});
+      const fillOnly=prepared.length===1&&prepared[0]===meshes[1]&&applied.length===1;
+      session.stop();
+      return {before,live,finalized,cleared,fillOnly};
     }''')
-    assert result == {'before': 0, 'live': {'prepared': 1, 'applied': 2, 'reused': True}, 'finalized': 2, 'cleared': True}
+    assert result == {'before': 0, 'live': {'prepared': 1, 'applied': 2, 'reused': True}, 'finalized': 2, 'cleared': True, 'fillOnly': True}
 
 
 @pytest.mark.parametrize('kind', ['asset', 'mod'])
@@ -223,14 +400,26 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
     replacement['meshes'] = built.meshes
     replacement['_fixture_blob'] = bytes(built.geometry.data)
     replacement['state']['defaults'] = parsed.defaults
-    page = viewer({'model01': payload, 'model02': replacement, 'fixture-weights': weights})
+    fill_payload = model_payload()
+    fill_mesh = fill_payload['meshes'].pop('mesh-00')
+    fill_mesh.update(asset_fill=True, skinning_available=False, animation_skinning_available=True)
+    fill_payload['meshes'] = {'asset-fill::part01': fill_mesh}
+    fill_payload['metadata'].update(source_kind='asset-fill', asset=dict(rig_session='fill-token'))
+    page = viewer({'model01': payload, 'model02': replacement, 'fixture-weights': weights, 'fixture-fill': fill_payload})
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     def load_clip(_source):
         return sessions.load(token, 'clip01')
     page.expose_binding('__animationClip', load_clip)
     page.evaluate('''() => {
-      window.pywebview.api.get_asset_skinning_preview = () => window.__fixtureLoad('fixture-weights');
+      window.pywebview.api.get_asset_skinning_preview = async token => {
+        const preview=await window.__fixtureLoad('fixture-weights');
+        if(token==='fill-token') {
+          preview.meshes={'asset-fill::part01':preview.meshes['mesh-00']};
+          for(const rig of Object.values(preview.game_rigs))rig.animation_source='asset';
+        }
+        return preview;
+      };
       const clip = () => window.__failAnimationClip ? {status:'error',error:'Fixture unavailable'} : window.__animationClip();
       window.pywebview.api.get_asset_animation = clip;
       window.pywebview.api.get_model_animation = clip;
@@ -247,7 +436,17 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
         });
       });
     }''')
+    restore_during_weights = kind == 'mod' and not partial
+    if restore_during_weights:
+        page.evaluate("window.__bridge.blocked.weights=true")
     page.locator('#weight-rig-tab').click()
+    if restore_during_weights:
+        page.wait_for_function("window.__bridge.calls.some(call=>call.name==='weights')")
+        page.evaluate('''async () => {
+          const {loadMissingAssetParts}=await import('./js/app/asset-fill.js');
+          await loadMissingAssetParts();
+          window.__bridge.release('weights');
+        }''')
     page.wait_for_function("document.querySelectorAll('.rig-animation-select option').length === 2")
     page.wait_for_function("!document.querySelector('.rig-animation-select').disabled")
     assert page.locator('.rig-load').count() == 0
@@ -261,6 +460,16 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
       return f.getModelRigState().loaded && !f.getModelRigState().loading;
     }''')
     assert page.locator('.rig-save-preset').is_disabled() == (kind == 'asset')
+    if restore_during_weights:
+        restored_playback = page.evaluate('''async () => {
+          const {removeMissingAssetParts}=await import('./js/app/asset-fill.js');
+          const {weightRigSkinningRuntime:skin}=await import('./js/weight-rig/weight-rig-core.js');
+          const f=window.__animationApi, fill=window.modViewer.activeMeshes.find(mesh=>mesh.userData.assetFill);
+          await f.selectRigAnimation('clip01');f.setRigAnimationPlaying(false);f.seekRigAnimation(.5);
+          const report={loaded:skin.getSkinningState(fill)?.loaded,visible:fill.visible};
+          f.stopRigAnimation();await removeMissingAssetParts();return report;
+        }''')
+        assert restored_playback == {'loaded': True, 'visible': True}
     if partial:
         page.evaluate('''async () => {
           const {setManualMeshVisibility} = await import('./js/mesh/mesh-state.js');
@@ -323,6 +532,21 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
     assert seek_report['minimum'] == pytest.approx(1), seek_report
     assert seek_report['values'] == pytest.approx([v + (1 if i % 3 == 0 else 0) + (1 if i == 2 else 0)
         for i,v in enumerate(seek_report['baseline'])], abs=1e-5), seek_report
+    if kind == 'mod' and not partial:
+        assert page.evaluate('''async () => {
+          const f=window.__animationApi, mesh=window.modViewer.activeMeshes[0];
+          const before=[...mesh.geometry.attributes.position.array];
+          const original=window.pywebview.api.get_model_animation;
+          let release;
+          window.pywebview.api.get_model_animation=(...args)=>new Promise(resolve=>{release=()=>resolve(original(...args));});
+          const switching=f.selectRigAnimation('clip01');
+          await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+          const held=f.getRigAnimationState().loading&&!f.getRigAnimationState().playing&&
+            before.every((value,index)=>Object.is(value,mesh.geometry.attributes.position.array[index]));
+          release();await switching;f.setRigAnimationPlaying(false);f.seekRigAnimation(.5);
+          window.pywebview.api.get_model_animation=original;
+          return held;
+        }''')
     assert page.evaluate('''async () => {
       const {weightRigSkinningRuntime:skin}=await import('./js/weight-rig/weight-rig-core.js');
       const rig=window.__animationApi.getModelRigState();
@@ -350,6 +574,38 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
     assert page.locator('.rig-save-preset').is_disabled() == (kind == 'asset')
     if not partial:
         assert page.locator('.rig-bone-select option').all_text_contents()[1:] == ['Root', 'Joint01']
+    if kind == 'mod' and not partial:
+        fill_report = page.evaluate('''async () => {
+          const {loadMissingAssetParts,removeMissingAssetParts}=await import('./js/app/asset-fill.js');
+          const {weightRigSkinningRuntime:skin}=await import('./js/weight-rig/weight-rig-core.js');
+          const f=window.__animationApi, revision=f.getModelRigState().structureRevision;
+          const sourceCount=f.getModelWeightState().sources.length;
+          // Base weights stay installed across a fill; only the fill rig offers clips.
+          const baseRig=skin.getSkinningState(window.modViewer.activeMeshes[0]).gameRig;
+          const baseClips=baseRig.animations;
+          baseRig.animations=[];
+          let assetClipLoads=0;
+          const assetClip=window.pywebview.api.get_asset_animation;
+          window.pywebview.api.get_asset_animation=(...args)=>{assetClipLoads++;return assetClip(...args);};
+          await loadMissingAssetParts();
+          const fill=window.modViewer.activeMeshes.find(mesh=>mesh.userData.assetFill);
+          const baseline=[...fill.geometry.attributes.position.array];
+          await f.selectRigAnimation('clip01');f.setRigAnimationPlaying(false);f.seekRigAnimation(.5);
+          const moved=[...fill.geometry.attributes.position.array];
+          const during={bound:!!skin.getSkinningState(fill)?.gameRig,visible:fill.visible,
+            readOnly:!fill.userData.skinningAvailable,
+            stableRig:f.getModelRigState().structureRevision===revision,
+            stableSources:f.getModelWeightState().sources.length===sourceCount};
+          f.stopRigAnimation();
+          const restored=baseline.every((value,index)=>Object.is(value,fill.geometry.attributes.position.array[index]));
+          await removeMissingAssetParts();
+          baseRig.animations=baseClips;
+          return {baseline,moved,restored,...during,assetClipLoads,removed:!window.modViewer.activeMeshes.includes(fill)};
+        }''')
+        assert all(fill_report[key] for key in ['bound', 'visible', 'readOnly', 'stableRig', 'stableSources', 'restored', 'removed']), fill_report
+        assert fill_report['assetClipLoads'] == 1
+        assert fill_report['moved'] == pytest.approx([v + (1 if i % 3 == 0 else 0) + (1 if i == 2 else 0)
+            for i, v in enumerate(fill_report['baseline'])])
     page.evaluate('''() => {
       const f=window.__animationApi,source=f.getModelWeightState().sources[0];
       f.setBoneSelected(source.key,1,true);

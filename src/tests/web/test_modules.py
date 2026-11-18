@@ -1244,11 +1244,51 @@ def test_panel_opacity_preserves_functional_feedback_and_fades_only_surfaces(mod
     }
 
 
+def test_model_texture_completion_waits_for_requested_maps_and_releases_evicted_loads(module_page):
+    result = module_page.evaluate('''async () => {
+      const T=await import('three');
+      const factory=await import('./js/mesh/mesh-factory.js');
+      const callbacks=[];
+      const original=T.TextureLoader.prototype.load;
+      T.TextureLoader.prototype.load=function(url,ready,progress,error) {
+        const texture=new T.Texture();callbacks.push({ready,error,texture});return texture;
+      };
+      const mesh=new T.Mesh(new T.BufferGeometry(),new T.MeshBasicMaterial());
+      mesh.userData.texKey='diffuse::texture01.png';
+      factory.setTextures({'diffuse::texture01.png':'/texture01.png','diffuse::hidden.png':'/hidden.png'});
+      factory.refreshMeshTexture(mesh,{render:false});
+      let finished=false;
+      const waiting=factory.waitForModelTextures(()=>true).then(()=>{finished=true;});
+      await Promise.resolve();
+      const deferred=!finished && callbacks.length===1;
+      callbacks[0].ready(callbacks[0].texture);await waiting;
+      const ready=finished;
+      factory.addTexture('diffuse::texture01.png','/texture02.png');
+      factory.refreshMeshTexture(mesh,{render:false});
+      const failed=factory.waitForModelTextures(()=>true);
+      callbacks[1].error(new Error('Fixture texture unavailable'));await failed;
+      factory.addTexture('diffuse::texture01.png','/texture03.png');
+      factory.refreshMeshTexture(mesh,{render:false});
+      const removed=factory.waitForModelTextures(()=>true);
+      factory.removeTextures(['diffuse::texture01.png']);await removed;
+      factory.addTexture('diffuse::texture01.png','/texture04.png');
+      factory.refreshMeshTexture(mesh,{render:false});
+      const reset=factory.waitForModelTextures(()=>true);
+      factory.setTextures(null);await reset;
+      callbacks[2].ready(callbacks[2].texture);callbacks[3].error(new Error('Fixture stale texture'));
+      T.TextureLoader.prototype.load=original;
+      mesh.material.dispose();mesh.geometry.dispose();
+      return {deferred,ready,requests:callbacks.length};
+    }''')
+    assert result == {'deferred': True, 'ready': True, 'requests': 4}
+
+
 def test_settings_wait_for_saved_preference_and_preserve_changes_during_load(module_page):
     result = module_page.evaluate("""async () => {
       document.body.innerHTML = `<button id="settings-btn"></button>
         <div id="settings-backdrop"><section id="settings-dialog">
           <button id="settings-close"></button><input id="settings-auto-restore" type="checkbox">
+          <input id="settings-auto-load-weight-rig" type="checkbox">
           <button id="settings-done"></button></section></div>`;
       let resolveRead;
       let resolveSaved;
@@ -1258,7 +1298,7 @@ def test_settings_wait_for_saved_preference_and_preserve_changes_during_load(mod
         get_viewer_preferences: () => new Promise(resolve => {resolveRead = resolve;}),
         set_viewer_preferences: async changes => {
           writes.push(changes);
-          if (writes.length === 2) resolveSaved();
+          if (writes.length === 3) resolveSaved();
           return {value:changes};
         },
       }};
@@ -1266,23 +1306,32 @@ def test_settings_wait_for_saved_preference_and_preserve_changes_during_load(mod
       const persistence = settings.initSettingsDialog();
       let checked = false;
       const reading = settings.shouldAutoRestoreMissingAssetParts().then(value => {checked = true; return value;});
+      let rigChecked = false;
+      const rigReading = settings.shouldAutoLoadWeightRig().then(value => {rigChecked = true; return value;});
       await Promise.resolve();
-      const waiting = !checked;
+      const waiting = !checked && !rigChecked;
       const input = document.getElementById('settings-auto-restore');
       input.checked = true;
       input.dispatchEvent(new Event('change'));
       resolveRead({value:{autoRestoreMissingAssetParts:false, grid:false}});
       await persistence.ready;
       const enabled = await reading;
+      const rigDefault = await rigReading;
+      const rigInput = document.getElementById('settings-auto-load-weight-rig');
+      rigInput.checked = true;
+      rigInput.dispatchEvent(new Event('change'));
+      const rigEnabled = await settings.shouldAutoLoadWeightRig();
       input.checked = false;
       input.dispatchEvent(new Event('change'));
       const disabled = await settings.shouldAutoRestoreMissingAssetParts();
       await saved;
-      return {waiting, enabled, disabled, checked:input.checked, writes};
+      return {waiting, enabled, disabled, rigDefault, rigEnabled, checked:input.checked, writes};
     }""")
     assert result == {
         'waiting': True, 'enabled': True, 'disabled': False, 'checked': False,
-        'writes': [{'autoRestoreMissingAssetParts': True}, {'autoRestoreMissingAssetParts': False}],
+        'rigDefault': False, 'rigEnabled': True,
+        'writes': [{'autoRestoreMissingAssetParts': True}, {'autoLoadWeightRig': True},
+                   {'autoRestoreMissingAssetParts': False}],
     }
 
 

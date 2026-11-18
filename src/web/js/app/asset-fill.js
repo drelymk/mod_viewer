@@ -11,6 +11,7 @@ import { alertDialog } from '../ui/dialogs.js';
 import { setGeometryBlob } from '../textures/decode.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { getLoadedWeightRigFeature } from '../weight-rig/weight-rig-feature.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -179,6 +180,7 @@ export async function loadMissingAssetParts({ automatic = false } = {}) {
       const liveMeshes = buildPayloadMeshes(entries, null, {}, payload.metadata?.material_profiles || {}, {
         texturePools: payload.texture_pools || {},
         animations: payload.animations || {},
+        animationRigToken: payload.metadata?.asset?.rig_session,
       });
       appendMeshPanel(entries, liveMeshes, null, {
         replace: false,
@@ -195,6 +197,12 @@ export async function loadMissingAssetParts({ automatic = false } = {}) {
     }
     state.assetFill.loaded = true;
     state.assetFill.fillId = transactionFillId;
+    const weightRig = getLoadedWeightRigFeature();
+    if (weightRig?.getModelWeightState().loaded) await weightRig.loadRigAnimationLibrary();
+    if (!assetFillOperationIsCurrent(operation, path)) {
+      await rollback();
+      return false;
+    }
     fitTo(activeMeshes, {
       preserveCamera: true,
       preserveHomeView: true,

@@ -81,6 +81,8 @@ export async function loadWeightRigFeature() {
       ...core.weightRigApi,
       createRigOverlayController: overlay.createRigOverlayController,
       weightRigStatus: status.weightRigStatus,
+      loadWeightRigForModel: panel.loadWeightRigForModel,
+      isWeightRigActivating: panel.isWeightRigActivating,
     };
     panel.initWeightRigPanel();
     return feature;

@@ -105,11 +105,16 @@ def match_component(part, mesh):
 def match_component_candidates(part, mesh):
     """Retain coordinate hypotheses for the model-wide placement proof."""
     native = np.asarray(mesh["vertices"], dtype=float).reshape(-1, 3)
-    if len(native) > 250000 or not np.isfinite(native).all():
+    if not 0 < len(native) <= 250000 or not np.isfinite(native).all():
         return []
     # Captures contain mesh-local coordinates. The verified inverse bind placement
     # is applied to the Avatar root when building the rig, never to capture data.
-    uv = np.asarray(mesh["uv"], dtype=float).reshape(len(native), -1)[:, :2].copy()
+    uv = np.asarray(mesh["uv"], dtype=float)
+    # UV-less helper meshes are valid native candidates, but cannot establish
+    # captured position/UV correspondence. Reject them before reshaping.
+    if uv.ndim != 1 or uv.size not in (len(native) * 2, len(native) * 3, len(native) * 4):
+        return []
+    uv = uv.reshape(len(native), -1)[:, :2].copy()
     if not np.isfinite(uv).all():
         return []
     uv[:, 1] = 1 - uv[:, 1]

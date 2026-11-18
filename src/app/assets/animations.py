@@ -27,8 +27,8 @@ def _json(file, limit=1024 * 1024):
     return json.loads(data)
 
 
-def _read_clip(directory, entry, rig, *, validated_morphs=None):
-    """Read and validate the clip and its optional morph sidecar once."""
+def _read_clip(directory, entry, rig, *, validated_morphs=None, full_validation=True):
+    """Read bounded playback data, with full validation for extraction."""
     raw = _json(paths.safe_asset_path(directory, entry["file"]))
     if not isinstance(raw, dict):
         raise ValueError("Invalid animation metadata.")
@@ -53,18 +53,19 @@ def _read_clip(directory, entry, rig, *, validated_morphs=None):
         raise ValueError("Animation data is unavailable.")
     with open(path, "rb") as stream:
         data = stream.read(size + 1)
-    if len(data) != size or hashlib.sha256(data).hexdigest() != raw.get("sha256"):
+    if len(data) != size or (full_validation and hashlib.sha256(data).hexdigest() != raw.get("sha256")):
         raise ValueError("Animation data is incomplete or has changed.")
-    for row in struct.iter_unpack("<" + str(width) + "f", memoryview(data)[:bone_size]):
-        if (not all(math.isfinite(v) and abs(v) <= 1e6 for v in row)
-                or abs(sum(v * v for v in row[3:7]) - 1) > 0.001):
-            raise ValueError("Animation contains invalid transforms.")
+    if full_validation:
+        for row in struct.iter_unpack("<" + str(width) + "f", memoryview(data)[:bone_size]):
+            if (not all(math.isfinite(v) and abs(v) <= 1e6 for v in row)
+                    or abs(sum(v * v for v in row[3:7]) - 1) > 0.001):
+                raise ValueError("Animation contains invalid transforms.")
     morph_data = None
     if names:
-        if any(not math.isfinite(value) or abs(value) > 1e6
+        if full_validation and any(not math.isfinite(value) or abs(value) > 1e6
                for (value,) in struct.iter_unpack("<f", memoryview(data)[bone_size:])):
             raise ValueError("Animation contains invalid morph weights.")
-        morph_data = read_morphs(directory, raw["morphs"], validated=validated_morphs)
+        morph_data = read_morphs(directory, raw["morphs"], validated=validated_morphs, full_validation=full_validation)
     return raw, data, morph_data
 
 
@@ -78,6 +79,10 @@ class AnimationSessions:
     def __init__(self):
         self._lock = RLock()
         self._sessions = {}
+
+    def __contains__(self, token):
+        with self._lock:
+            return token in self._sessions
 
     def clear(self):
         with self._lock:
@@ -134,7 +139,7 @@ class AnimationSessions:
                 entry = session["entries"].get(clip_id) if isinstance(clip_id, str) else None
                 if not entry:
                     raise ValueError("Choose an animation from the current Asset.")
-            raw, data, morph_data = _read_clip(session["directory"], entry, session["rig"])
+            raw, data, morph_data = _read_clip(session["directory"], entry, session["rig"], full_validation=False)
             with self._lock:
                 if self._sessions.get(token) is not session or not session["is_current"]():
                     raise ValueError("The animation preview is no longer active.")

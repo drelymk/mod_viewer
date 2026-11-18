@@ -577,7 +577,7 @@ def test_direct_mesh_export_keeps_coordinates_and_nested_metadata(tmp_path):
     assert not (Path(standalone.output) / "Face").exists()
 
 
-@pytest.mark.parametrize("asset_type", ["ZZMI", "GIMI", "WWMI"])
+@pytest.mark.parametrize("asset_type", ["ZZMI", "WWMI"])
 def test_unproven_direct_geometry_is_reported_but_requires_explicit_selection(library, monkeypatch, asset_type):
     root, dump = library
     add_direct_mesh(dump)

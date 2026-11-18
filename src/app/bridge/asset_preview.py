@@ -59,9 +59,19 @@ class AssetPreview:
             requested = os.path.normcase(os.path.abspath(folder_path))
             keys = [key for key in keys if key == requested]
         for key in keys:
-            state = self._asset_fill_sessions.pop(key, None) or {}
-            server.release_texture_publication(state.get("publication"))
-            server.release_geometry(state.get("geometry_url"))
+            with self._preview_lock:
+                state = self._asset_fill_sessions.pop(key, None) or {}
+            self._release_fill(state)
+
+    @staticmethod
+    def _release_fill(state):
+        server.release_texture_publication(state.get("publication"))
+        server.release_geometry(state.get("geometry_url"))
+        weights = state.get("weights")
+        if weights:
+            for url in weights["urls"]:
+                server.release_geometry(url)
+            weights["animations"].clear()
 
     def _asset_fill_plan(self, folder_path, context):
         revision = edit_session.current_revision(folder_path)
@@ -143,7 +153,8 @@ class AssetPreview:
                     parts = getattr(loaded, "parts", ())
                     weight_token = uuid.uuid4().hex
                     self._weight_session = dict(token=weight_token, folder=selected, root=entry["path"],
-                        asset=record["path"], parts=tuple(parts), generation=generation)
+                        asset=record["path"], parts=tuple(parts), generation=generation, mesh_prefix="",
+                        urls=self._weight_geometry_urls, animations=self._animations)
                     if parts:
                         payload["metadata"]["asset"]["rig_session"] = weight_token
                     if parts and revision is not None:
@@ -177,9 +188,16 @@ class AssetPreview:
         try:
             with self._preview_lock:
                 session = self._weight_session
+                fill = None
                 if not session or token != session["token"]:
-                    raise ValueError("The Asset preview is no longer active.")
+                    fill = next((state for state in self._asset_fill_sessions.values()
+                                 if state["weights"]["token"] == token), None)
+                    if fill is None:
+                        raise ValueError("The Asset preview is no longer active.")
+                    session = fill["weights"]
             def is_current():
+                if fill is not None:
+                    return self._asset_fill_sessions.get(session["folder_key"]) is fill
                 return self._weight_session is session and self._preview_generation == session["generation"]
             meshes, rigs, cache, pieces, offset = {}, {}, {}, [], 0
             for part in session["parts"]:
@@ -199,11 +217,12 @@ class AssetPreview:
                     if rig["id"] not in rigs:
                         rigs[rig["id"]] = {"id": rig["id"], "version": rig["version"], "bones": rig["bones"],
                             "humanoid_controls": rig["humanoid_controls"],
-                            **self._animations.catalog(session["root"], session["asset"], rig, is_current)}
+                            "animation_source": "asset",
+                            **session["animations"].catalog(session["root"], session["asset"], rig, is_current)}
                     entry.update(game_rig_id=rig["id"], game_bone_map=rig["bone_map"])
                     if rig["morph_binding"]:
                         entry["game_morph_binding"] = {**rig["morph_binding"], "vertices": list(part.skinning.vertices)}
-                meshes[part.key] = entry
+                meshes[session["mesh_prefix"] + part.key] = entry
                 pieces.append(data)
                 offset += len(data)
             if not pieces:
@@ -212,14 +231,16 @@ class AssetPreview:
                 if not is_current():
                     raise ValueError("The Asset preview is no longer active.")
                 url = server.publish_geometry(b"".join(pieces), replace=False)
-                self._weight_geometry_urls.add(url)
+                session["urls"].add(url)
             return {"status": "ok", "format_version": 1, "meshes": meshes, "game_rigs": rigs,
                     "saved_bones": [], "data": {"url": url, "length": offset}}
         except (OSError, ValueError, TypeError, KeyError) as error:
             return {"status": "error", "error": str(error), "meshes": {}}
 
     def get_animation(self, token, clip_id):
-        return self._animations.load(token, clip_id)
+        owner = next((state["weights"]["animations"] for state in list(self._asset_fill_sessions.values())
+                      if token in state["weights"]["animations"]), self._animations)
+        return owner.load(token, clip_id)
 
     def pick_asset_texture_file(self, window, folder_path, texture_role=None):
         """Register a chosen Asset texture using the facade-owned window."""
@@ -373,12 +394,17 @@ class AssetPreview:
                 raise
             summary["payload"] = payload
             fill_id = uuid.uuid4().hex
+            weight_token = uuid.uuid4().hex
+            payload["metadata"]["asset"]["rig_session"] = weight_token
             self._asset_fill_sessions[key] = {
                 "fill_id": fill_id,
                 "publication": publication,
                 "geometry_url": payload.get("geometry", {}).get("url")
                 if payload.get("geometry") else None,
                 "summary": summary,
+                "weights": dict(token=weight_token, folder_key=key, root=plan.root,
+                                asset=plan.asset["path"], parts=tuple(loaded.parts),
+                                mesh_prefix="asset-fill::", urls=set(), animations=AnimationSessions()),
             }
             return {**summary, "status": "loaded", "fill_id": fill_id}
         except (PermissionError, asset_folders.AssetFolderError,
@@ -399,9 +425,9 @@ class AssetPreview:
                 return {"status": "removed", "removed": False}
             if fill_id is not None and state.get("fill_id") != fill_id:
                 return {"status": "removed", "removed": False, "stale": True}
-            self._asset_fill_sessions.pop(key, None)
-            server.release_texture_publication(state.get("publication"))
-            server.release_geometry(state.get("geometry_url"))
+            with self._preview_lock:
+                self._asset_fill_sessions.pop(key, None)
+            self._release_fill(state)
             return {"status": "removed", "removed": True}
         except (PermissionError, asset_folders.AssetFolderError) as error:
             return {"status": "error", "error": str(error)}

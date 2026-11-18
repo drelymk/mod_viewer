@@ -20,7 +20,7 @@ from app.assets.loader.models import build_asset_fill_payload
 from app.bridge.api import ModViewerAPI
 from core.geometry.component_coverage import ComponentCoverageKey
 from core.geometry.transport import GeometryBlob
-from core.geometry.migoto_dump import parse_index_dump, parse_vertex_dump
+from core.geometry.migoto_dump import MigotoDumpError, parse_index_dump, parse_vertex_dump
 
 
 def _write_json(path, value):
@@ -296,6 +296,54 @@ def test_migoto_dump_uses_declared_semantics_and_streams_layouts(tmp_path):
     assert parsed_first.uvs == parsed_second.uvs
     assert struct.unpack("<6f", parsed_first.uvs) == (
         0.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+
+
+@pytest.mark.parametrize("encoding,weights,indices,valid", [
+    ("R32_UINT", None, "7", True),
+    ("DXGI_FORMAT_R32_UINT", None, "7", True),
+    ("R32G32B32A32_UINT", None, "7, 0, 0, 0", False),
+    (None, None, "7", False),
+    ("R32_UINT", "", "7", False),
+    ("R32G32B32A32_UINT", ".75, .25, 0, 0", "7, 9, 0, 0", True),
+    ("R32G32B32A32_UINT", ".75, .25", "7, 9, 0, 0", False),
+    ("R32_UINT", None, "7.5", False),
+    ("R32_UINT", None, "-1", False),
+])
+def test_migoto_multiline_skin_layout_requires_proven_rigid_format(
+        tmp_path, encoding, weights, indices, valid):
+    path = tmp_path / "mesh.txt"
+    elements = [("POSITION", 0, "R32G32B32_FLOAT", 0),
+                ("BLENDINDICES", 0, encoding, 12),
+                ("TANGENT", 0, "R32G32B32A32_FLOAT", 28),
+                ("TEXCOORD", 0, "R32G32_FLOAT", 44),
+                ("TEXCOORD", 1, "R16G16_FLOAT", 52)]
+    if weights is not None:
+        elements.append(("BLENDWEIGHTS", 0, "R32G32B32A32_FLOAT", 56))
+    lines = ["stride: 72", "vertex count: 1"]
+    for number, (name, index, fmt, offset) in enumerate(elements):
+        lines.extend([f"element[{number}]:", f"  SemanticName: {name}",
+                      f"  SemanticIndex: {index}", f"  AlignedByteOffset: {offset}"])
+        if fmt:
+            lines.append(f"  Format: {fmt}")
+    lines.extend(["vertex-data:", "vb0[0]+000 POSITION: 0, 0, 0",
+                  f"vb0[0]+012 BLENDINDICES: {indices}",
+                  "vb0[0]+044 TEXCOORD: .25, .75",
+                  "vb0[0]+052 TEXCOORD1: .5, .5"])
+    if weights:
+        lines.append(f"vb0[0]+056 BLENDWEIGHTS: {weights}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if not valid:
+        with pytest.raises(MigotoDumpError, match="invalid skin-weight record"):
+            parse_vertex_dump(path, include_skinning=True)
+        return
+    parsed = parse_vertex_dump(path, include_skinning=True)
+    assert [(item.name, item.index, item.format, item.offset)
+            for item in parsed.layout.semantics] == [
+                element for element in elements if element[0] != "TANGENT"]
+    expected = ((1, 0, 0, 0, 7, 0, 0, 0) if weights is None
+                else (.75, .25, 0, 0, 7, 9, 0, 0))
+    assert struct.unpack("<4f4I", parsed.blend_data) == expected
+    assert struct.unpack("<2f", parsed.uvs) == (.25, .25)
 
 
 def test_migoto_index_dump_separates_headers_from_index_rows(tmp_path):

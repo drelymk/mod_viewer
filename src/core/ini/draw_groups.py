@@ -8,7 +8,7 @@ from dataclasses import replace
 from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
 from ..geometry.draw_call import AuthoredDrawCall, DrawCall
 from ..geometry.identity import DrawOccurrence
-from ..geometry.skinning import resolve_skinning_source, WwmiBlendRemap
+from ..geometry.skinning import resolve_skinning_source, normalize_skinning_source_file, SkinningSource, WwmiBlendRemap
 from ..mod_source import DirectoryModSource
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
@@ -18,6 +18,7 @@ from .draw_resources import (
 from .draw_scan import _buffer_resource_at_draw, _scan_sections_for_draws
 from .sections import ResourceTable
 from .wwmi_skeleton import stock_wwmi_merged_layouts
+from .zzz_skeleton import stock_zzz_palette_sources
 from .texture_roles import (TextureOverrideIndex, _condition_group_is_consistent,
                             _condition_difference)
 
@@ -186,6 +187,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         resource_source=resource_source)
     resource_source = resource_source or DirectoryModSource(".")
     resolve_vertex_info = resolved_buffers["resolve_vertex_info"]
+    zzz_hashes, zzz_position_blends, zzz_sections = stock_zzz_palette_sources(
+        sections, resources, section_info, resolve_vertex_info)
     component_buffers = resolved_buffers["component_buffers"]
     component_positions = resolved_buffers["component_positions"]
     component_texcoords = resolved_buffers["component_texcoords"]
@@ -565,7 +568,20 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 if skinning_source is not None:
                     skinning_resolution["resolution_source"] = \
                         "legacy_component"
+            if (skinning_source is None and skinning_error is None and 2 not in vertex_resources
+                    and section_name.casefold() in zzz_sections):
+                blends = zzz_position_blends.get(normalize_skinning_source_file(draw.position_file), ())
+                if len(blends) == 1:
+                    skinning_source = SkinningSource(next(iter(blends)), 32, 4, "gimi_f32_u32_4")
+                    skinning_resolution["resolution_source"] = "verified_zzz"
             draw.skinning_source = skinning_source
+            if (skinning_source is not None and section_name.casefold() in zzz_sections
+                    and skinning_source.encoding == "gimi_f32_u32_4"
+                    and not skinning_source.bone_id_offset and not skinning_source.blend_remap
+                    and not skinning_source.vertex_vg_file):
+                palette_hash = zzz_hashes.get(normalize_skinning_source_file(skinning_source.file))
+                if palette_hash:
+                    draw.skinning_source = replace(skinning_source, native_palette_hashes=palette_hash)
             draw.skinning_error = skinning_error
             draw.skinning_resolution = skinning_resolution
             merged = merged_layouts.get(section_name.casefold())

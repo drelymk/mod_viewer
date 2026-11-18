@@ -1,4 +1,9 @@
 export default {
+  'settings.autoLoadWeightRig': '自动加载权重/骨架',
+  'settings.autoLoadWeightRigDescription': '模型、纹理和自动部件恢复完成后加载权重/骨架，并播放第一个可用动画。',
+  'animation.select': '选择动画',
+  'animation.previous': '上一个动画',
+  'animation.next': '下一个动画',
   'animation.unavailable': '动画不可用。',
   'animation.rigMismatch': '动画与已加载的骨架不匹配。',
   'animation.downloadFailed': '动画下载失败。',

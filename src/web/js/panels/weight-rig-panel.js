@@ -50,6 +50,7 @@ const {
   saveRigPosePreset,
 } = weightRigApi;
 import { HUMANOID_CONTROL_KEYS } from '../weight-rig/humanoid-control-rig.js';
+import { fillRigClipSelect } from '../weight-rig/rig-animation.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 import { LANGUAGE_CHANGED, applyTranslations, getLocale, t } from '../i18n/index.js';
 
@@ -674,11 +675,10 @@ function syncAnimation(state = getRigAnimationState()) {
   if (ui.animationClips !== state.clips || ui.animationLocale !== getLocale()) {
     ui.animationClips = state.clips;
     ui.animationLocale = getLocale();
-    ui.animationSelect.replaceChildren(new Option(t('weightRig.animationRest'), ''));
-    state.clips.forEach((clip) => ui.animationSelect.add(new Option(clip.name, clip.id)));
+    fillRigClipSelect(ui.animationSelect, state.clips);
   }
   ui.animationSelect.value = state.selected || '';
-  const activating = !!loadingPromise || !!getModelRigState().loading;
+  const activating = isWeightRigActivating();
   ui.animationSelect.disabled = activating || !state.clips.length;
   ui.animationPlay.textContent = t(state.playing ? 'animation.pause' : 'animation.play');
   ui.animationPlay.disabled = activating || !state.duration || state.loading;
@@ -1171,11 +1171,15 @@ function closePopover() {
   ui.boneButton.setAttribute('aria-expanded', 'false');
 }
 
-function loadOnDemand() {
+export function isWeightRigActivating() {
+  return !!loadingPromise || !!getModelRigState().loading;
+}
+
+export function loadWeightRigForModel() {
   if (loadingPromise) return loadingPromise;
   const request = loadRigAnimationLibrary()
     .then((animation) => {
-      if (animation.stale) return;
+      if (animation.stale) return { stale: true };
       syncAnimation(animation);
       syncRigOptions();
       return activateWeightRig();
@@ -1184,8 +1188,10 @@ function loadOnDemand() {
       if (loadingPromise !== request) return;
       loadingPromise = null;
       syncAnimation();
+      window.dispatchEvent(new CustomEvent('mod-viewer-weight-rig-activation-changed'));
     });
   loadingPromise = request;
+  window.dispatchEvent(new CustomEvent('mod-viewer-weight-rig-activation-changed'));
   return request;
 }
 
@@ -1237,7 +1243,7 @@ export function initWeightRigPanel() {
       closePopover();
       if (latestWeightState?.picking) cancelWeightModelPicking();
       if (latestRigState?.jointPickIntent) cancelRigJointPicking();
-    } else void loadOnDemand();
+    } else void loadWeightRigForModel();
   });
   document.addEventListener('pointerdown', (event) => {
     if (ui?.popover?.hidden || ui.picker.contains(event.target)) return;

@@ -210,6 +210,9 @@ weightModelSession = createWeightModelSession({
   serializeBoneSelection,
   eligibleSkinningMesh,
   getAssetContext: () => assetRigContext,
+  onWeightsInstalled: () => {
+    animationBindingGeneration = -1;
+  },
   notifyChanged: () => notifyModelWeightChanged(),
   requestRender,
   getGeneration: () => modelWeightGeneration,
@@ -317,7 +320,9 @@ const rigAnimation = createRigAnimation({
   getRig: () => getAnimationBinding()?.rig || modelSkinningRig?.gameRig || null,
   loadClip: async (token, id) => {
     const api = await bridgeReady();
-    return assetRigContext ? api.get_asset_animation(token, id) : api.get_model_animation(token, id);
+    return assetRigContext || getAnimationBinding()?.rig.animation_source === 'asset'
+      ? api.get_asset_animation(token, id)
+      : api.get_model_animation(token, id);
   },
   prepare: () => {
     humanoidRigEditSession.cancel();
@@ -328,9 +333,9 @@ const rigAnimation = createRigAnimation({
   applyPose: (transforms, { finalize = false, morphs = null } = {}) => {
     animationMeshes.setMorphs(getAnimationBinding(), morphs);
     if (!transforms) animationMeshes.stop();
-    if (!modelSkinningRig?.gameRig && transforms) {
+    if (transforms) {
       animationMeshes.apply(transforms, { finalize });
-      return;
+      if (!modelSkinningRig?.gameRig) return;
     }
     if (!modelSkinningRig) return;
     modelSkinningRig.animationTransforms = transforms;
@@ -362,6 +367,8 @@ export const weightRigApi = Object.freeze({
   loadRigAnimationLibrary: async () => {
     const generation = modelWeightGeneration;
     await weightModelSession.ensureLoaded();
+    animationBindingGeneration = -1;
+    notifyModelWeightChanged();
     return { ...rigAnimation.snapshot(), stale: generation !== modelWeightGeneration };
   },
   selectRigAnimation: rigAnimation.select,
@@ -756,6 +763,10 @@ export function unregisterWeightRigMesh(mesh) {
     animationBindingGeneration = -1;
     invalidateHumanoidDetection();
     weightRigActivationSession?.invalidate();
+  }
+  if (mesh?.userData?.assetFill) {
+    notifyModelWeightChanged();
+    return;
   }
   const sourceKey = states.get(mesh)?.skinningSourceKey;
   if (sourceKey) {

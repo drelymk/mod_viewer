@@ -41,6 +41,8 @@ class SkinningSource:
     bone_id_namespace: str = "model"
     bone_id_domain: str = "model"
     blend_remap: WwmiBlendRemap | None = None
+    # Native input identities from verified same-INI ZZZ binding programs.
+    native_palette_hashes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

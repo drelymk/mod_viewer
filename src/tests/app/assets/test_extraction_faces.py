@@ -1,14 +1,15 @@
-"""Automatic facial grouping requires independent material and topology evidence."""
+"""All GIMI face candidates retain captured topology and removable hash folders."""
 
 import copy
 import json
 import math
 from pathlib import Path
+import shutil
 import struct
 
 import pytest
 
-from app.assets import index, loader
+from app.assets import folders, index, loader, extraction
 from app.assets.loader import hash_asset
 from app.assets.extractor import discovery
 from app.assets.extractor.core import Analysis, Component, Context, Part, Unsupported
@@ -17,8 +18,6 @@ from app.assets.extractor.geometry import Element, Mesh
 from app.assets.extractor.memory_capture import MemoryCapture
 from app.assets.extractor.profiles.gimi_faces import classify_faces
 from app.assets.extractor.profiles.gimi_placement import apply_placement
-from core.geometry.migoto_dump import parse_index_dump, parse_vertex_dump
-from tests.support.extraction_data import header
 from tests.support.gimi_capture import make_face_capture
 from app.assets.extractor.capture import Inventory
 from tests.support.memory_capture_data import capture_data
@@ -72,16 +71,14 @@ def _family():
     return {m.component.id: m for m in (eyes, anchor, lower, brow, duplicate)}
 
 
-def _open_face_mesh(*, openings=2, extra_opening=0):
+def _open_face_mesh(*, openings=True):
     mesh = _mesh(2, ((0, 0, -0.75), (0, 0, 0.75)), annular=True)
     mesh.vertices = [[(0, -1.2 + row * 0.1, -1.5 + column * 0.125), (1, 0, 0),
                       (column / 24, row / 24)] for row in range(25) for column in range(25)]
     indices = []
     for row in range(24):
         for column in range(24):
-            hole = 10 <= row < 14 and (4 <= column < 8 or (openings == 2 and 16 <= column < 20))
-            extra = 17 <= row < 17 + extra_opening and 11 <= column < 11 + extra_opening
-            if (openings and hole) or extra:
+            if openings and 10 <= row < 14 and (4 <= column < 8 or 16 <= column < 20):
                 continue
             a = row * 25 + column
             indices.extend((a, a + 25, a + 1, a + 1, a + 25, a + 26))
@@ -135,8 +132,8 @@ def test_captured_face_extraction_and_selection_lifecycle(tmp_path, monkeypatch,
     assert not (Path(report.output) / "Face").exists()
     assert len(list(Path(report.output).glob("*/hash.json"))) == 4
     parts = {part.component_name: part for part in loaded.parts}
-    native_name = "Eyes" if native_reference else "Component001"
-    for original, name in zip(originals, (native_name, "FaceEye", "Face", "FaceEyebrow")):
+    native_name = "Component001"
+    for original, name in zip(originals, (native_name, "Face001", "Face002", "Face003")):
         part = parts[name]
         expected = _points((-original.vertices[i][0][2], 2 - original.vertices[i][0][0], 3 + original.vertices[i][0][1])
                            if name != native_name else original.vertices[i][0] for i in original.indices[0])
@@ -179,7 +176,7 @@ def test_unresolved_face_export_preserves_raw_coordinates_and_warns(tmp_path, mo
     assert report.partial
     assert len(loaded.warnings) == 3
     assert {w["reason"] for w in loaded.warnings} == {"captured_face_placement_unavailable"}
-    for original, name in zip(originals[1:], ("FaceEye", "Face", "FaceEyebrow")):
+    for original, name in zip(originals[1:], ("Face001", "Face002", "Face003")):
         part = next(p for p in loaded.parts if p.component_name == name)
         expected = _points(original.vertices[i][0] for i in original.indices[0])
         assert _points(struct.iter_unpack("<3f", part.positions)) == expected
@@ -216,12 +213,12 @@ def test_captured_family_without_eye_topology(tmp_path, monkeypatch, case):
     monkeypatch.setattr(discovery, "collect", lambda *_: copy.deepcopy(material))
     analysis = discovery.analyze(dump)
     family = [c for c in analysis.components if c.provenance.get("gimi_face_family")]
-    if case != "valid":
-        assert not family
-        assert all(not c.default_included for c in analysis.components
-                   if c.provenance.get("geometry_kind") == "direct")
-        return
     assert len(family) == 3 and all(c.default_included for c in family)
+    if case not in ("valid", "missing_material"):
+        assert {c.provenance["gimi_face_placement"]["status"] for c in family} == {"unresolved"}
+        package = extract(analysis, Selection("CapturedFamily"))
+        assert len(package.meshes) == 4 and package.partial
+        return
     assert {c.provenance["gimi_face_placement"]["status"] for c in family} == {"proven"}
     monkeypatch.setattr(hash_asset, "_solve_face_alignment", _no_fit)
     package = extract(analysis, Selection("CapturedFamily"))
@@ -310,356 +307,102 @@ def test_baked_face_directions_preserve_handedness_packed_data_and_source_bytes(
         assert new[4] == old[4]
 
 
-@pytest.mark.parametrize("case", ["open", "transformed", "small_opening", "third_eye", "closed", "one_eye", "closed_slits", "unequal_eyes", "split_rings",
-                                 "different_material", "ambiguous_face", "different_uv", "multiple_faces"])
-def test_open_face_proves_family_without_native_eyes(case):
+@pytest.mark.parametrize("case,families", [
+    ("open", 1), ("missing_material", 2), ("different_material", 2), ("overlay", 1), ("outline_pass", 1),
+])
+def test_all_face_candidates_preserve_expressions_passes_and_topology(case, families):
     meshes = _family()
-    del meshes["surface-1"]
-    mesh = _open_face_mesh(openings=0 if case == "closed" else 1 if case == "one_eye" else 2,
-                           extra_opening=2 if case == "small_opening" else 4 if case == "third_eye" else 0)
-    if case == "split_rings":
-        mesh = meshes["surface-2"]
-    elif case == "closed_slits":
-        for vertex in mesh.vertices:
-            x, y, z = vertex[0]
-            vertex[0] = (x, y * 0.01 if abs(y) < 0.21 else y, z)
-    elif case == "unequal_eyes":
-        for vertex in mesh.vertices:
-            x, y, z = vertex[0]
-            if abs(y) < 0.21 and 0.49 < z < 1.01:
-                vertex[0] = (x, y * 0.5, 0.75 + (z - 0.75) * 0.5)
-    if case == "transformed":
-        for vertex in mesh.vertices:
-            x, y, z = vertex[0]
-            vertex[0] = (z * 2 + 4, x * 2 - 3, y * 2 + 1)
-        # Keep the rest of the family near the transformed anchor.
-        for other in meshes.values():
-            for vertex in other.vertices:
-                x, y, z = vertex[0]
-                vertex[0] = (z * 2 + 4, x * 2 - 3, y * 2 + 1)
-    if case == "multiple_faces":
-        count = len(mesh.vertices)
-        mesh.vertices.extend([[tuple(value + (10 if axis == 2 else 0) for axis, value in enumerate(v[0])),
-                               *v[1:]] for v in copy.deepcopy(mesh.vertices)])
-        mesh.indices[0].extend([i + count for i in list(mesh.indices[0])])
-        mesh.component.parts[0].count = len(mesh.indices[0])
-    meshes["surface-2"] = mesh
-    duplicate = copy.deepcopy(mesh)
-    duplicate.component.id = "alternate-pass"
-    meshes[duplicate.component.id] = duplicate
-    if case == "different_uv":
-        duplicate.vertices[0][2] = (0.25, 0.75)
-    if case == "different_material":
-        mesh.component.parts[0].textures.pop()
-        duplicate.component.parts[0].textures.pop()
-    if case == "ambiguous_face":
-        duplicate.component.parts[0].textures[0]["sha256"] = "a" * 64
-    before = copy.deepcopy([(m.vertices, m.indices) for m in meshes.values()])
-    classify_faces(meshes, Context())
-    assert [(m.vertices, m.indices) for m in meshes.values()] == before
-    if case in ("ambiguous_face", "different_uv"):
-        selected = [m.component for m in meshes.values() if m.component.default_included]
-        assert len(selected) == 1
-        assert selected[0].provenance["suggested_name"] == "FaceEye"
-        assert selected[0].provenance["gimi_face_selection"] == dict(status="best_effort", candidates=2)
-        assert "Ambiguous facial candidates" in selected[0].diagnostics[-1]
-        assert not any(m.component.provenance.get("duplicate_capture_pass") for m in meshes.values())
-        return
-    if case not in ("open", "transformed", "small_opening"):
-        assert all(m.component.requires_review for m in meshes.values())
-        return
-    assert mesh.component.provenance["suggested_name"] == "FaceEye"
-    assert mesh.component.provenance["face_anchor_proof"]["eye_separation"] > 0
-    assert mesh.component.provenance["face_anchor_proof"]["extra_boundary_count"] == (case == "small_opening")
-    assert meshes["surface-3"].component.provenance["suggested_name"] == "Face"
-    assert meshes["surface-4"].component.provenance["suggested_name"] == "FaceEyebrow"
-    assert all(meshes[key].component.default_included for key in ("surface-2", "surface-3", "surface-4"))
-    assert duplicate.component.provenance["duplicate_capture_pass"] == mesh.component.id
-    assert not duplicate.component.default_included
-
-
-@pytest.mark.parametrize("placement_case", ["valid", "preferred_unplaced", "all_unplaced"])
-def test_ambiguous_face_fallback_survives_analysis_export_and_reload(tmp_path, monkeypatch, placement_case):
-    meshes = list(_family().values())[:-1]
-    meshes[1] = _open_face_mesh()
-    competitor = _open_face_mesh(extra_opening=2)
-    competitor.component = meshes[2].component
-    competitor.component.parts[0].count = len(competitor.indices[0])
-    meshes[2] = competitor
-    dump, material = make_face_capture(tmp_path, meshes)
-    if placement_case != "valid":
-        # A valid object/inverse pair with an unsupported face basis cannot place
-        # the topologically preferred anchor; the other candidate remains proven.
-        (dump / "000003-vs-cb3=55555555.buf").write_bytes(
-            (dump / "000002-vs-cb2=55555555.buf").read_bytes())
-    if placement_case == "all_unplaced":
-        (dump / "000004-vs-cb5=55555555.buf").write_bytes(
-            (dump / "000002-vs-cb2=55555555.buf").read_bytes())
-    monkeypatch.setattr(discovery, "collect", lambda *_: copy.deepcopy(material))
-    from app.assets.extractor.profiles import gimi_placement
-    replayed = []
-    native = gimi_placement._Capture.native
-    def replay(capture, component):
-        replayed.append(component.id)
-        return native(capture, component)
-    monkeypatch.setattr(gimi_placement._Capture, "native", replay)
-    analysis = discovery.analyze(dump)
-    assert len(replayed) == 1
-    selected = [c for c in analysis.components if c.provenance.get("gimi_face_selection")]
-    expected_mesh = meshes[2 if placement_case == "preferred_unplaced" else 1]
-    assert len(selected) == (3 if placement_case == "valid" else 1)
-    anchor = next(c for c in selected if c.ib == expected_mesh.component.ib)
-    placed = placement_case != "all_unplaced"
-    assert anchor.provenance["gimi_face_placement"]["status"] == ("proven" if placed else "unresolved")
-    assert all(c.default_included == (c in selected) for c in analysis.components
-               if c.provenance.get("geometry_kind") == "direct")
-    analysis.save(tmp_path / "analysis.json")
-    restored = Analysis.read(tmp_path / "analysis.json")
-    package = extract(restored, Selection("FallbackAsset"))
-    assert package.partial and package.skipped == 0
-    assert package.unproven_candidates == (0 if placement_case == "valid" else 2)
-    assert len(package.meshes) == (4 if placement_case == "valid" else 2)
-    report, loaded = _export_and_load(package, tmp_path / "exports")
-    assert report.partial
-    assert {w["reason"] for w in loaded.warnings} == (set() if placed else {"captured_face_placement_unavailable"})
-    face = next(p for p in loaded.parts if p.component_name == "FaceEye")
-    expected = _points((-expected_mesh.vertices[i][0][2], 2 - expected_mesh.vertices[i][0][0],
-                        3 + expected_mesh.vertices[i][0][1]) if placed else expected_mesh.vertices[i][0]
-                       for i in expected_mesh.indices[0])
-    assert _points(struct.iter_unpack("<3f", face.positions)) == expected
-    assert any("best-effort anchor" in note for note in report.diagnostics)
-
-
-@pytest.mark.parametrize("difference", ["uv", "material", "resource", "coverage", "unique_family"])
-def test_face_choice_is_stable_across_order_and_labels(difference):
-    original = _open_face_mesh()
-    competitor = copy.deepcopy(original)
-    competitor.component.id = "competing-surface"
-    if difference in ("uv", "unique_family"):
-        competitor.vertices[0][2] = (0.25, 0.75)
-    elif difference == "material":
-        competitor.component.parts[0].textures[0]["sha256"] = "a" * 64
-    elif difference == "resource":
-        competitor.component.streams["position"]["resource"]["version"] += 1
-    else:
-        first = len(competitor.vertices)
-        positions, indices = _discs(((0, -0.7, 0),), radius=0.1)
-        competitor.vertices.extend([[p, (1, 0, 0), (0, 0)] for p in positions])
-        competitor.indices[0].extend(i + first for i in indices)
-        competitor.component.parts[0].count = len(competitor.indices[0])
-    order = (original, competitor)
-    if difference == "unique_family":
-        unique = copy.deepcopy(original)
-        unique.component.id = "unique-family"
-        unique.component.parts[0].textures[0]["sha256"] = "a" * 64
-        order += (unique,)
-    choices = []
-    for ordered in (order, tuple(reversed(order))):
-        candidates = copy.deepcopy(ordered)
-        for ordinal, mesh in enumerate(candidates):
-            mesh.component.name = f"Generated{ordinal}"
-        classify_faces({m.component.id: m for m in candidates}, Context())
-        selected, = [m for m in candidates if m.component.default_included]
-        choices.append(selected.component.id)
-        if difference == "unique_family":
-            assert selected.component.id == unique.component.id
-            assert "gimi_face_selection" not in selected.component.provenance
-        else:
-            assert selected.component.provenance["gimi_face_selection"]["candidates"] == 2
-        assert not any(m.component.provenance.get("duplicate_capture_pass") for m in candidates)
-    assert choices[0] == choices[1]
-    if difference == "coverage":
-        assert choices[0] == original.component.id
-
-
-@pytest.mark.parametrize("case", ["family", "normal_map", "unknown_map", "conflicting_normal", "missing_anchor", "ambiguous_eyes", "missing_material", "ambiguous_material", "different_uv", "unrelated_material", "unrelated_geometry"])
-def test_face_family_requires_unique_reference_loops_and_matching_materials(case):
-    meshes = _family()
-    if case in ("normal_map", "unknown_map", "conflicting_normal"):
-        for mesh in meshes.values():
-            mesh.component.parts[0].textures.append(dict(
-                role="TextureSlot03" if case == "unknown_map" else "NormalMap",
-                hash="00000009", sha256="9" * 64, auxiliary=False))
-        if case == "conflicting_normal":
-            meshes["alternate-pass"].component.parts[0].textures[-1]["sha256"] = "a" * 64
-    elif case == "missing_anchor":
-        del meshes["surface-2"]
-        del meshes["alternate-pass"]
-    elif case == "ambiguous_eyes":
-        duplicate = copy.deepcopy(meshes["surface-1"])
-        duplicate.component.id = "second-reference"
-        meshes[duplicate.component.id] = duplicate
-    elif case == "missing_material":
-        for mesh in meshes.values():
-            mesh.component.parts[0].textures = mesh.component.parts[0].textures[:1]
-    elif case == "ambiguous_material":
-        for mesh in meshes.values():
-            mesh.component.parts[0].textures.append(dict(mesh.component.parts[0].textures[0]))
-    elif case == "different_uv":
-        meshes["alternate-pass"].vertices[0][2] = (0.25, 0.75)
-    elif case == "unrelated_material":
-        meshes["surface-3"].component.parts[0].textures[0]["sha256"] = "a" * 64
-    elif case == "unrelated_geometry":
-        for vertex in meshes["surface-3"].vertices:
-            vertex[0] = tuple(v + 99 for v in vertex[0])
-    classify_faces(meshes, Context())
-    if case in ("conflicting_normal", "different_uv"):
-        selected = [m.component for m in meshes.values()
-                    if m.component.provenance.get("geometry_kind") == "direct" and m.component.default_included]
-        assert len(selected) == 1 and selected[0].provenance["suggested_name"] == "FaceEye"
-        assert selected[0].provenance["gimi_face_selection"]["candidates"] == 2
-        assert not meshes["surface-3"].component.default_included
-        assert not meshes["surface-4"].component.default_included
-        return
-    if case not in ("family", "normal_map", "unknown_map", "unrelated_material", "unrelated_geometry"):
-        assert not any(m.component.provenance.get("gimi_face_family") for m in meshes.values())
-        assert all(m.component.requires_review for m in meshes.values()
-                   if m.component.provenance.get("geometry_kind") == "direct")
-        assert meshes["surface-1"].component.default_included
-        return
-    assert meshes["surface-1"].component.provenance["suggested_name"] == "Eyes"
-    assert meshes["surface-2"].component.provenance["suggested_name"] == "FaceEye"
-    assert meshes["surface-4"].component.provenance["suggested_name"] == "FaceEyebrow"
-    assert not meshes["alternate-pass"].component.default_included
-    assert meshes["alternate-pass"].component.provenance["duplicate_capture_pass"] == "surface-2"
-    selected = [m for m in meshes.values() if m.component.default_included]
-    folders = _component_folders(selected)
-    assert folders["surface-2"] == "00000020" and folders["surface-4"] == "00000040"
-    assert folders["surface-1"] == "00000010"
-    if case in ("family", "normal_map", "unknown_map"):
-        assert meshes["surface-3"].component.provenance["suggested_name"] == "Face"
-        assert folders["surface-3"] == "00000030"
-    else:
-        assert "surface-3" not in folders
-        assert meshes["surface-3"].component.requires_review
-        assert not meshes["surface-3"].component.default_included
-    assert _component_folders(selected) == folders
-
-
-@pytest.mark.parametrize("case", ["separate", "offset_shell", "large_offset", "rim_uv_mismatch", "collapsed_rim",
-                                 "mixed_triangle", "different_uv", "different_rim", "interleaved", "no_family",
-                                 "paired_mask", "paired_secondary_mismatch", "paired_primary_mismatch",
-                                 "paired_rim_mismatch", "paired_no_extra_boundaries", "missing_mask_pair"])
-def test_tagged_face_shell_is_separate_recoverable_and_requires_geometry_proof(case, tmp_path):
-    meshes = _family()
-    del meshes["alternate-pass"]
     anchor = meshes["surface-2"]
-    positions, indices = _discs(((0, 0, -0.75), (0, 0, 0.75)), annular=case == "paired_no_extra_boundaries")
-    for vertex in anchor.vertices:
-        vertex[2] = (0.5, 0.5)
-    original_vertices = copy.deepcopy(anchor.vertices)
-    for vertex in anchor.vertices:
-        vertex.extend(((0.5, 0.5), (0, 0)))
-    start = len(anchor.vertices)
-    anchor.vertices.extend([[p, (1, 0, 0), (0.5, 0.5), (0.5, 0.5), (0.5, 0.5)] for p in positions])
-    anchor.elements.extend((Element("TEXCOORD", 1, "R32G32_FLOAT", 32),
-                            Element("TEXCOORD", 2, "R32G32_FLOAT", 40)))
-    base_indices = list(anchor.indices[0])
-    overlay_indices = [i + start for i in indices]
-    anchor.indices[0].extend(overlay_indices)
-    anchor.component.parts[0].count = len(anchor.indices[0])
-    if case.startswith("paired_") or case == "missing_mask_pair":
-        # Secondary mask UVs may use a different atlas mapping from the primary UVs.
-        for vertex in anchor.vertices[start:]:
-            vertex[4] = (0.25, 0.75)
-        if case != "missing_mask_pair":
-            anchor.elements.append(Element("TEXCOORD", 3, "R32G32_FLOAT", 48))
-            for vertex in anchor.vertices:
-                vertex.append(vertex[4])
-        if case == "paired_secondary_mismatch":
-            anchor.vertices[-1][5] = (0.25, 0.5)
-        elif case == "paired_primary_mismatch":
-            anchor.vertices[-1][3] = (0.25, 0.5)
-        elif case == "paired_rim_mismatch":
-            for vertex in anchor.vertices[start:]:
-                vertex[2:4] = [(0.6, 0.5)] * 2
-    elif case in ("offset_shell", "large_offset", "rim_uv_mismatch"):
-        offset = 0.00005 if case != "large_offset" else 0.0005
-        for vertex in anchor.vertices[start:]:
-            vertex[0] = (vertex[0][0] + offset, *vertex[0][1:])
-            shift = 0.00002 if case != "rim_uv_mismatch" else 0.001
-            vertex[2:] = [(0.5 + shift, 0.5)] * 3
-        for vertex in anchor.vertices[:start]:
-            vertex[2:4] = [(0.5, 0.5)] * 2
-        original_vertices = [v[:3] for v in copy.deepcopy(anchor.vertices[:start])]
-    elif case == "collapsed_rim":
-        anchor.vertices[start + 1][0] = anchor.vertices[start][0]
-    elif case == "mixed_triangle":
-        anchor.indices[0][-1] = 0
-    elif case == "different_uv":
-        anchor.vertices[-1][3] = (0.1, 0.5)
-    elif case == "different_rim":
-        for vertex in anchor.vertices[start:]:
-            vertex[0] = tuple(v * 0.8 for v in vertex[0])
-    elif case == "interleaved":
-        anchor.indices[0][:3], anchor.indices[0][-3:] = anchor.indices[0][-3:], anchor.indices[0][:3]
-    elif case == "no_family":
-        del meshes["surface-1"]
-    original_indices = list(anchor.indices[0])
-    original_count = anchor.component.parts[0].count
-    overlays = classify_faces(meshes, Context())
-    if case not in ("separate", "offset_shell", "paired_mask"):
-        assert overlays == []
-        assert anchor.indices[0] == original_indices
-        assert anchor.component.parts[0].count == original_count
-        return
-    overlay, = overlays
-    base = anchor.component
-    assert anchor.indices[0] == base_indices
-    assert [v[:3] for v in anchor.vertices[:start]] == original_vertices
-    assert base.parts[0].count == len(base_indices)
-    assert overlay.parts[0].first == base.parts[0].first + len(base_indices)
-    assert overlay.parts[0].count == len(overlay_indices)
-    assert base.parts[0].count + overlay.parts[0].count == original_count
-    assert overlay.streams == base.streams
-    assert overlay.parts[0].ib_file == base.parts[0].ib_file
-    assert overlay.parts[0].textures == base.parts[0].textures
-    assert base.default_included and not overlay.default_included
-    assert overlay.status == "included"  # Explicit selections can recover the full source layer.
-    assert overlay.provenance["source_component"] == base.id
-    assert overlay.provenance["suggested_name"] == "FaceEyeOverlay"
-    assert base.provenance["separated_face_overlay"]["component"] == overlay.id
-    assert base.provenance["separated_face_overlay"]["uv_tag_layout"] == (
-        "paired_secondary" if case == "paired_mask" else "shared_primary")
-    # Exercise the saved analysis through native range decoding and both exports.
-    dump = tmp_path / "capture"
-    dump.mkdir()
-    uv_count = sum(element.semantic == "TEXCOORD" for element in anchor.elements)
-    for role, slot, payload, elements, stride in (
-        ("position", 0, b"".join(struct.pack("<6f", *v[0], *v[1]) for v in anchor.vertices),
-         [("POSITION", 0, "R32G32B32_FLOAT", 0), ("NORMAL", 0, "R32G32B32_FLOAT", 12)], 24),
-        ("texcoord", 1, b"".join(struct.pack("<" + "f" * uv_count * 2, *(value for uv in v[2:] for value in uv))
-                                  for v in anchor.vertices),
-         [("TEXCOORD", i, "R32G32_FLOAT", i * 8) for i in range(uv_count)], uv_count * 8),
-    ):
-        source = base.streams[role]
-        source["file"] = f"000001-vb{slot}={source['hash']}.buf"
-        source["slot"] = slot
-        (dump / source["file"]).write_bytes(payload)
-        layout = header(stride, slot, elements).replace("pointlist", "trianglelist").replace(
-            "vertex count: 4", f"vertex count: {len(anchor.vertices)}")
-        (dump / source["file"]).with_suffix(".txt").write_text(layout)
-    base.parts[0].textures = []
-    base.provenance.update(root_vs="a" * 16, draw_vb="00000020")
-    ib_path = dump / base.parts[0].ib_file
-    ib_path.write_text(f"first index: 0\nindex count: {original_count}\ntopology: trianglelist\nformat: R32_UINT\n\n")
-    ib_path.with_suffix(".buf").write_bytes(struct.pack("<" + "I" * original_count, *original_indices))
-    overlay.streams = copy.deepcopy(base.streams)
-    overlay.parts[0].textures = []
-    overlay.provenance.update(root_vs="a" * 16, draw_vb="00000020")
-    analysis = Analysis(str(dump), "stream-output", [base, overlay], [], {})
-    analysis.save(tmp_path / "analysis.json")
-    analysis = Analysis.read(tmp_path / "analysis.json")
-    for name, selection, expected in (
-        ("Default", None, [base_indices]),
-        ("Complete", [base.id, overlay.id], [base_indices, overlay_indices]),
-    ):
-        package = extract(analysis, Selection(name, selection))
-        assert [m.indices[0] for m in package.meshes] == expected
-        report = export(package, tmp_path / "exports")
-        for mesh in package.meshes:
-            vb = next(Path(report.output).rglob(f"{name}{mesh.component.name}-vb0=*.txt"))
-            ib = next(Path(report.output).rglob(f"{name}{mesh.component.name}A-ib=*.txt"))
-            parsed = parse_vertex_dump(vb)
-            assert parsed.positions == b"".join(struct.pack("<3f", *v[0]) for v in anchor.vertices)
-            assert list(parse_index_dump(ib)) == mesh.indices[0]
+    if case == "open":
+        anchor = _open_face_mesh()
+        meshes[anchor.component.id] = anchor
+    elif case == "missing_material":
+        anchor.component.parts[0].textures.clear()
+    elif case == "different_material":
+        anchor.component.parts[0].textures[0]["sha256"] = "a" * 64
+    elif case == "outline_pass":
+        anchor.component.provenance["duplicate_outline_pass"] = True
+    elif case == "overlay":
+        # Keep the entire UV-tagged shell, including triangles over eye openings.
+        positions, indices = _discs(((0, 0, -0.75), (0, 0, 0.75)))
+        start = len(anchor.vertices)
+        for vertex in anchor.vertices:
+            vertex[2] = (0.5, 0.5)
+            vertex.extend(((0.5, 0.5), (0, 0)))
+        anchor.vertices.extend([[p, (1, 0, 0), (0.5, 0.5), (0.5, 0.5), (0.5, 0.5)] for p in positions])
+        anchor.elements.extend((Element("TEXCOORD", 1, "R32G32_FLOAT", 32),
+                                Element("TEXCOORD", 2, "R32G32_FLOAT", 40)))
+        anchor.indices[0].extend(i + start for i in indices)
+        anchor.component.parts[0].count = len(anchor.indices[0])
+    before = copy.deepcopy([(m.vertices, m.indices, m.component.parts) for m in meshes.values()])
+    classify_faces(meshes, Context())
+    assert [(m.vertices, m.indices, m.component.parts) for m in meshes.values()] == before
+    faces = [m for m in meshes.values() if m.component.provenance.get("geometry_kind") == "direct"]
+    assert len(faces) == 4 and all(m.component.default_included for m in faces)
+    assert len({m.component.provenance["suggested_name"] for m in faces}) == len(faces)
+    assert all(m.component.provenance["gimi_face_candidate"] for m in faces)
+    assert len({m.component.provenance["gimi_face_family"] for m in faces}) == families
+    assert _component_folders(faces) == {m.component.id: m.component.streams["position"]["hash"] for m in faces}
+
+
+@pytest.mark.parametrize("shared_position_hash", [False, True])
+def test_all_faces_export_update_and_manual_hash_folder_removal(tmp_path, monkeypatch, shared_position_hash):
+    meshes = list(_family().values())
+    meshes[1] = _open_face_mesh(openings=False)
+    dump, material = make_face_capture(tmp_path, meshes)
+    # The alternate pass inherits its CB binding and needs its own captured snapshot.
+    shutil.copyfile(dump / "000005-vs-cb1=55555555.buf", dump / "000006-vs-cb1=55555555.buf")
+    if shared_position_hash:
+        for suffix in ("buf", "txt"):
+            (dump / f"000006-vb0=00000060.{suffix}").rename(dump / f"000006-vb0=00000030.{suffix}")
+        log = dump / "log.txt"
+        log.write_text(log.read_text().replace("resource=0x60 hash=00000060", "resource=0x60 hash=00000030"))
+    monkeypatch.setattr(discovery, "collect", lambda *_: copy.deepcopy(material))
+    root = tmp_path / "library"
+    root.mkdir()
+    monkeypatch.setattr(folders, "load_registry", lambda: [
+        {"type": "GIMI", "path": folders.normalize_path(root)}])
+    monkeypatch.setattr(hash_asset, "_solve_face_alignment", _no_fit)
+    before = {p.name: p.read_bytes() for p in dump.iterdir()}
+    saved = extraction.extract_asset(str(root), "Asset_001", str(dump))
+    asset = Path(saved["path"])
+    assert saved["extraction"]["components"] == 5
+    assert not saved["extraction"]["partial"]
+    assert not (asset / "Faces").exists() and not (asset / "Face").exists()
+    metadata = list(asset.glob("*/hash.json"))
+    assert len(metadata) == (4 if shared_position_hash else 5)
+    details = json.loads((asset / "extraction_report.json").read_text())
+    faces = [c for c in details["components"] if c["provenance"].get("gimi_face_candidate")]
+    assert len(faces) == 4
+    for component in faces:
+        directory = asset / component["streams"]["position"]["hash"]
+        entry, = [e for e in json.loads((directory / "hash.json").read_text())["components"]
+                  if e["component_name"] == component["name"]]
+        assert entry["object_index_counts"] == [component["parts"][0]["count"]]
+        assert (directory / entry["gimi_face_placement"]["source_position_file"]).read_bytes() == (
+            dump / component["streams"]["position"]["file"]).read_bytes()
+        assert all((directory / t[3]).is_file() for part in entry["texture_hashes"] for t in part)
+    record, = index.build_index("GIMI", str(root))["assets"]
+    loaded = loader.load_asset_parts("GIMI", str(root), record)
+    assert len(loaded.parts) == 5 and not loaded.warnings
+    snapshots = _snapshot(loaded)
+    # Disable one owning hash directory, as the existing section-removal flow does.
+    removed = faces[0]
+    directory = asset / removed["streams"]["position"]["hash"]
+    removed_names = {c["name"] for c in faces
+                     if c["streams"]["position"]["hash"] == directory.name}
+    directory.rename(asset / ("DISABLED_" + directory.name))
+    record, = index.build_index("GIMI", str(root))["assets"]
+    loaded = loader.load_asset_parts("GIMI", str(root), record)
+    assert _snapshot(loaded) == {k: v for k, v in snapshots.items() if k not in removed_names}
+    # Deleting another face cannot break siblings' geometry or texture ownership.
+    removed = faces[1]
+    shutil.rmtree(asset / removed["streams"]["position"]["hash"])
+    record, = index.build_index("GIMI", str(root))["assets"]
+    loaded = loader.load_asset_parts("GIMI", str(root), record)
+    assert len(loaded.parts) == (2 if shared_position_hash else 3) and not loaded.warnings
+    updated = extraction.extract_asset(str(root), "Asset_001", str(dump), str(asset))
+    assert updated["extraction"]["components"] == 5
+    record, = index.build_index("GIMI", str(root))["assets"]
+    assert _snapshot(loader.load_asset_parts("GIMI", str(root), record)) == snapshots
+    assert {p.name: p.read_bytes() for p in dump.iterdir()} == before

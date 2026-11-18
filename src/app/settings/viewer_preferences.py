@@ -6,7 +6,7 @@ from . import config
 PREFERENCES_KEY = "viewerPreferences"
 BOOLEAN_KEYS = {
     "wireframe", "outlines", "bloom", "toonShading", "grid",
-    "smoothShading", "navigationGizmo", "autoRestoreMissingAssetParts",
+    "smoothShading", "navigationGizmo", "autoRestoreMissingAssetParts", "autoLoadWeightRig",
 }
 CHOICES = {
     "language": ("en", "zh-CN", "ja", "ko", "es", "ru"),

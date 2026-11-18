@@ -487,54 +487,24 @@ of documentation, comments and tests; use portable fixtures instead.
   viewer convention once on load. GIMI/ZZMI hash metadata retains IB precedence
   independently of the viewer format marker.
   Decodability alone does not prove asset membership. Direct geometry defaults
-  to excluded unless the facial-family proof establishes its relationship to the
-  asset; retain their source provenance and a separate unproven-candidate count
-  in the report. Unproven candidates alone do not imply partial extraction;
-  only unresolved or unsupported geometry contributes to partial/skipped counts.
-  Explicit internal component selection can export supported direct candidates;
-  the Add/Update dialog does not expose component or overlay selection.
+  to excluded unless explicitly selected, except GIMI's supported direct facial
+  candidates: retain all of those for manual cleanup, including missing-material
+  candidates, closed-eye expressions, alternate passes and complete overlay shells.
+  These are capture candidates, not a claim of one character's semantic identity.
+  Do not rank open-eye anchors, suppress facial passes or split away eye overlays.
+  Matching diffuse/light payloads group captured-matrix placement evidence only;
+  candidates without that pair validate independently. Keep unresolved placement
+  visible, preserve its captured coordinates and mark the extraction partial.
+  Unproven non-GIMI candidates retain their existing report counts and explicit
+  internal selection requirement. The Add/Update dialog has no component selector.
   Preserve captured source geometry and omit fabricated blend data; do not fall
-  back through an unsupported shader writer. Proven GIMI facial placement may
-  convert exported coordinates through the captured matrix contract below.
-  Do not create special `Face/` output folders. GIMI face recognition is independent
-  of storage layout and never fabricates a neutral expression or changes topology.
-  GIMI uses
-  an open-eye face anchor: one connected surface with an enclosing contour
-  and two comparable, separated internal eye openings. Require bilateral contour
-  proportions and non-collapsed apertures independently of names, ordinals or a
-  native Eyes mesh. Additional internal openings may be ignored for recognition
-  only when their diagonal is at most half the smaller eye opening's diagonal;
-  preserve their geometry and record their count. Legacy split eye-ring anchors
-  may instead use a unique
-  bilateral native Eyes mesh and matching eye-loop fit. Both proofs require shared
-  diffuse/light payloads on nearby direct geometry. Group that proven family
-  using those two required identities; extra recognized maps and
-  unclassified candidates do not disqualify the family. Duplicate-pass exclusion
-  also requires matching additional recognized material identities.
-  A unique anchor includes its nearby material family. If multiple supported
-  anchors compete, retain one best-effort anchor and its exact equivalent passes,
-  preferring candidates with proven captured-matrix placement, then connected-surface
-  coverage, fewer small openings and stable content/resource identity. Share native
-  replay validation between candidate ranking and final family placement. If none
-  can be placed, retain the topology-based fallback with unresolved placement.
-  Leave competing anchors and unproven attachments excluded;
-  record the ambiguity in provenance/diagnostics and mark extraction partial.
-  This fallback never relaxes material/topology or captured-matrix placement checks.
-  Label the family independently of placement; retain source positions and UVs
-  in analysis. Equivalent facial passes require matching rendered attributes,
-  resource versions, ranges and materials before excluding a duplicate by default.
-  GIMI face anchors may separate an auxiliary shell only when a contiguous
-  triangle suffix has matching UV0/UV1/UV2, or matching UV0/UV1 with a separate
-  paired UV2/UV3 layout and more closed boundaries in the retained shell.
-  In both layouts the retained triangles have zero UV2,
-  no triangle mixes those tags, and both shells match bounds and their largest
-  closed boundary within 0.01% of the retained shell's diagonal. Require a
-  one-to-one boundary vertex match and UV0/UV1 agreement within 0.0001; retain
-  the measured errors in provenance without snapping vertices. Keep the shell as an opt-in component with its native
-  index range and source streams; default extraction omits its opaque overlay.
-  Facial and standalone all-face selections use the same hash folders and local
-  texture ownership as other objects. Preserve geometry, bindings
-  and source provenance; names, component ordinals and position are not evidence.
+  back through an unsupported shader writer or fabricate a neutral expression.
+  Proven GIMI facial placement may convert exported coordinates through the
+  captured matrix contract below. Every facial candidate uses the ordinary root
+  position-hash folder with self-contained geometry, textures and metadata, just
+  like other objects. Do not create a Face/ or Faces/ container or rename native
+  resource hashes. Users may remove or disable unwanted owning hash folders;
+  sibling objects must remain loadable without their geometry or textures.
   Geometry deduplication retains every captured pixel-texture binding per source
   draw in the extraction report, including slot, shader, native hash, resource
   version and payload identity. Export/picker membership retains the chosen
@@ -744,7 +714,7 @@ of documentation, comments and tests; use portable fixtures instead.
   them for Asset/no-diffuse meshes. Reset Color clears only the preview.
 - CPU save and GPU preview share normalization and order: optional target tint,
   then hue, saturation, brightness, contrast and RGB channels in editor-sRGB
-  while preserving alpha. Brightness is 0â€“4 with a nonlinear slider centered at
+  while preserving alpha. Brightness is 0Ã¢â‚¬â€œ4 with a nonlinear slider centered at
   100%. Convert only at shader boundaries; picker hex is already sRGB. Update
   stable material nodes without recreating textures.
 - Save to Texture has separate confirmation and immediately writes one mod-owned
@@ -830,8 +800,9 @@ of documentation, comments and tests; use portable fixtures instead.
   rules. Validate ordered parents, finite translations, near-unit quaternions,
   uniform reference scales in version 1 (uniformly mirrored negative scales are allowed),
   nonsingular affine scales in version 2, and reference VB/IB
-  fingerprints and either an explicit Blend-content fingerprint/palette binding
-  or an Asset-declared stock WWMI merged palette with same-INI template proof.
+  fingerprints and either an explicit Blend-content fingerprint/palette binding,
+  an Asset-declared stock WWMI merged palette with same-INI template proof, or
+  a stock ZZMI component binding proven against captured native position/Blend hashes.
   Do not infer a mod's palette namespace from numeric IDs or component offsets.
   The stock adapters recognize legacy frame-state and newer merge-status programs.
   They verify merger inputs/outputs, publishing, native CB/Blend
@@ -905,8 +876,11 @@ of documentation, comments and tests; use portable fixtures instead.
   coordinates. Use endpoint-inclusive timing, normalized quaternion interpolation,
   original parent hierarchy and animated-world times inverse-rest-world deltas.
   Optional native morphs append named frame-major weights to the clip binary
-  and use a contained, checksummed sparse-target sidecar. Validate ranges,
-  finite values and captured VB/IB fingerprints before publication. Original
+  and use a contained, checksummed sparse-target sidecar. Extraction and library
+  preservation validate checksums and finite samples/vertex deltas. Playback uses
+  fresh bounded reads with format, skeleton, byte-length and container/range checks;
+  do not repeat full checksum/sample scans or add a library-wide cache or file watcher.
+  Retain captured VB/IB fingerprint checks during Weight access. Original
   Assets use their compact vertex mapping. Compatible mods assume original
   faces: use complete topology/UV identity, unique UV triangles or unambiguous
   rest-position matches within 0.0001, independent of bone count. Preserve the mod's
@@ -921,6 +895,9 @@ of documentation, comments and tests; use portable fixtures instead.
   transport; clear publications on replacement and reject stale loads. Playback
   owns the pose and suspends Weight physics; manual posing/editing stops it.
   Stop restores baseline geometry and model disposal cancels pending loads/frames.
+  Switching clips freezes the displayed pose until the replacement is ready, then
+  starts it at zero. Keep only the active and incoming clip during that handoff;
+  Stop and failed loads still release playback ownership and restore the baseline.
   Playback may use one uniquely identified verified skeleton's compatible mesh
   subset while the manual ModelRig retains its original all-source admission.
   Apply fallback transforms through each mesh's exact game-bone palette, never
@@ -936,9 +913,20 @@ of documentation, comments and tests; use portable fixtures instead.
   models with or without clips. Keep animation controls disabled until activation
   settles so rig construction cannot interrupt newly started playback. Stale
   library loads must not activate a replacement model. Playback reuses the rig
-  without rebuilding it. Prepare visible playback meshes lazily and reuse per-mesh
+  without rebuilding it. The opt-in global Auto load Weight/Rig preference runs
+  this activation after automatic Asset Fill and requested model textures settle,
+  then plays the first available clip. It stays detached from the main model
+  transition and cancels stale work on every source replacement, including reloads.
+  Available rig clips share the viewport playback bar with a clip selector,
+  previous/next clip cycling, Play/Pause and time seeking, synchronized with the
+  Weight/Rig panel. Models without clips retain ordinary mod playback controls.
+  Prepare visible playback meshes lazily and reuse per-mesh
   transform maps and normal matrices across frames; pause/seek may finalize
   hidden compatible meshes without changing their visibility.
+  Restored original Asset Fill parts retain opaque captured-weight sessions and
+  join compatible skeletal/morph playback lazily. Keep them out of editable Weight,
+  inferred/manual Rig, Physics and persisted mod selections. Fill removal revokes
+  its weight/clip sessions and releases playback-owned publications.
   Asset clip skinning uses TSL with each mesh's exact palette and all authored
   influences; upload bone transforms rather than deformed vertices each frame.
   Affine animation normals use each delta's inverse transpose in both GPU and
@@ -1075,8 +1063,16 @@ of documentation, comments and tests; use portable fixtures instead.
   Clip filenames reserve case-folded IDs before adding source hashes
   so distinct native names cannot collide on Windows.
   Version 2 rigs retain nonuniform scale and sparse palettes. Captured references
-  require exact metadata/VB/IB fingerprints; mods additionally require an exact
-  proven Blend-content fingerprint. Other layouts retain inferred rigs. Decode ACL,
+  require exact metadata/VB/IB fingerprints. Mods additionally require an exact
+  Blend-content fingerprint or a same-INI file-backed vb2 binding program whose
+  native position/Blend hashes all match that captured component's metadata. Reuse
+  the canonical binding history, including local helpers and conditional resources;
+  source names and exact exporter statement order are not palette evidence. Retain this proof
+  in the loaded skinning source; never reread INIs during Weight access. Reject
+  conflicting Blend writers/aliases, custom matrix/vertex programs in the model
+  draw closure and unknown draw helper calls. Unrelated menu shaders and position-only
+  shape compute do not change palette identity. Resolve absent hash-Asset ordinals only through a unique
+  geometry-hash/range match, never names or bone-ID ranges. Other layouts retain inferred rigs. Decode ACL,
   dense, streamed Hermite and constant tracks into endpoint-inclusive TQS samples;
   unknown transform paths reject a clip and omitted non-transform channels remain
   explicit in metadata/reports. Prove whole native submesh triangle multisets,
@@ -1097,7 +1093,7 @@ of documentation, comments and tests; use portable fixtures instead.
   policy in converted clips; it must apply equally to runtime data and facial GLB.
   Each facial clip
   carries a contained, checksummed playable GLB with an embedded sparse runtime
-  view. Animation loading validates that GLB and its reference fingerprints lazily,
+  view. Playback checks the GLB container and sparse descriptor ranges lazily,
   then uses the shared morph-before-skinning playback and restoration lifecycle.
   Preserve compatible libraries and user files in the
   existing staging transaction. Extraction/indexing stays off ordinary load paths.

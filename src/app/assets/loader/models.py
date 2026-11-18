@@ -124,6 +124,7 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
             (base_component, part.geometry_hash), base_component)
         entry = {
             "skinning_available": part.skinning is not None and not asset_fill,
+            "animation_skinning_available": part.skinning is not None and asset_fill,
             "pos": geometry.add(part.positions),
             "idx": geometry.add(part.indices),
             "uv": geometry.add(part.uvs) if part.uvs else None,
