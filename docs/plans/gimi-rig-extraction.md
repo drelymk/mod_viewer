@@ -1,6 +1,6 @@
 # Plan: Genshin (GIMI) "Extract Rig/Animation"
 
-Status: proposed. Scope: enable the existing shared `Extract Rig/Animation`
+Status: implemented on this branch (Phases 1-7). Scope: enable the existing shared `Extract Rig/Animation`
 workflow for GIMI Assets. It produces a verified `Rig.json`, an animation library
 and `RigExtraction.json` from an installed Genshin Impact client, following the
 contracts in `docs/asset-rig.md` and `context.md`.
@@ -369,6 +369,17 @@ Tests:
 .venv-test\Scripts\python.exe -m pytest -q src/tests/app/assets/test_gi_extraction.py src/tests/app/assets/test_zzz_extraction.py src/tests/app/assets/test_loader.py
 ```
 
+Findings while implementing (real install):
+- Genshin meshes are bound in the Avatar's `m_DefaultPose`; `m_AvatarSkeletonPose`
+  is the Humanoid-normalized pose and disagrees with the inverse binds by metres.
+  The GI helper therefore exports the default pose as the rig reference. Humanoid
+  solver output is absolute local rotation, so it is unaffected.
+- Shared body-type eye bones carry ~2.4e-4 inverse-bind float noise, just above
+  ZZZ's 2e-4 agreement. GI placement uses 1e-3 (sub-millimetre); ZZZ keeps 2e-4.
+- Asset names can be substrings of a different character's internal name; a
+  name match that cannot be proven falls back to geometry discovery (still
+  fully proven). Cancellation is never swallowed by that fallback.
+
 ## 6. Phase 5: controller pairing and layered clip conversion
 
 New file: `src/app/assets/game_extract/gi_animation.py`. Wire it into
@@ -446,6 +457,20 @@ Tests (synthetic fake client in `test_gi_extraction.py`):
 .venv-test\Scripts\python.exe -m pytest -q src/tests/app/assets/test_gi_extraction.py src/tests/app/assets/test_mecanim.py src/tests/app/assets/test_animations.py
 ```
 
+Findings while implementing (real install):
+- Newer controllers put an additive `AdjustLayer` on motion set 1 and the
+  streamer on motion set 2. The streamer is the unique synced override layer,
+  read from its own motion set; additive synced layers are reported as
+  `unapplied_layers`, not converted.
+- Shared body clips bind 3 bones that some Avatars lack. Unity ignores unbound
+  curves, so they are counted as `unbound`, not rejected (deviation from the
+  "unknown Transform hash rejects" bullet above).
+- Dense rotation keys are ~0.1% off unit length; GI sampling accepts 1% before
+  normalizing (ZZZ keeps 0.1%).
+- When states share a clip pair, a plain state's name wins over a blend-tree
+  leaf label. Empty body clips are skipped with their own reason; an empty
+  streamer clip leaves the body motion unchanged.
+
 ## 7. Phase 6: mod-side palette proof and rig dispatch
 
 1. **New `src/core/ini/gimi_skeleton.py`:**
@@ -505,6 +530,15 @@ Tests:
 ```
 .venv-test\Scripts\python.exe -m pytest -q src/tests/core/ini/test_gimi_skeleton.py src/tests/core/ini/test_zzz_merged_skeleton.py src/tests/core/ini/test_draw_groups.py src/tests/app/assets/test_rig.py
 ```
+
+Findings while implementing (real install):
+- Multi-variant mods issue `draw = $var, 0`; the skin-pass pattern accepts a
+  literal or (namespaced) variable count.
+- GIMI hash.json ranges have no counts, so exact bindings carry only the first
+  index; the shared resolver matches a unique captured component by
+  `(geometry_hash, first_index)` when the binding has no count.
+- Mods using third-party helpers (e.g. TexFX) or bone IDs outside the captured
+  palette stay on inferred rigging (fail closed).
 
 ## 8. Phase 7: enable, document, CI
 

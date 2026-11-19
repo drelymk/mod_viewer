@@ -2,13 +2,13 @@
 
 Register an adapter here when another game's verified extraction is available.
 Folder grants, background jobs and atomic sidecar installation stay in the bridge.
-The WWMI modules implement only the Wuthering Waves archive/layout contract.
+Each adapter module implements only its game's archive/layout contract.
 """
 
 from pathlib import Path
 
 from app.settings.game_folders import GAME_KINDS
-from . import wwmi, zzz
+from . import gi, wwmi, zzz
 
 
 class UnsupportedGame(ValueError):
@@ -16,7 +16,7 @@ class UnsupportedGame(ValueError):
         super().__init__("Game rig/animation extraction is not available for this game yet.")
 
 
-_BACKENDS = {"WWMI": wwmi, "ZZMI": zzz}
+_BACKENDS = {"WWMI": wwmi, "ZZMI": zzz, "GIMI": gi}
 
 
 def backend_for(kind):

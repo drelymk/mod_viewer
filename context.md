@@ -1004,8 +1004,8 @@ of documentation, comments and tests; use portable fixtures instead.
   Never publish private configuration, keys or native logs. Settings > Game
   directory persists native-picker game folders per tool (`gameFolders` in
   config.json). Settings and extraction share the same UI for every registered
-  game, driven by `game_extract/backends.py` capabilities. WWMI and ZZMI have
-  adapters; unavailable games keep folder selection but cannot start jobs.
+  game, driven by `game_extract/backends.py` capabilities. WWMI, ZZMI and GIMI
+  have adapters; unregistered games keep folder selection but cannot start jobs.
   Extraction prefills only its Asset's game folder, re-validated and re-granted
   by the backend. Opaque grants include the game kind and cannot cross games.
   Game adapters own validation, native clients, indexing and package building;
@@ -1136,6 +1136,37 @@ of documentation, comments and tests; use portable fixtures instead.
   then uses the shared morph-before-skinning playback and restoration lifecycle.
   Preserve compatible libraries and user files in the
   existing staging transaction. Extraction/indexing stays off ordinary load paths.
+- Genshin Impact (GIMI) extraction runs the same pinned reader in `--gi` mode with the
+  database ACL decoder rebuilt from the same unmodified source. Accept only the
+  global `GenshinImpact_Data` layout; the effective block set is
+  `StreamingAssets` plus `Persistent` one directory below `AssetBundles/blocks`,
+  where a `Persistent` copy replaces the same relative path. Index Mesh, Avatar,
+  AnimationClip and AnimatorController metadata as `game-gimi-<hash>.json` with the
+  ZZZ reuse/staleness rules. Resolve controller clip pointers only by
+  case-insensitive CAB name plus PathID; a CAB in several blocks is ambiguous.
+  A character's meshes are those sharing its Avatar's bundle (generic mesh names
+  are not evidence) and still need the complete ZZZ native proof; an unproven
+  name match falls back to geometry and never swallows cancellation. Meshes are
+  bound in the Avatar's default pose, which is the exported rig reference; the
+  Humanoid-normalized skeleton pose never proves inverse binds. GI placement
+  tolerates 1e-3 inverse-bind noise; ZZZ keeps 2e-4.
+  Playable body motion exists only as Humanoid muscle curves. Convert it with the
+  Mecanim solver (ZYRoll axes and limits, segment-midpoint centre of mass, up-exact
+  body orientation) in place relative to Motion, and reject a clip whose hands are
+  more than 0.1 human scale from its own IK goals. Each Base Layer state becomes one
+  clip: its body clip plus the unique synced override layer's clip (any motion set)
+  at the body's normalized time, writing only non-human bones in that layer's
+  skeleton mask. Pair only through controller states, never names; a plain state's
+  name wins over a blend-tree leaf sharing its clips. Skip mirrored states,
+  mismatched blend trees and empty body clips with reasons; report additive synced
+  layers as unapplied. Count unbound, Humanoid-owned, masked, translation-DoF and
+  non-transform channels instead of hiding them.
+  GIMI mods prove a palette only through a stock skinning pass: a safe
+  `TextureOverride` closure binding a file-backed, unaliased stride-32 Blend at vb1
+  with `handling = skip` and `draw = <count>, 0` (literal or variable). Allowed
+  external helpers are the stock texture/ORFix/NNFix ones; any other helper keeps
+  inferred rigging. Hash Assets that identify an exact range by first index only
+  match a unique captured component by geometry hash and first index.
 - Model Rig assembly is a viewer-owned graph over source rigs. Preserve
   `SourceBoneRef {sourceKey,boneId}` and `${sourceKey}#bone=${boneId}`; only
   models whose sources all declare validated model-wide IDs in one domain (R16

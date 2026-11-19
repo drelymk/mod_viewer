@@ -936,6 +936,8 @@ def test_game_adapters_scope_grants_and_reject_unavailable_jobs(tmp_path, monkey
     from app.assets.game_extract import backends
 
     root, asset, record, _, _ = fixture(tmp_path)
+    # Every shipped game has an adapter; an unregistered one keeps folder selection only.
+    monkeypatch.delitem(backends._BACKENDS, game_kind)
     monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
     game = tmp_path / "game"
     game.mkdir()
