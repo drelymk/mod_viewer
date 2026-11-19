@@ -74,6 +74,10 @@ export function createSurfaceGraphPool({ size = defaultPoolSize(), createWorker 
     get available() {
       return !disabled;
     },
+    // Start every worker now so module loading overlaps other work.
+    prewarm() {
+      while (!disabled && slots.length < size) spawn();
+    },
     run(args, transfer) {
       return new Promise((resolve, reject) => {
         queue.push({ args, transfer, resolve, reject });
@@ -92,6 +96,14 @@ function ownedCopy(values) {
 
 let sharedPool = null;
 
+function getSharedPool() {
+  return (sharedPool ||= createSurfaceGraphPool());
+}
+
+export function prewarmSurfaceGraphWorkers() {
+  getSharedPool().prewarm();
+}
+
 /**
  * Build one mesh's surface influence graph on the worker pool. If workers are
  * unavailable, use the cooperative build instead. Both produce the same graph.
@@ -108,7 +120,7 @@ export async function buildSurfaceInfluenceGraphParallel(
 ) {
   await budget.checkpoint();
   if (!isCurrent()) return null;
-  const workers = pool || (sharedPool ||= createSurfaceGraphPool());
+  const workers = pool || getSharedPool();
   if (workers.available) {
     const arrays = [baselinePositions, triangleIndices ?? null, indices, weights].map(ownedCopy);
     const transfer = arrays.filter((values) => ArrayBuffer.isView(values)).map((values) => values.buffer);

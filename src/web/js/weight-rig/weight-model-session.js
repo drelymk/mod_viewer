@@ -151,6 +151,7 @@ export function createWeightModelSession({
   syncPhysicsToSelection,
   serializeBoneSelection,
   eligibleSkinningMesh,
+  onWeightsLoadStarted = () => {},
   onWeightsInstalled = () => {},
   getAssetContext = () => null,
   notifyChanged,
@@ -207,6 +208,7 @@ export function createWeightModelSession({
     modelWeightState.error = null;
     modelWeightState.noWeights = false;
     notifyChanged();
+    onWeightsLoadStarted();
     modelWeightState.promise = (async () => {
       const api = await bridgeReady();
       if (generation !== getGeneration()) return modelWeightSnapshot();

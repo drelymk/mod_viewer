@@ -43,6 +43,7 @@ import {
   RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
 import { createWorkBudget } from './cooperative-scheduler.js';
+import { prewarmSurfaceGraphWorkers } from './surface-graph-pool.js';
 import { characterAxesFromOrientation } from './humanoid-orientation.js';
 import { buildHumanoidRigBinding } from './humanoid-rig-binding.js';
 import {
@@ -206,6 +207,8 @@ weightModelSession = createWeightModelSession({
   serializeBoneSelection,
   eligibleSkinningMesh,
   getAssetContext: () => assetRigContext,
+  // Start the Rig's surface-graph workers while the backend decodes weights.
+  onWeightsLoadStarted: prewarmSurfaceGraphWorkers,
   onWeightsInstalled: () => {
     animationBindingGeneration = -1;
   },

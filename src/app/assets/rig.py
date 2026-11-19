@@ -530,6 +530,16 @@ def _zzz_morph_reference(directory, palette, cache):
 
 def _zzz_metadata(directory, palette, cache):
     """Verified metadata entry of one captured ZZZ palette, or None."""
+    # Every mesh scans every captured palette; verify each palette once per request.
+    key = ("zzz-palette-metadata", directory, *(palette[name] for name in (
+        "metadata_file", "metadata_sha256", "vertex_file", "vertex_sha256",
+        "index_file", "index_sha256", "metadata_entry")))
+    if key not in cache:
+        cache[key] = _verified_zzz_metadata(directory, palette, cache)
+    return cache[key]
+
+
+def _verified_zzz_metadata(directory, palette, cache):
     for relative, fingerprint in ((palette["metadata_file"], palette["metadata_sha256"]),
                                   (palette["vertex_file"], palette["vertex_sha256"]),
                                   (palette["index_file"], palette["index_sha256"])):

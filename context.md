@@ -798,7 +798,8 @@ of documentation, comments and tests; use portable fixtures instead.
   matching, use bounded NumPy batches that must equal their scalar paths
   (per-vertex failures, ``sum()`` rounding, unique-nearest ties). Unusual inputs
   fall back to the scalar paths. Per-mesh surface graphs build on at most four
-  same-origin module workers, copying only each view's bytes. The cooperative
+  same-origin module workers, started when Weight loading begins, copying only
+  each view's bytes. The cooperative
   main-thread build is the fallback. Rigs, errors and aggregation keep source
   and member order.
 - Exact registered WWMI and ZZMI Asset/range bindings may provide an optional root
