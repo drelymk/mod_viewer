@@ -572,17 +572,43 @@ def _zzz_merged_bone_map(rig, directory, own, layout, cache):
         return None
     mapping = {}
     for blend_hash, offset, count in layout:
-        palettes = [p for p in rig["components"] if p.get("metadata_file") and "metadata_entry" in p
-                    and (_zzz_metadata(directory, p, cache) or {}).get("blend_vb") == blend_hash]
+        palettes = _zzz_stream_palettes(rig, directory, (blend_hash,), cache)
         if len({(p["metadata_file"], p["metadata_entry"]) for p in palettes}) != 1:
             continue
-        for palette in palettes:
-            items = palette["bone_map"].items() if isinstance(palette["bone_map"], dict) else enumerate(palette["bone_map"])
-            for local, joint in items:
-                if int(local) < count:
-                    key = str(offset + int(local))
-                    if mapping.setdefault(key, joint) != joint:
-                        return None
+        segment = _zzz_stream_bone_map(palettes, offset, count)
+        if segment is None:
+            return None
+        mapping.update(segment)
+    return mapping
+
+
+def _zzz_stream_palettes(rig, directory, hashes, cache):
+    """Captured components whose native stream matches every hash in ``hashes``.
+
+    ZZZ skins a whole stream once, at its Blend pass, with one palette. Each
+    captured component of that stream records the part of it its draw used.
+    """
+    palettes = []
+    if not hashes:
+        return palettes
+    for palette in rig["components"]:
+        if not palette.get("metadata_file") or "metadata_entry" not in palette:
+            continue
+        stream = _zzz_metadata(directory, palette, cache) or {}
+        if set(hashes) <= {stream.get("blend_vb"), stream.get("position_vb")}:
+            palettes.append(palette)
+    return palettes
+
+
+def _zzz_stream_bone_map(palettes, offset=0, count=None):
+    """Union of one stream's captured bone maps; conflicting joints reject it."""
+    mapping = {}
+    for palette in palettes:
+        items = palette["bone_map"].items() if isinstance(palette["bone_map"], dict) else enumerate(palette["bone_map"])
+        for local, joint in items:
+            if count is None or int(local) < count:
+                if mapping.setdefault(str(offset + int(local)), joint) != joint:
+                    return None
     return mapping
 
 
@@ -613,6 +639,7 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
         if component is None:
             return None
         mapping = palette["bone_map"]
+        own_geometry = True
         # Captured palettes are proven during extraction. Edited mod streams
         # require a verified INI palette proof, not just matching numeric IDs.
         if merged_layout and not captured:
@@ -623,12 +650,21 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
             profiles = [p for p in rig["skin_bindings"] if p["encoding"] == source.encoding and p["sha256"] == digest]
             if len(profiles) == 1:
                 mapping = profiles[0]["bone_map"]
-            elif not source.native_palette_hashes or not set(source.native_palette_hashes) <= {
-                    component.get("blend_vb"), component.get("position_vb")}:
-                return None
+            else:
+                # The proven native stream decides the palette, even when
+                # another component's override draws that stream.
+                stream = _zzz_stream_palettes(rig, directory, source.native_palette_hashes, cache)
+                mapping = _zzz_stream_bone_map(stream) if stream else None
+                if mapping is None:
+                    return None
+                own_geometry = any(p is palette for p in stream)
         mapping = _game_bone_mapping(mapping, bone_ids)
         if mapping is None:
             return None
+        if not own_geometry:
+            # The bound component's morph reference describes different geometry.
+            return dict(id=rig["id"], version=2, bones=rig["bones"], bone_map=mapping,
+                        humanoid_controls=rig.get("humanoid_controls"), morph_binding=None)
         morph_binding = {key: palette[key] for key in ("vertex_sha256", "index_sha256")}
         if not captured:
             reference = _zzz_morph_reference(directory, palette, cache)

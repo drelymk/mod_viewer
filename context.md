@@ -1092,7 +1092,11 @@ of documentation, comments and tests; use portable fixtures instead.
   Version 2 rigs retain nonuniform scale and sparse palettes. Captured references
   require exact metadata/VB/IB fingerprints. Mods additionally require an exact
   Blend-content fingerprint or a same-INI file-backed vb2 binding program whose
-  native position/Blend hashes all match that captured component's metadata. Reuse
+  native position/Blend hashes all match captured components' metadata.
+  ZZZ skins a stream once with one palette, so its mapping is the union of every
+  captured component of that stream, rejected on conflicting joints; it applies
+  even when another component's override draws that stream, which then carries
+  no morph binding. Reuse
   the canonical binding history, including local helpers and conditional resources;
   source names and exact exporter statement order are not palette evidence. Retain this proof
   in the loaded skinning source; never reread INIs during Weight access. Reject

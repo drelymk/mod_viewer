@@ -448,3 +448,44 @@ def test_zzz_merged_ids_map_through_each_captured_native_blend_stream(monkeypatc
     assert rig._zzz_merged_bone_map(model, "", {"blend_vb": "66666666"}, layout, {}) is None
     model["components"].append(component(0, {"1": 9}))
     assert rig._zzz_merged_bone_map(model, "", own, layout, {}) is None
+
+
+def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_override(tmp_path, monkeypatch):
+    from app.assets import rig
+
+    streams = {0: {"blend_vb": "33333333", "position_vb": "11111111"},
+               1: {"blend_vb": "44444444", "position_vb": "22222222"}}
+    (tmp_path / "hash.json").write_text("{}")
+
+    def component(geometry_hash, ordinal, entry, bone_map):
+        return dict(geometry_hash=geometry_hash, component_ordinal=ordinal, first_index=ordinal * 3, index_count=3,
+                    metadata_file="hash.json", metadata_entry=entry, bone_map=bone_map,
+                    vertex_sha256="a" * 64, index_sha256="b" * 64)
+
+    model = {"id": "rig", "version": 2, "bones": [], "skin_bindings": [], "components": [
+        component("aaaaaaaa", 0, 0, {"0": 5, "1": 6}), component("aaaaaaaa", 1, 0, {"2": 7}),
+        component("bbbbbbbb", 0, 1, {"0": 8})]}
+    monkeypatch.setattr(rig, "_admitted_rig", lambda *_: (str(tmp_path), model))
+    monkeypatch.setattr(rig, "_zzz_metadata", lambda _directory, palette, _cache: streams[palette["metadata_entry"]])
+    monkeypatch.setattr(rig, "_zzz_morph_reference", lambda *_: object())
+    monkeypatch.setattr(rig, "_mod_morph_vertices", lambda *_args, **_kwargs: [0])
+
+    def resolve(geometry_hash, ordinal, ids, hashes=("11111111",)):
+        binding = SimpleNamespace(asset_type="ZZMI", root=str(tmp_path), metadata="hash.json",
+                                  geometry_hash=geometry_hash, first_index=ordinal * 3, index_count=3,
+                                  component_ordinal=ordinal)
+        source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4", native_palette_hashes=hashes)
+        return resolve_game_rig(binding, source, ids, set(), {})
+
+    # Each captured component holds only the slice of the stream palette it
+    # used; a component of that stream skins with the whole captured palette.
+    own = resolve("aaaaaaaa", 1, (0, 1, 2))
+    assert own["bone_map"] == {"0": 5, "1": 6, "2": 7} and own["morph_binding"]["vertices"] == [0]
+    # Another component's override drawing that stream uses the stream palette,
+    # but its own morph reference describes different geometry.
+    drawn_elsewhere = resolve("bbbbbbbb", 0, (0, 2))
+    assert drawn_elsewhere["bone_map"] == {"0": 5, "1": 6, "2": 7} and drawn_elsewhere["morph_binding"] is None
+    assert resolve("aaaaaaaa", 1, (3,)) is None
+    assert resolve("aaaaaaaa", 1, (0,), ("11111111", "22222222")) is None
+    model["components"].append(component("aaaaaaaa", 2, 0, {"0": 9}))
+    assert resolve("aaaaaaaa", 1, (0,)) is None
