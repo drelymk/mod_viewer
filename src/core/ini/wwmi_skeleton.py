@@ -1,8 +1,8 @@
-"""Recognize the stock WWMI R8 merged-skeleton template within one INI.
+"""Prove which WWMI skeleton palette one INI's component draws skin against.
 
-This is a bounded template adapter, not shader execution or numeric palette
-guessing. Only component draws with unchanged shared bindings qualify, either
-direct or inside verified local draw helpers.
+Either the stock R8 merged-skeleton template (see ``wwmi_skeleton_modern``) or
+WWMI's native per-component skeleton left untouched by the INI. These are
+bounded INI proofs, not shader execution or numeric palette guessing.
 """
 
 import re
@@ -64,81 +64,6 @@ def _plain(commands):
     if any(phase is not None for phase, _line in commands):
         return None
     return [line for _phase, line in commands]
-
-
-def _merger(lines):
-    if lines is None or len(lines) != 7:
-        return None
-    if (not _match(r"\$\\wwmiv1\\custom_mesh_scale = 1(?:\.0+)?", lines[0])
-            or lines[1] != "cs-cb8 = ref vs-cb4"
-            or lines[3] != f"run = {_MERGER}"
-            or lines[4] != "cs-cb8 = ref vs-cb3"
-            or lines[6] != f"run = {_MERGER}"):
-        return None
-    targets = [_match(r"cs-u6 = (resource[\w]+)", lines[i]) for i in (2, 5)]
-    return tuple(item[1] for item in targets) if all(targets) else None
-
-
-def _copies(lines, targets):
-    if lines is None or len(lines) != 7:
-        return None
-    state = _match(r"if (\$\w+)", lines[0])
-    if (not state or lines[1:5] != [f"{state[1]} = 0", "else", f"{state[1]} = 1", "endif"]):
-        return None
-    outputs = [_match(r"(resource\w+) = copy " + re.escape(targets[i]), lines[5 + i]) for i in range(2)]
-    if not all(outputs) or outputs[0][1] == outputs[1][1]:
-        return None
-    return state[1], tuple(item[1] for item in outputs)
-
-
-def _binder(lines, outputs):
-    if lines is None or len(lines) < 10:
-        return None
-    bypass = _match(r"(resource\w+) = ref vb0", lines[0])
-    if not bypass or not _match(r"ib = resource\w+", lines[1]):
-        return None
-    bindings = [_match(r"vb(\d+) = (resource\w+|null)", line) for line in lines[2:-6]]
-    if (not all(bindings) or len([item for item in bindings if item[1] == "0"]) != 1
-            or len([item for item in bindings if item[1] == "4"]) != 1):
-        return None
-    blend = next(item[2] for item in bindings if item[1] == "4")
-    if blend == "null":
-        return None
-    marker = _match(r"if vs-cb3 == (\d+(?:\.\d+)?)", lines[-6])
-    if (not marker or lines[-5:] != [f"vs-cb3 = {outputs[1]}", "endif",
-            f"if vs-cb4 == {marker[1]}", f"vs-cb4 = {outputs[0]}", "endif"]):
-        return None
-    return bypass[1], blend, marker[1]
-
-
-def _component(lines, merger, binder, checks, cleanup, state, output):
-    if lines is None or len(lines) < 15:
-        return None
-    fields = [_match(pattern, lines[i]) for i, pattern in enumerate((
-        r"hash = ([0-9a-f]{8})", r"match_first_index = (\d+)", r"match_index_count = (\d+)",
-    ))]
-    if not all(fields):
-        return None
-    cursor = 3
-    if _match(r"\$\w+ = 1", lines[cursor]):
-        cursor += 1
-    enabled = _match(r"if \$\w+", lines[cursor])
-    local = _match(r"local (\$\w+)", lines[cursor + 1])
-    if not enabled or not local:
-        return None
-    prefix = lines[cursor + 2:cursor + 10]
-    offset = _match(re.escape(_OFFSET) + r" = (\d+)", prefix[2])
-    count = _match(re.escape(_COUNT) + r" = (\d+)", prefix[3])
-    if (not offset or not count or prefix[:2] != [f"if {local[1]} != {state}", f"{local[1]} = {state}"]
-            or prefix[4:] != [f"run = {merger}", "endif", f"if {output} !== null", "handling = skip"]):
-        return None
-    body = lines[cursor + 10:]
-    if body[-2:] != ["endif", "endif"]:
-        return None
-    body = body[:-2]
-    if not _draw_body(body, binder, checks, cleanup):
-        return None
-    return fields[0][1], int(fields[1][1]), int(fields[2][1]), int(offset[1]), int(count[1])
 
 
 def _pixel_line(line):
@@ -296,8 +221,127 @@ def _draw_body(body, binder, checks, cleanup, shaders=()):
     return True
 
 
-def stock_wwmi_merged_layouts(sections):
-    """Return root-section -> (Blend resource, full component layout) proofs."""
+_SKELETON_SHADERS = {_MERGER, r"customshader\wwmiv1\skeletonremapper", r"customshader\wwmiv1\blendremapper"}
+_SKELETON_KEYS = {"vs", "vs-cb3", "vs-cb4", _OFFSET, _COUNT, _API + "blend_remap_id"}
+_COMPONENT_FIELDS = ("hash", "match_first_index", "match_index_count")
+# Pixel-stage bindings, output-merger state and draws. None of them can change
+# the vertex buffers, vertex shader or skeleton CBs a later draw skins with.
+_PIXEL_DRAW_KEY = re.compile(
+    r"ps|ps-(?:t|cb)\d+|o\d|od|[xyzw]\d*"
+    r"|(?:blend|alpha|mask|blend_factor)(?:\[\d+\])?|depth_\w+|stencil_\w+|\w+_state_merge"
+    r"|cull|fill|front|scissor_enable|multisample_enable|antialiased_line_enable|alpha_to_coverage"
+    r"|sample_mask|topology|draw(?:indexed)?(?:instanced)?|drawauto")
+# 3DMigoto built-ins that only touch output-merger state.
+_OUTPUT_BUILTINS = {"builtincommandlistunbindallrendertargets"}
+# Vertex-pipeline shaders and their slots; custom shaders restore them after running.
+_GEOMETRY_STAGE_KEY = re.compile(r"(?:vs|hs|ds|gs)(?:-(?:t|cb)\d+)?")
+
+
+def pixel_draw_lists(sections, own_resources=True):
+    """Return this INI's CommandList/CustomShader sections that only do pixel work.
+
+    Their closure may branch, write unqualified local or RabbitFX variables
+    and IniParams, bind pixel-stage and output-merger state (including RabbitFX
+    maps and render targets), check texture overrides on pixel/output slots,
+    draw and call other such sections, the RabbitFX pixel helpers or output-only
+    built-ins. Custom shader sections may also set geometry-stage shaders and
+    slots, which 3DMigoto restores after they run. With ``own_resources`` the
+    closure may also write and clear resources declared in this INI: a
+    namespaced INI's resources are private to it. Compute, UAVs, vertex/index
+    buffers and qualified names are never allowed, so another INI calling such
+    a list inside a proven draw scope cannot change which Blend stream or
+    skeleton palette that draw skins with.
+    """
+    commands = _commands(sections)
+    owned = {name for name in commands if name.startswith("resource")} if own_resources else set()
+    result = {name for name in commands if name.startswith(("commandlist", "customshader"))}
+
+    def allowed(name, line):
+        if _control(line) or _match(r"local \$\w+", line):
+            return True
+        key, value = _assignment(line)
+        if not key:
+            return False
+        if key == "run":
+            return value in result or value in _PIXEL_HELPERS or value in _OUTPUT_BUILTINS
+        if key.startswith(("$", "local ")):
+            return bool(_match(r"(?:local )?\$(?:\\rabbitfx\\)?\w+", key))
+        if _pixel_line(line):
+            return True
+        if "\\" in key or re.search(r"\b(?:resource|commandlist|customshader)\\", value):
+            return False
+        if key == "checktextureoverride":
+            return bool(_match(r"ps-t\d+|o\d|od", value))
+        if key == "clear":
+            return value.split(" ", 1)[0] in owned
+        return bool(key in owned or _PIXEL_DRAW_KEY.fullmatch(key)
+                    or (name.startswith("customshader") and _GEOMETRY_STAGE_KEY.fullmatch(key)))
+
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted(result):
+            if not all(allowed(name, line) for _phase, line in commands[name]):
+                result.discard(name)
+                changed = True
+    return frozenset(result)
+
+
+def native_wwmi_component_palettes(sections, external_neutral=frozenset()):
+    """Return ``(root section -> (hash, first, count), altered resources)``.
+
+    WWMI keeps the game's per-component skeleton bound in ``vs-cb3``/``vs-cb4``
+    unless a mod merges or replaces it. An INI that never runs a skeleton or
+    Blend remapper, never assigns the vertex shader, its skeleton CBs, Blend
+    input layout or the WWMI palette variables, therefore skins every draw of a
+    ``match_first_index`` component override with that component's native
+    palette. Custom shader sections restore their pipeline state, so only their
+    resource use counts. Calls outside the INI must be WWMI core helpers, the
+    RabbitFX pixel helpers, output-only 3DMigoto built-ins or sibling
+    ``external_neutral`` pixel/draw lists.
+    Resources assigned anywhere, or read other than as a ``vbN`` binding, are
+    returned as altered and cannot back a native Blend.
+    """
+    commands = _commands(sections)
+    if not commands:
+        return {}, frozenset()
+    altered, components = set(), {}
+    for name, lines in commands.items():
+        if name.startswith("resource"):
+            continue
+        shader = name.startswith("customshader")
+        fields = {}
+        for _phase, line in lines:
+            if _control(line):
+                continue
+            key, value = _assignment(line)
+            if key is None:
+                continue
+            if key == "run" and (value in _SKELETON_SHADERS or not (
+                    value in commands or "\\wwmiv1\\" in value or value in _PIXEL_HELPERS
+                    or value in _OUTPUT_BUILTINS or value in external_neutral)):
+                return {}, frozenset()
+            if not shader and (key in _SKELETON_KEYS or (key.startswith("vb") and "->" in key)):
+                return {}, frozenset()
+            if key.startswith("resource"):
+                altered.add(key)
+            if not re.fullmatch(r"vb\d+", key):
+                altered.update(re.findall(r"\bresource[\w.\-\\]+", value))
+            if key in _COMPONENT_FIELDS:
+                fields.setdefault(key, []).append(value)
+        if name.startswith("textureoverride") and all(len(fields.get(key, ())) == 1 for key in _COMPONENT_FIELDS):
+            geometry_hash, first, count = (fields[key][0] for key in _COMPONENT_FIELDS)
+            if _match(r"[0-9a-f]{8}", geometry_hash) and first.isdigit() and count.isdigit():
+                components[name] = geometry_hash, int(first), int(count)
+    return components, frozenset(altered)
+
+
+def stock_wwmi_merged_layouts(sections, external_neutral=frozenset()):
+    """Return root-section -> (Blend resource, full component layout) proofs.
+
+    ``external_neutral`` names sibling-INI pixel/draw lists (see
+    ``pixel_draw_lists``) that a proven draw scope may call.
+    """
     commands = _commands(sections)
     if not commands or _MERGER in commands or any(name in commands for name in _PIXEL_HELPERS):
         return {}
@@ -306,89 +350,4 @@ def stock_wwmi_merged_layouts(sections):
     from .wwmi_skeleton_modern import modern_wwmi_merged_layouts
 
     plain = _without_pixel_state(commands)
-    return _legacy_layouts(commands, plain) or modern_wwmi_merged_layouts(commands, plain)
-
-
-def _legacy_layouts(commands, plain):
-    mergers = [(name, value) for name, lines in plain.items()
-               if name.startswith("commandlist") and (value := _merger(lines))]
-    if len(mergers) != 1:
-        return {}
-    merger, targets = mergers[0]
-    if len(set(targets)) != 2:
-        return {}
-    for target in targets:
-        lines = plain.get(target)
-        if (lines is None or len(lines) != 3 or lines[:2] != ["type = rwbuffer", "format = r32g32b32a32_float"]
-                or not _match(r"array = (?:768|[1-9]\d{3,4})", lines[2])):
-            return {}
-    copies = [(name, value) for name, lines in plain.items()
-              if name.startswith("commandlist") and (value := _copies(lines, targets))]
-    if len(copies) != 1:
-        return {}
-    copy, (state, outputs) = copies[0]
-    if any(plain.get(output) != [] for output in outputs):
-        return {}
-    # Present must actually publish the merged data. Its phase-prefixed state
-    # reset is permitted; the copy call itself must execute in pre phase.
-    if (None, f"run = {copy}") not in commands.get("present", ()):
-        return {}
-    binders = [(name, value) for name, lines in plain.items()
-               if name.startswith("commandlist") and (value := _binder(lines, outputs))]
-    if len(binders) != 1:
-        return {}
-    binder, (bypass, blend, marker) = binders[0]
-    if blend not in plain:
-        return {}
-    checks = {name for name, lines in plain.items() if name.startswith("commandlist") and lines
-              and all(_match(r"checktextureoverride = (?:ps-t\d+|vs-cb[34])", line) for line in lines)}
-    cleanups = [name for name, lines in plain.items() if name.startswith("commandlist")
-                and lines == [f"vb0 = ref {bypass}"]]
-    if len(cleanups) != 1:
-        return {}
-    marked = [lines for name, lines in plain.items() if name.startswith("textureoverride") and lines
-              and f"filter_index = {marker}" in lines]
-    if not marked or any(not any(_match(r"hash = [0-9a-f]{8}", line) for line in lines) for lines in marked):
-        return {}
-    components = {}
-    for name, lines in plain.items():
-        if name.startswith("textureoverride") and lines and any(_OFFSET in line or _COUNT in line for line in lines):
-            row = _component(lines, merger, binder, checks, cleanups[0], state, outputs[0])
-            if row is None:
-                return {}
-            components[name] = row
-    if not components:
-        return {}
-    # One pair of RW outputs cannot prove independent overlapping palettes for
-    # multiple geometry objects in the same INI.
-    if len({row[0] for row in components.values()}) != 1:
-        return {}
-    # No other local command may overwrite the merged buffers, palette inputs,
-    # native skeleton CBs or Blend binding behind the template's back.
-    protected = set(targets) | set(outputs) | {blend}
-    for name, lines in commands.items():
-        if name in {merger, copy, binder, *components} or name.startswith("resource"):
-            continue
-        for _phase, line in lines:
-            if line.startswith(("if ", "elif ", "else if ")):
-                continue
-            key, value = _assignment(line)
-            if (key in {_OFFSET, _COUNT, "vs-cb3", "vs-cb4", "vb4"}
-                    or protected.intersection(re.findall(r"resource\w+", line))
-                    or (key == "run" and value in {merger, binder, _MERGER})):
-                return {}
-    result = {}
-    for geometry_hash in {row[0] for row in components.values()}:
-        layout = tuple(sorted((row for row in components.values() if row[0] == geometry_hash), key=lambda row: row[3]))
-        cursor = 0
-        for _hash, _first, count, offset, size in layout:
-            # Bones past 256 are unreachable by u8 Blend indices; the merger
-            # drops those writes, so they do not invalidate the palette proof.
-            if (count < 3 or count % 3 or not 1 <= size <= 256 or offset != cursor
-                    or offset + size > 1024):
-                return {}
-            cursor += size
-        if len({(row[1], row[2]) for row in layout}) != len(layout):
-            return {}
-        result.update({name: WwmiSkeletonProof(blend, layout) for name, row in components.items() if row[0] == geometry_hash})
-    return result
+    return modern_wwmi_merged_layouts(commands, plain, external_neutral)

@@ -12,6 +12,7 @@ import { syncLoosePartMaterial } from '../mesh/loose-parts.js';
 import { createAnimationSkinningGpu } from './animation-skinning-gpu.js';
 import { invalidateCharacterShadowGeometry } from '../scene/shadow-invalidation.js';
 import { morphBaseline } from './animation-morphs.js';
+import { buildBoneRestBounds, computePosedBounds } from './posed-bounds.js';
 
 function typedView(buffer, descriptor, Type, typeName) {
   if (!descriptor || descriptor.type !== typeName) {
@@ -42,6 +43,26 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     }
     mesh.frustumCulled = false;
     state.finalBoundsDirty = true;
+  }
+
+  const posedBoundsScratch = new THREE.Box3();
+
+  /** Keep clipping and shadow bounds enclosing an animated pose until the exact finalize pass. */
+  function updatePosedBounds(mesh, state, transforms, activeCount) {
+    const positions = state.baselinePositions;
+    if (!transforms || !positions) return;
+    if (state.restBoneBounds?.positions !== positions) {
+      state.restBoneBounds = buildBoneRestBounds(positions, state.indices, state.weights, state.influenceCount);
+    }
+    const partial = activeCount < Math.floor(positions.length / 3);
+    const box = computePosedBounds(state.restBoneBounds, transforms, { partial }, posedBoundsScratch);
+    if (!box) return;
+    const geometry = mesh.geometry;
+    // Loose parts share these objects, so update them in place.
+    geometry.boundingBox ??= new THREE.Box3();
+    geometry.boundingSphere ??= new THREE.Sphere();
+    geometry.boundingBox.copy(box);
+    box.getBoundingSphere(geometry.boundingSphere);
   }
 
   function restorePoseVertices(mesh, state, vertices) {
@@ -151,6 +172,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
         mesh.userData.animationSuspended = true;
         state.animationGpu.update(finalTransforms, finalRotations, activeVertices);
         state.morphApplied = !!state.animationMorph;
+        updatePosedBounds(mesh, state, finalTransforms, activeVertices.length);
         markFinalBoundsDirty(mesh, state);
         if (shouldInvalidateShadow) invalidateCharacterShadowGeometry({ request });
         else if (request) requestRender();
@@ -220,7 +242,13 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     }
     const changed = removedVertices.length > 0 || deformedVertices > 0 || morphChanged;
     state.finalBoundsDirty = state.finalBoundsDirty || changed;
-    if (changed) markFinalBoundsDirty(mesh, state);
+    if (changed) {
+      // Playback must not clip against the stale rest box; edits keep deferring exact bounds.
+      if (gpu && !physicsActive && activeVertices.length && finalTransforms) {
+        updatePosedBounds(mesh, state, finalTransforms, activeVertices.length);
+      }
+      markFinalBoundsDirty(mesh, state);
+    }
     position.needsUpdate = changed || activeVertices.length > 0;
     let resumedAnimation = false;
     if (wasSuspended && !takingOwnership) {

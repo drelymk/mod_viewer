@@ -2,6 +2,7 @@
 
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 from core.geometry.semantics import deduplicate_draws
@@ -11,6 +12,7 @@ from core.ini.document import IniDocument
 from core.ini.snapshot import IniRecord, ModIniSnapshot
 from core.ini.draw_scan import gating_var_names
 from core.ini.menu import extract_controller_toggles
+from core.ini.wwmi_skeleton import pixel_draw_lists
 from core.ini.sections import (canonical_var_names, extract_ini_namespace,
                                extract_resources, sections_from_document)
 from core.ini.animations import (
@@ -311,6 +313,28 @@ def build_mod_ini_snapshot(ini_paths, folder_path, documents=None,
     return ModIniSnapshot(folder_path, source, tuple(records))
 
 
+def _sibling_pixel_draw_lists(ini_records, namespace_targets):
+    """Sibling lists that only do pixel work and draws, as callers spell them.
+
+    Namespaced INIs are reached as ``CommandList\\Namespace\\Name``; sections of
+    INIs without a namespace share the global namespace, so they are reached by
+    their plain name when exactly one such sibling declares it, and may not
+    write resources, which could be another INI's global resources.
+    """
+    names = set()
+    for namespace, record in namespace_targets.items():
+        for name in pixel_draw_lists(record["sections"]):
+            prefix = len("commandlist") if name.startswith("commandlist") else len("customshader")
+            names.add(f"{name[:prefix]}\\{namespace}\\{name[prefix:]}")
+    global_owners = Counter(name.casefold() for record in ini_records if not record["namespace"]
+                            for name in record["sections"])
+    for record in ini_records:
+        if not record["namespace"]:
+            names.update(name for name in pixel_draw_lists(record["sections"], own_resources=False)
+                         if global_owners[name] == 1)
+    return frozenset(names)
+
+
 def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
                      documents=None, source=None):
     """Aggregate separate INI records into one mod semantic model."""
@@ -348,6 +372,7 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
         for namespace, records in namespace_candidates.items()
         if len(records) == 1
     }
+    external_neutral = _sibling_pixel_draw_lists(ini_records, namespace_targets)
     records_by_path = {record["ini_path"]: record for record in ini_records}
     for record in ini_records:
         record["resources"] = _rebase_resources(
@@ -401,7 +426,8 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
             seen=seen_labels,
             extra_gating_vars=record["extra_gating_vars"],
             qualified_vars=qualified_vars,
-            canonical_vars=record["canonical_vars"], resource_source=resource_source)
+            canonical_vars=record["canonical_vars"], resource_source=resource_source,
+            external_neutral=external_neutral)
         compute = discover_compute_animations(
             secs, resources, mod_dir=folder_path, ini_path=ini_path,
             source=source, var_prefix=var_prefix,

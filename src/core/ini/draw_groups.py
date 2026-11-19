@@ -8,16 +8,19 @@ from dataclasses import replace
 from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
 from ..geometry.draw_call import AuthoredDrawCall, DrawCall
 from ..geometry.identity import DrawOccurrence
-from ..geometry.skinning import resolve_skinning_source, normalize_skinning_source_file, SkinningSource, WwmiBlendRemap
+from ..geometry.skinning import (resolve_skinning_source, normalize_skinning_source_file, SkinningSource,
+                                 WwmiBlendRemap, wwmi_component_domain)
 from ..mod_source import DirectoryModSource
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
     _ib_res_to_component, _resolve_component_buffers, _resolve_normal_source,
     _hash_wide_overrides, _select_draw_sections,
 )
+from .animation_resources import _read_resource_bytes, _resource_size, _shader_path
 from .draw_scan import _buffer_resource_at_draw, _scan_sections_for_draws
-from .sections import ResourceTable
-from .wwmi_skeleton import stock_wwmi_merged_layouts
+from .sections import ResourceTable, first_source
+from .wwmi_skeleton import native_wwmi_component_palettes, stock_wwmi_merged_layouts
+from .zzz_merged_skeleton import zzz_merged_palettes
 from .zzz_skeleton import stock_zzz_palette_sources
 from .texture_roles import (TextureOverrideIndex, _condition_group_is_consistent,
                             _condition_difference)
@@ -32,6 +35,18 @@ def _merged_draw_path(occurrence, root, helpers):
         return False
     called = [str(step[0]) for step in path[1:]] + [str(getattr(occurrence, "section", ""))]
     return all(name.casefold() in helpers for name in called)
+
+
+def _shader_reader(sections, source):
+    """Read bounded shader text named by this INI through the mod source."""
+    ini_path = next((origin["ini_path"] for lines in sections.values() if (origin := first_source(lines))), None)
+
+    def read(value):
+        path = _shader_path(None, ini_path, value, source) if ini_path else None
+        size = _resource_size(path, source)
+        data = _read_resource_bytes(path, source) if size is not None and size <= 1024 * 1024 else None
+        return data.decode("utf-8", errors="ignore") if data else None
+    return read
 
 
 def _lookup_component_value(mapping, component):
@@ -171,10 +186,16 @@ def _auto_families(section_info):
 
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
                       gating_vars=None, animation_vars=None,
-                      qualified_vars=None, *, section_info=None, resource_source=None):
-    """Build resolved component groups while preserving authored draw snapshots."""
+                      qualified_vars=None, *, section_info=None, resource_source=None,
+                      external_neutral=frozenset()):
+    """Build resolved component groups while preserving authored draw snapshots.
+
+    ``external_neutral`` holds qualified sibling-INI pixel/draw lists that
+    skeleton proofs may treat as unable to change skinning state.
+    """
     resources = ResourceTable.normalize(resources)
-    merged_layouts = stock_wwmi_merged_layouts(sections)
+    merged_layouts = stock_wwmi_merged_layouts(sections, external_neutral)
+    native_components, native_altered = native_wwmi_component_palettes(sections, external_neutral)
     if seen is None:
         seen = {}
     if section_info is None:
@@ -189,6 +210,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     resolve_vertex_info = resolved_buffers["resolve_vertex_info"]
     zzz_hashes, zzz_position_blends, zzz_sections = stock_zzz_palette_sources(
         sections, resources, section_info, resolve_vertex_info)
+    zzz_merged = zzz_merged_palettes(
+        sections, resources, resolve_vertex_info, _shader_reader(sections, resource_source))
     component_buffers = resolved_buffers["component_buffers"]
     component_positions = resolved_buffers["component_positions"]
     component_texcoords = resolved_buffers["component_texcoords"]
@@ -568,14 +591,25 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 if skinning_source is not None:
                     skinning_resolution["resolution_source"] = \
                         "legacy_component"
-            if (skinning_source is None and skinning_error is None and 2 not in vertex_resources
+            # The root override decides which game component (and so which
+            # native palette) is bound; nested helpers inherit it unchanged.
+            native_path = tuple(getattr(authored.occurrence, "path", ()) or ())
+            root_section = str(native_path[0][0] if native_path else section_name).casefold()
+            merged_zzz = zzz_merged.get(root_section)
+            if merged_zzz and normalize_skinning_source_file(draw.position_file) == merged_zzz.position_file:
+                # The draw renders the merged kernel's output, so its Blend IDs
+                # index the proven concatenated palette rather than any native one.
+                skinning_source, skinning_error = SkinningSource(merged_zzz.blend_file, 32, 4, "gimi_f32_u32_4"), None
+                skinning_resolution["resolution_source"] = "verified_zzz_merged"
+                draw.skinning_merged_layout = merged_zzz.layout
+            elif (skinning_source is None and skinning_error is None and 2 not in vertex_resources
                     and section_name.casefold() in zzz_sections):
                 blends = zzz_position_blends.get(normalize_skinning_source_file(draw.position_file), ())
                 if len(blends) == 1:
                     skinning_source = SkinningSource(next(iter(blends)), 32, 4, "gimi_f32_u32_4")
                     skinning_resolution["resolution_source"] = "verified_zzz"
             draw.skinning_source = skinning_source
-            if (skinning_source is not None and section_name.casefold() in zzz_sections
+            if (skinning_source is not None and section_name.casefold() in zzz_sections and not merged_zzz
                     and skinning_source.encoding == "gimi_f32_u32_4"
                     and not skinning_source.bone_id_offset and not skinning_source.blend_remap
                     and not skinning_source.vertex_vg_file):
@@ -625,6 +659,17 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 if proof_error:
                     draw.skinning_source = None
                     draw.skinning_error = proof_error
+            native_component = native_components.get(root_section)
+            skin = draw.skinning_source
+            if (native_component and skin is not None and skinning_resolution["resolution_source"] == "direct"
+                    and skin.encoding in ("wwmi_u8_4", "wwmi_u8_8") and skin.bone_id_namespace == "model"
+                    and not skin.bone_id_offset and not skin.vertex_vg_file and not skin.blend_remap):
+                native_blends = {resource.casefold() for resource in direct_skinning_resources.values()
+                                 if (resolve_vertex_info(resource) or {}).get("filename") == skin.file}
+                if native_blends and not native_blends & native_altered:
+                    draw.skinning_source = replace(skin, bone_id_namespace="wwmi_component",
+                                                   bone_id_domain=wwmi_component_domain(*native_component))
+                    skinning_resolution["resolution_source"] = "verified_component"
             _apply_diffuse_state(draw, authored, resolve_texture_file)
             _apply_auxiliary_map_state(draw, authored, resolve_texture_file)
             draw.texture_provenance = {

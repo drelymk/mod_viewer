@@ -1,5 +1,6 @@
 """Small, explicit skin-weight decoding helpers for the preview experiment."""
 
+import hashlib
 import math
 import ntpath
 import os
@@ -109,6 +110,12 @@ def normalize_skinning_source_file(value):
     return normalized
 
 
+def wwmi_component_domain(geometry_hash, first_index, index_count):
+    """Identity of one native WWMI component palette (Blend IDs are local to it)."""
+    identity = f"wwmi-component|{str(geometry_hash).casefold()}|{int(first_index)}|{int(index_count)}"
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
 def skinning_source_key(source_file, bone_id_offset=0, vertex_vg_file=None,
                         bone_id_namespace="model", bone_id_domain=None):
     """Build the case-insensitive identity for one decoded skin namespace."""
@@ -126,8 +133,8 @@ def skinning_source_key(source_file, bone_id_offset=0, vertex_vg_file=None,
     key = f"{normalized.casefold()}|offset={offset}"
     remap = normalize_skinning_source_file(vertex_vg_file)
     namespace = str(bone_id_namespace or "model")
-    if namespace == "wwmi_merged":
-        key += "|namespace=wwmi_merged"
+    if namespace in ("wwmi_merged", "wwmi_component"):
+        key += f"|namespace={namespace}"
     elif remap and namespace != "model":
         key += f"|namespace={namespace}|vertex-vg={remap.casefold()}"
     if bone_id_domain is not None:
@@ -159,7 +166,7 @@ def skinning_source_descriptor(source):
         "bone_id_offset": offset,
         "bone_ids_model_wide": skinning_bone_ids_model_wide(source),
     }
-    if source.bone_id_namespace == "wwmi_merged" or source.blend_remap:
+    if source.bone_id_namespace in ("wwmi_merged", "wwmi_component") or source.blend_remap:
         descriptor.update(bone_id_namespace=source.bone_id_namespace,
                           bone_id_domain=source.bone_id_domain)
     if source.bone_id_namespace == "wwmi_merged":
@@ -609,7 +616,7 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
 __all__ = [
     "SkinningSource", "SkinningManifestEntry", "DecodedSkinning",
     "SkinningPreviewError",
-    "normalize_skinning_source_file", "skinning_source_key",
+    "normalize_skinning_source_file", "skinning_source_key", "wwmi_component_domain",
     "skinning_source_descriptor", "skinning_bone_ids_model_wide",
     "resolve_skinning_source", "WwmiBlendRemap", "read_blend_remap_tables",
     "decode_skinning", "build_skinning_preview",

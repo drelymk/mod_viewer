@@ -369,3 +369,172 @@ def test_modified_merge_status_or_proxy_program_stays_unproven(before, after):
     text = modern_merged_skeleton_ini(remapped=True)
     assert before in text
     assert stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=text.replace(before, after))) == {}
+
+
+_NATIVE_INI = r"""[Constants]
+global $mode = 0
+[CommandListBind]
+ib = ResourceIndices
+vb0 = ResourcePoints
+vb1 = ResourceVectors
+vb2 = ResourceUv
+vb3 = ResourceColors
+vb4 = ResourceJoints
+[CommandListExtra]
+drawindexed = 3, 3, 0
+[TextureOverridePart01]
+hash = 10101010
+match_first_index = 0
+match_index_count = 6
+handling = skip
+run = CommandListBind
+drawindexed = 3, 0, 0
+run = CommandListExtra
+[TextureOverridePart02]
+hash = 10101010
+match_first_index = 6
+match_index_count = 3
+handling = skip
+run = CommandListBind
+drawindexed = 3, 6, 0
+[ResourceIndices]
+format = DXGI_FORMAT_R32_UINT
+stride = 12
+filename = mesh.idx
+[ResourcePoints]
+format = DXGI_FORMAT_R32G32B32_FLOAT
+stride = 12
+filename = mesh.pos
+[ResourceVectors]
+format = DXGI_FORMAT_R8G8B8A8_SNORM
+stride = 8
+filename = mesh.vec
+[ResourceUv]
+format = DXGI_FORMAT_R16G16_FLOAT
+stride = 16
+filename = mesh.uv
+[ResourceColors]
+format = DXGI_FORMAT_R8G8B8A8_UNORM
+stride = 4
+filename = mesh.color
+[ResourceJoints]
+type = Buffer
+format = DXGI_FORMAT_R8_UINT
+stride = 8
+filename = mesh.blend
+"""
+
+
+def _native_sources(text):
+    sections = parse_sections("source-01.ini", text=text)
+    return [draw.skinning_source for group in build_draw_groups(sections, extract_resources(sections))
+            for draw in group["draws"]]
+
+
+def test_native_component_palette_lifecycle():
+    from core.geometry.skinning import skinning_source_descriptor, wwmi_component_domain
+    from core.ini.wwmi_skeleton import native_wwmi_component_palettes
+
+    components, altered = native_wwmi_component_palettes(parse_sections("source-01.ini", text=_NATIVE_INI))
+    assert components == {"textureoverridepart01": ("10101010", 0, 6),
+                          "textureoverridepart02": ("10101010", 6, 3)}
+    assert "resourcejoints" not in altered
+    sources = _native_sources(_NATIVE_INI)
+    assert len(sources) == 3 and {source.bone_id_namespace for source in sources} == {"wwmi_component"}
+    # Helper draws inherit their root override's palette; components stay distinct.
+    domains = sorted(source.bone_id_domain for source in sources)
+    first, second = wwmi_component_domain("10101010", 0, 6), wwmi_component_domain("10101010", 6, 3)
+    assert domains == sorted([first, first, second])
+    descriptors = {skinning_source_descriptor(source)["key"]: skinning_source_descriptor(source) for source in sources}
+    assert len(descriptors) == 2
+    assert all(not item["bone_ids_model_wide"] and "legacy_source_key" not in item for item in descriptors.values())
+    # Pipeline state inside custom shader sections is restored after they run.
+    shader = _NATIVE_INI + "[CustomShaderTool]\nvs = null\nvs-cb4 = null\n"
+    assert {source.bone_id_namespace for source in _native_sources(shader)} == {"wwmi_component"}
+
+
+@pytest.mark.parametrize("line", [
+    r"run = CustomShader\WWMIv1\SkeletonMerger",
+    r"run = CustomShader\WWMIv1\BlendRemapper",
+    "vs-cb4 = ResourcePose",
+    "vs = ResourceShader",
+    r"$\WWMIv1\vg_offset = 0",
+    "vb4->ElementFormat(ATTRIBUTE, 3) = R16G16B16A16_UINT",
+    "ResourceJoints = copy ResourceOther",
+    "cs-t35 = ref ResourceJoints",
+    r"run = CommandList\Elsewhere\Helper",
+])
+def test_native_component_palette_rejects_rebound_skeleton_or_altered_blend(line):
+    text = _NATIVE_INI.replace("vb4 = ResourceJoints\n", f"vb4 = ResourceJoints\n{line}\n")
+    sources = _native_sources(text)
+    assert len(sources) == 3
+    assert all(source is None or source.bone_id_namespace == "model" for source in sources)
+
+
+_SIBLING_INI = r"""[Constants]
+global $shine = 0
+[ResourceSaved]
+[ResourceCube]
+type = TextureCube
+filename = cube.dds
+[CustomShaderShine]
+o1 = ResourceSaved
+depth_stencil_state_merge = 1
+depth_func = equal
+vs = shine.hlsl
+gs = null
+ps = assets\shine.hlsl
+blend[0] = ADD SRC_ALPHA INV_SRC_ALPHA
+mask[1] = 0x0
+ps-t11 = ResourceCube
+drawindexed = 3, 0, 0
+[CommandListShine]
+local $seen = 1
+if $shine == 1 && ps-t0->format == 98
+    ResourceSaved = ref ps-t11
+    clear = ResourceSaved 0 0 0 0
+    checktextureoverride = o1
+    x174 = 0.5
+    $\RabbitFX\brightness = 2
+    run = BuiltInCommandListUnbindAllRenderTargets
+    run = CustomShaderShine
+    ps-t11 = ref ResourceSaved
+endif
+[CommandListBindsGeometry]
+run = CommandListShine
+vb0 = ResourceCube
+"""
+
+
+@pytest.mark.parametrize("line", [
+    "vb4 = ResourceCube", "vs-cb4 = ResourceCube", "vs = shine.hlsl", "cs-u0 = ResourceCube",
+    "dispatch = 1, 1, 1", "ib = ResourceCube", "ResourceUndeclared = copy ps-t0",
+    r"Resource\Main\Joints = ref ps-t0", "checktextureoverride = vb0", "ps-u1 = ResourceCube",
+    "clear = vb4",
+    r"$\WWMIv1\vg_offset = 0", r"$\Main\merge_status = 0", r"run = CommandList\Elsewhere\Helper",
+])
+def test_sibling_pixel_draw_lists_admit_only_pixel_work_and_draws(line):
+    from core.ini.wwmi_skeleton import pixel_draw_lists
+
+    sections = parse_sections("sibling-01.ini", text=_SIBLING_INI)
+    assert pixel_draw_lists(sections) == {"customshadershine", "commandlistshine"}
+    # A global-namespace sibling may not write resources another INI could own.
+    assert pixel_draw_lists(sections, own_resources=False) == {"customshadershine"}
+    text = _SIBLING_INI.replace("    run = CustomShaderShine\n", f"    run = CustomShaderShine\n    {line}\n")
+    assert pixel_draw_lists(parse_sections("sibling-01.ini", text=text)) == {"customshadershine"}
+
+
+def test_sibling_pixel_draw_call_keeps_merged_and_native_proofs():
+    from core.ini.wwmi_skeleton import native_wwmi_component_palettes
+
+    call = r"run = CommandList\Sibling\Shine"
+    external = frozenset({r"commandlist\sibling\shine"})
+    expected = stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=stock_merged_skeleton_ini()))
+    merged = stock_merged_skeleton_ini().replace("drawindexed = 3, 0, 0\n", f"drawindexed = 3, 0, 0\n{call}\n", 1)
+    sections = parse_sections("source-01.ini", text=merged)
+    assert stock_wwmi_merged_layouts(sections) == {}
+    assert stock_wwmi_merged_layouts(sections, external) == expected
+    native = parse_sections("source-01.ini", text=_NATIVE_INI.replace(
+        "drawindexed = 3, 6, 0\n", f"drawindexed = 3, 6, 0\n{call}\n"))
+    assert native_wwmi_component_palettes(native)[0] == {}
+    assert len(native_wwmi_component_palettes(native, external)[0]) == 2

@@ -1,6 +1,7 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import { getLocale, t } from '../i18n/index.js';
 import { sampleMorphWeights } from './animation-morphs.js';
+import { createIdleBlink, sampleIdleBlink } from './idle-blink.js';
 
 // Every clip picker shows the same locale-sorted order after the Rest option.
 export function fillRigClipSelect(select, clips) {
@@ -80,6 +81,10 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
   let error = null;
   let errorKey = null;
   let time = 0;
+  // Clips without facial curves borrow the library's eye-closing shapes. The idle
+  // clock runs across loops so short clips still blink.
+  let idle = null;
+  let idleTime = 0;
   let frame = null;
   let last = 0;
   const snapshot = () => ({
@@ -97,7 +102,7 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
     if (clip && values && getRig()?.id === clip.skeleton_id)
       applyPose(sampleAnimation(getRig(), clip, values, time), {
         finalize,
-        morphs: sampleMorphWeights(clip, values, time),
+        morphs: sampleMorphWeights(clip, values, time) || sampleIdleBlink(idle, idleTime, playing),
       });
   };
   function cancel() {
@@ -109,7 +114,9 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
     if (!playing || !clip) return;
     // Allow display-timing jitter so a 60 Hz display steps every frame.
     if (now - last >= 1000 / 60 - 2) {
-      time = (time + (now - last) / 1000) % clip.duration;
+      const elapsed = (now - last) / 1000;
+      time = (time + elapsed) % clip.duration;
+      idleTime += elapsed;
       last = now;
       pose();
       changed();
@@ -133,7 +140,9 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
     selected = null;
     clip = null;
     values = null;
+    idle = null;
     time = 0;
+    idleTime = 0;
     error = null;
     errorKey = null;
     applyPose(null);
@@ -190,9 +199,25 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
         metadata.morphs.buffer = targets;
         metadata.morphs.weights = new Float32Array(metadata.morphs.names.length);
       }
+      let blink = null;
+      if (!metadata.morphs && metadata.idle_morphs) {
+        // Shared eye shapes are optional; a failed download keeps the clip playable.
+        try {
+          const shapes = await fetch(metadata.idle_morphs.data.url, { cache: 'no-store' });
+          const targets = shapes.ok ? await shapes.arrayBuffer() : null;
+          if (targets?.byteLength === metadata.idle_morphs.data.length) {
+            blink = createIdleBlink(metadata.idle_morphs, targets);
+          }
+        } catch {
+          blink = null;
+        }
+        if (current !== generation || getRig() !== rig) return;
+      }
       clip = metadata;
       values = new Float32Array(buffer);
+      idle = blink;
       time = 0;
+      idleTime = 0;
       loading = false;
       prepare();
       suspendPhysics(true);
@@ -204,6 +229,7 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
       playing = false;
       clip = null;
       values = null;
+      idle = null;
       time = 0;
       applyPose(null);
       suspendPhysics(false);

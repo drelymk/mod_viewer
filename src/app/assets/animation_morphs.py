@@ -26,6 +26,34 @@ def morph_names(raw):
     return names
 
 
+_EYE_CLOSE = r"(?:(?:e|eyes?)[ _-]?(?:close[d]?|blink)|blink|eye[ _-]?blink)"
+_BOTH_EYES = re.compile(_EYE_CLOSE, re.IGNORECASE)
+_ONE_EYE = re.compile(
+    _EYE_CLOSE + r"[ _-]?(?:l|r|left|right)|(?:l|r|left|right)[ _-]?(?:eyes?[ _-]?(?:close[d]?|blink)|blink)",
+    re.IGNORECASE,
+)
+
+
+def blink_targets(components):
+    """Names of native shapes that close the eyes, for clips without facial curves.
+
+    A shape that closes both eyes wins; otherwise a left and right shape are used
+    together so a single eye never winks. Weight 1 is the shape's full closure.
+    """
+    names = []
+    for component in components if isinstance(components, list) else []:
+        targets = component.get("targets") if isinstance(component, dict) else None
+        for target in targets if isinstance(targets, list) else []:
+            name = target.get("name") if isinstance(target, dict) else None
+            if isinstance(name, str) and name not in names:
+                names.append(name)
+    both = [name for name in names if _BOTH_EYES.fullmatch(name)]
+    if both:
+        return both
+    sides = [name for name in names if _ONE_EYE.fullmatch(name)]
+    return sides if len(sides) >= 2 else []
+
+
 def _glb_targets(data, raw):
     """Read only the embedded runtime view; never resolve GLB URI resources."""
     if len(data) < 28 or struct.unpack_from("<3I", data) != (0x46546C67, 2, len(data)):

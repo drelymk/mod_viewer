@@ -10,6 +10,7 @@ from itertools import product
 
 from core.geometry.migoto_format import MigotoBinaryLayout, MigotoElement, parse_fmt
 from core.geometry.migoto_dump import parse_vertex_dump, parse_index_dump, pack_indices
+from core.geometry.skinning import wwmi_component_domain
 
 from . import paths
 from .metadata import entries as metadata_entries
@@ -388,6 +389,38 @@ def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, sig
         return None
 
 
+def _admitted_rig(binding, enabled_roots, cache):
+    """Return ``(Asset directory, validated rig)`` for an exact, enabled binding."""
+    if (binding is None or binding.status != "exact" or binding.range_status != "exact"
+            or os.path.normcase(binding.root or "") not in enabled_roots):
+        return None
+    directory = paths.safe_asset_dir(binding.root, binding.asset)
+    filename = paths.safe_asset_path(directory, RIG_FILENAME) if directory else None
+    if not filename:
+        return None
+    if filename not in cache:
+        cache[filename] = validate_rig(_json(filename))
+    return directory, cache[filename]
+
+
+def _file_matches(path, fingerprint, cache, max_bytes):
+    """Whether a bounded reference file has the recorded SHA-256 (cached)."""
+    key = path, fingerprint
+    if key not in cache:
+        if os.path.getsize(path) > max_bytes:
+            return False
+        with open(path, "rb") as stream:
+            cache[key] = hashlib.file_digest(stream, "sha256").hexdigest() == fingerprint
+    return cache[key]
+
+
+def _game_bone_mapping(bone_map, bone_ids, offset=0):
+    """Map decoded IDs (palette index + offset) to skeleton joints, or None."""
+    items = bone_map.items() if isinstance(bone_map, dict) else enumerate(bone_map)
+    mapping = {str(int(index) + offset): joint for index, joint in items}
+    return mapping if all(str(bone) in mapping for bone in bone_ids) else None
+
+
 def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
                      blend_sha256=None, merged_layout=(), captured_palette=False, positions=b"", morph_signature=(), morph_topology=()):
     """Read optional rig data only for a retained exact Asset/range binding.
@@ -396,24 +429,17 @@ def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
     palettes keep the ordinary inferred-rig path. Authored weights are untouched.
     """
     if binding is not None and binding.asset_type == "ZZMI":
-        return _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache,
-                                blend_sha256, captured_palette, positions, morph_signature, morph_topology)
-    if (binding is None or binding.status != "exact"
-            or binding.range_status != "exact" or binding.asset_type != "WWMI"
-            or os.path.normcase(binding.root or "") not in enabled_roots
+        return _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, blend_sha256, captured_palette,
+                                merged_layout, positions, morph_signature, morph_topology)
+    if (binding is None or binding.asset_type != "WWMI"
             or source.encoding not in ("wwmi_u8_4", "wwmi_u8_8")
             or (source.vertex_vg_file and not source.blend_remap)):
         return None
     try:
-        directory = paths.safe_asset_dir(binding.root, binding.asset)
-        if not directory:
+        admitted = _admitted_rig(binding, enabled_roots, cache)
+        if not admitted:
             return None
-        filename = paths.safe_asset_path(directory, RIG_FILENAME)
-        if not filename:
-            return None
-        if filename not in cache:
-            cache[filename] = validate_rig(_json(filename))
-        rig = cache[filename]
+        directory, rig = admitted
         profiles = [profile for profile in rig["skin_bindings"] if
                     profile["sha256"] == blend_sha256
                     and profile["encoding"] == source.encoding]
@@ -427,6 +453,13 @@ def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
         palette = matches[0]
         references = [palette]
         if captured_palette:
+            bone_map = palette["bone_map"]
+        elif source.bone_id_namespace == "wwmi_component":
+            # Native per-component skinning: the INI proof names the game
+            # component whose palette is bound, which must be this binding.
+            if source.bone_id_domain != wwmi_component_domain(
+                    binding.geometry_hash, binding.first_index, binding.index_count):
+                return None
             bone_map = palette["bone_map"]
         elif len(profiles) == 1 and not source.blend_remap:
             bone_map = profiles[0]["bone_map"]
@@ -442,6 +475,8 @@ def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
             references = [next(p for p in rig["components"] if
                                (p["geometry_hash"], p["component_ordinal"])
                                == (item["geometry_hash"], item["component_ordinal"])) for item in family]
+            if any(not isinstance(p["bone_map"], list) for p in references):
+                return None
             bone_map = [bone for p in references for bone in p["bone_map"]]
         metadata_path = paths.safe_asset_path(binding.root, binding.metadata)
         if not metadata_path or paths.relative_asset_path(directory, metadata_path) is None:
@@ -463,23 +498,12 @@ def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
                 reference = paths.safe_asset_path(
                     directory, os.path.relpath(os.path.join(
                         reference_dir, f"Component {ordinal}.{extension}"), directory))
-                if not reference:
-                    return None
-                key = reference, reference_palette[fingerprint]
-                if key not in cache:
-                    if os.path.getsize(reference) > 64 * 1024 * 1024:
-                        return None
-                    with open(reference, "rb") as stream:
-                        cache[key] = hashlib.file_digest(stream, "sha256").hexdigest() == reference_palette[fingerprint]
-                if not cache[key]:
+                if not reference or not _file_matches(reference, reference_palette[fingerprint], cache, 64 * 1024 * 1024):
                     return None
         offset = 0 if source.bone_id_namespace == "wwmi_merged" or source.blend_remap else source.bone_id_offset
-        for bone_id in bone_ids:
-            local = bone_id - offset
-            if not 0 <= local < len(bone_map):
-                return None
-        mapping = {str(index + offset): target for index, target
-                   in enumerate(bone_map)}
+        mapping = _game_bone_mapping(bone_map, bone_ids, offset)
+        if mapping is None:
+            return None
         morph_binding = {key: palette[key] for key in ("vertex_sha256", "index_sha256")}
         if not captured_palette:
             vertices = _mod_morph_vertices(directory, reference_dir, palette, positions, cache, morph_signature, morph_topology)
@@ -522,20 +546,82 @@ def _zzz_morph_reference(directory, palette, cache):
     return cache[key]
 
 
-def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, captured, positions, signature, topology):
-    if (binding.status != "exact" or binding.range_status != "exact"
-            or os.path.normcase(binding.root or "") not in enabled_roots
-            or source.encoding != "gimi_f32_u32_4" or source.blend_remap or source.vertex_vg_file
+def _zzz_metadata(directory, palette, cache):
+    """Verified metadata entry of one captured ZZZ palette, or None."""
+    for relative, fingerprint in ((palette["metadata_file"], palette["metadata_sha256"]),
+                                  (palette["vertex_file"], palette["vertex_sha256"]),
+                                  (palette["index_file"], palette["index_sha256"])):
+        reference = paths.safe_asset_path(directory, relative)
+        if (not reference or not isinstance(fingerprint, str) or not _SHA256.fullmatch(fingerprint)
+                or not _file_matches(reference, fingerprint, cache, 512 * 1024 * 1024)):
+            return None
+    key = "zzz-metadata", paths.safe_asset_path(directory, palette["metadata_file"])
+    if key not in cache:
+        cache[key] = metadata_entries(_json(key[1]))
+    return cache[key][palette["metadata_entry"]]
+
+
+def _zzz_merged_bone_map(rig, directory, own, layout, cache):
+    """Map merged palette IDs through each segment's captured native Blend stream.
+
+    A segment names the native Blend hash whose palette was copied; every
+    captured component of that one stream shares its palette. Segments whose
+    stream is not uniquely captured stay unmapped, so their IDs reject the rig.
+    """
+    if own.get("blend_vb") not in {segment[0] for segment in layout}:
+        return None
+    mapping = {}
+    for blend_hash, offset, count in layout:
+        palettes = _zzz_stream_palettes(rig, directory, (blend_hash,), cache)
+        if len({(p["metadata_file"], p["metadata_entry"]) for p in palettes}) != 1:
+            continue
+        segment = _zzz_stream_bone_map(palettes, offset, count)
+        if segment is None:
+            return None
+        mapping.update(segment)
+    return mapping
+
+
+def _zzz_stream_palettes(rig, directory, hashes, cache):
+    """Captured components whose native stream matches every hash in ``hashes``.
+
+    ZZZ skins a whole stream once, at its Blend pass, with one palette. Each
+    captured component of that stream records the part of it its draw used.
+    """
+    palettes = []
+    if not hashes:
+        return palettes
+    for palette in rig["components"]:
+        if not palette.get("metadata_file") or "metadata_entry" not in palette:
+            continue
+        stream = _zzz_metadata(directory, palette, cache) or {}
+        if set(hashes) <= {stream.get("blend_vb"), stream.get("position_vb")}:
+            palettes.append(palette)
+    return palettes
+
+
+def _zzz_stream_bone_map(palettes, offset=0, count=None):
+    """Union of one stream's captured bone maps; conflicting joints reject it."""
+    mapping = {}
+    for palette in palettes:
+        items = palette["bone_map"].items() if isinstance(palette["bone_map"], dict) else enumerate(palette["bone_map"])
+        for local, joint in items:
+            if count is None or int(local) < count:
+                if mapping.setdefault(str(offset + int(local)), joint) != joint:
+                    return None
+    return mapping
+
+
+def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, captured, merged_layout,
+                     positions, signature, topology):
+    if (source.encoding != "gimi_f32_u32_4" or source.blend_remap or source.vertex_vg_file
             or source.bone_id_offset):
         return None
     try:
-        directory = paths.safe_asset_dir(binding.root, binding.asset)
-        file = paths.safe_asset_path(directory, RIG_FILENAME) if directory else None
-        if not file:
+        admitted = _admitted_rig(binding, enabled_roots, cache)
+        if not admitted:
             return None
-        if file not in cache:
-            cache[file] = validate_rig(_json(file))
-        rig = cache[file]
+        directory, rig = admitted
         if rig["version"] != 2:
             return None
         matches = [p for p in rig["components"]
@@ -549,40 +635,36 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
         expected = paths.safe_asset_path(directory, palette["metadata_file"])
         if not metadata or not expected or os.path.normcase(metadata) != os.path.normcase(expected):
             return None
-        for relative, fingerprint in ((palette["metadata_file"], palette["metadata_sha256"]),
-                                      (palette["vertex_file"], palette["vertex_sha256"]),
-                                      (palette["index_file"], palette["index_sha256"])):
-            reference = paths.safe_asset_path(directory, relative)
-            if not reference or not isinstance(fingerprint, str) or not _SHA256.fullmatch(fingerprint):
-                return None
-            key = reference, fingerprint
-            if key not in cache:
-                if os.path.getsize(reference) > 512 * 1024 * 1024:
-                    return None
-                with open(reference, "rb") as stream:
-                    cache[key] = hashlib.file_digest(stream, "sha256").hexdigest() == fingerprint
-            if not cache[key]:
-                return None
+        component = _zzz_metadata(directory, palette, cache)
+        if component is None:
+            return None
         mapping = palette["bone_map"]
-        # Captured palettes are proven during extraction. Edited stock streams
-        # require verified native input bindings, not just matching numeric IDs.
-        if not captured:
+        own_geometry = True
+        # Captured palettes are proven during extraction. Edited mod streams
+        # require a verified INI palette proof, not just matching numeric IDs.
+        if merged_layout and not captured:
+            mapping = _zzz_merged_bone_map(rig, directory, component, merged_layout, cache)
+            if mapping is None:
+                return None
+        elif not captured:
             profiles = [p for p in rig["skin_bindings"] if p["encoding"] == source.encoding and p["sha256"] == digest]
             if len(profiles) == 1:
                 mapping = profiles[0]["bone_map"]
-            elif source.native_palette_hashes:
-                key = "zzz-metadata", metadata
-                if key not in cache:
-                    cache[key] = metadata_entries(_json(metadata))
-                component = cache[key][palette["metadata_entry"]]
-                if not set(source.native_palette_hashes) <= {component.get("blend_vb"), component.get("position_vb")}:
-                    return None
             else:
-                return None
-        if not isinstance(mapping, dict):
-            mapping = {str(i): value for i, value in enumerate(mapping)}
-        if any(str(bone) not in mapping for bone in bone_ids):
+                # The proven native stream decides the palette, even when
+                # another component's override draws that stream.
+                stream = _zzz_stream_palettes(rig, directory, source.native_palette_hashes, cache)
+                mapping = _zzz_stream_bone_map(stream) if stream else None
+                if mapping is None:
+                    return None
+                own_geometry = any(p is palette for p in stream)
+        mapping = _game_bone_mapping(mapping, bone_ids)
+        if mapping is None:
             return None
+        if not own_geometry:
+            # The bound component's morph reference describes different geometry.
+            return dict(id=rig["id"], version=2, bones=rig["bones"], bone_map=mapping,
+                        humanoid_controls=rig.get("humanoid_controls"), morph_binding=None)
         morph_binding = {key: palette[key] for key in ("vertex_sha256", "index_sha256")}
         if not captured:
             reference = _zzz_morph_reference(directory, palette, cache)

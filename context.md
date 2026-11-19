@@ -802,9 +802,30 @@ of documentation, comments and tests; use portable fixtures instead.
   nonsingular affine scales in version 2, and reference VB/IB
   fingerprints and either an explicit Blend-content fingerprint/palette binding,
   an Asset-declared stock WWMI merged palette with same-INI template proof, or
-  a stock ZZMI component binding proven against captured native position/Blend hashes.
+  a stock ZZMI component binding proven against captured native position/Blend hashes,
+  or a native WWMI per-component palette: a same-INI `match_first_index` override
+  in an INI that never runs a skeleton/Blend remapper or assigns `vs`, `vs-cb3/4`,
+  Blend input layout or WWMI palette variables outside custom shader sections,
+  with an unaltered file-backed R8 Blend. Its domain names the root override and
+  must equal the exact Asset binding; used IDs must fit that component's palette.
+  Its external calls must be WWMI core, RabbitFX pixel helpers, output-only
+  built-ins or sibling pixel/draw lists. Both WWMI proofs may call a sibling
+  INI's list (unique namespace, or a unique global name from an un-namespaced
+  sibling) whose closure only branches, writes unqualified/RabbitFX variables
+  and IniParams, binds pixel/output-merger state (geometry stages only inside
+  custom shaders), draws and, for namespaced siblings, writes its own declared
+  resources; never compute, UAVs, vertex/index buffers or qualified writes. The
+  skeleton contract itself stays same-INI.
+  A ZZMI merged palette is proven when a root override's closure runs one skin
+  list: the exact reference skinning kernel reads a file-backed 32-byte Blend and
+  40-byte position stream against one merge list's output and binds its result
+  as `vb0`. The merge kernel copies contiguous whole-bone row ranges, each from a
+  resource written only by `copy vs-t0` under `DRAW_TYPE == 1` in one hashed
+  override; that hash names the native Blend stream whose captured palette maps
+  the segment. The drawn component's stream must be a segment; uncaptured
+  segments stay unmapped; no other closure section may rebind `vb0`/`vb2`.
   Do not infer a mod's palette namespace from numeric IDs or component offsets.
-  The stock adapters recognize legacy frame-state and newer merge-status programs.
+  One stock merged adapter recognizes frame-state and merge-status programs.
   They verify merger inputs/outputs, publishing, native CB/Blend
   bindings, direct or verified-helper draw ownership and every component's merge offset/count,
   including skipped components. A contiguous layout may exceed the 256 bones its
@@ -890,6 +911,12 @@ of documentation, comments and tests; use portable fixtures instead.
   inputs only for WWMI/ZZMI bindings. Keep matching out of playback. Apply morphs
   before skinning, upload only weights and restore the baseline on release.
   Extraction samples linear, constant and unweighted cubic matching curves.
+  Clips without facial curves may borrow the library's eye-closing shape for a
+  deterministic idle blink: the backend alone names the shape (whole-face, else
+  a left/right pair, never one eye) and supplies the shared targets from the first
+  catalog clip that has one; playback time drives it, paused playback and clips
+  with their own facial curves are never altered, and any failure keeps the clip
+  playable without it.
   Only exact compatible authored rigs expose the library, including matching mods.
   Catalogs and clips use opaque loaded-session IDs, contained paths and lazy blob
   transport; clear publications on replacement and reject stale loads. Playback
@@ -1065,7 +1092,11 @@ of documentation, comments and tests; use portable fixtures instead.
   Version 2 rigs retain nonuniform scale and sparse palettes. Captured references
   require exact metadata/VB/IB fingerprints. Mods additionally require an exact
   Blend-content fingerprint or a same-INI file-backed vb2 binding program whose
-  native position/Blend hashes all match that captured component's metadata. Reuse
+  native position/Blend hashes all match captured components' metadata.
+  ZZZ skins a stream once with one palette, so its mapping is the union of every
+  captured component of that stream, rejected on conflicting joints; it applies
+  even when another component's override draws that stream, which then carries
+  no morph binding. Reuse
   the canonical binding history, including local helpers and conditional resources;
   source names and exact exporter statement order are not palette evidence. Retain this proof
   in the loaded skinning source; never reread INIs during Weight access. Reject
