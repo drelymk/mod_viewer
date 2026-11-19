@@ -112,25 +112,34 @@ def match_component(part, mesh):
     return matches[0] if len(matches) == 1 else None
 
 
-def match_component_candidates(part, mesh):
-    """Retain coordinate hypotheses for the model-wide placement proof."""
+def _native_geometry(part, mesh):
+    """Bounded native (positions, viewer-space UVs, triangles) for a UV-carrying capture, or None."""
     native = np.asarray(mesh["vertices"], dtype=float).reshape(-1, 3)
-    if not 0 < len(native) <= 250000 or not np.isfinite(native).all():
-        return []
+    if part["uv"] is None or not 0 < len(native) <= 250000 or not np.isfinite(native).all():
+        return None
     # Captures contain mesh-local coordinates. The verified inverse bind placement
     # is applied to the Avatar root when building the rig, never to capture data.
     uv = np.asarray(mesh["uv"], dtype=float)
     # UV-less helper meshes are valid native candidates, but cannot establish
     # captured position/UV correspondence. Reject them before reshaping.
     if uv.ndim != 1 or uv.size not in (len(native) * 2, len(native) * 3, len(native) * 4):
-        return []
+        return None
     uv = uv.reshape(len(native), -1)[:, :2].copy()
     if not np.isfinite(uv).all():
-        return []
+        return None
     uv[:, 1] = 1 - uv[:, 1]
     indices = np.asarray(mesh["indices"], dtype=int).reshape(-1, 3)
-    if part["uv"] is None or len(indices) > 500000 or np.min(indices) < 0 or np.max(indices) >= len(native):
+    if not 0 < len(indices) <= 500000 or np.min(indices) < 0 or np.max(indices) >= len(native):
+        return None
+    return native, uv, indices
+
+
+def match_component_candidates(part, mesh):
+    """Retain coordinate hypotheses for the model-wide placement proof."""
+    geometry = _native_geometry(part, mesh)
+    if geometry is None:
         return []
+    native, uv, indices = geometry
     # Unity and captured coordinates can differ by one axis reflection. Every
     # triangle and weight must prove the same conversion; never fit arbitrary geometry.
     matches = []
@@ -141,11 +150,11 @@ def match_component_candidates(part, mesh):
         if (len(original) == len(part["positions"]) and np.max(original) < len(native)
                 and np.allclose(part["positions"], positions[original], rtol=0, atol=1e-4)
                 and np.allclose(part["uv"], uv[original], rtol=0, atol=1e-4)):
-            if _same_triangles(part, mesh, indices, dict(enumerate(original))):
+            if _section_triangles(part, mesh, indices, dict(enumerate(original))):
                 mapping = dict(enumerate(original))
         if not mapping:
             mapping = _triangle_mapping(part, positions, uv, indices)
-        if mapping is None or not _same_triangles(part, mesh, indices, mapping):
+        if mapping is None or not _section_triangles(part, mesh, indices, mapping):
             continue
         palette = _weight_palette(part, mesh, mapping)
         if palette:
@@ -161,10 +170,10 @@ EXPRESSION_SLACK = 0.05
 def _native_influences(mesh, count):
     """Native (weights, slots) arrays, each vertex fully weighted, or None."""
     weights = np.asarray(mesh.get("weights") or [], dtype=float)
-    slots = np.asarray(mesh.get("bone_indices") or [], dtype=float)
+    slots = np.asarray(mesh.get("bone_indices") or [])
     bones = len(mesh.get("bone_hashes") or [])
-    if (weights.shape != (count, 4) or slots.shape != (count, 4) or not np.isfinite(weights).all()
-            or np.any(weights < 0) or np.any(slots != np.floor(slots)) or np.any(slots < 0)
+    if (weights.shape != (count, 4) or slots.shape != (count, 4) or slots.dtype.kind not in "iu"
+            or not np.isfinite(weights).all() or np.any(weights < 0) or np.any(slots < 0)
             or np.any(slots[weights > 0] >= bones) or np.any(np.abs(weights.sum(axis=1) - 1) > 1e-3)):
         return None
     return weights, slots.astype(int)
@@ -294,23 +303,16 @@ def match_attachment_candidates(part, mesh):
     sub-multiset of one native section. The drawn subset then binds through the
     native per-vertex influences. Returns (palette, signs, mapping, attachment).
     """
-    native = np.asarray(mesh["vertices"], dtype=float).reshape(-1, 3)
-    uv = np.asarray(mesh["uv"], dtype=float)
-    if (not 0 < len(native) <= 250000 or not np.isfinite(native).all()
-            or uv.ndim != 1 or uv.size not in (len(native) * 2, len(native) * 3, len(native) * 4)):
+    geometry = _native_geometry(part, mesh)
+    influences = _native_influences(mesh, len(geometry[0])) if geometry else None
+    if influences is None:
         return []
-    influences = _native_influences(mesh, len(native))
-    uv = uv.reshape(len(native), -1)[:, :2].copy()
-    uv[:, 1] = 1 - uv[:, 1]
-    indices = np.asarray(mesh["indices"], dtype=int).reshape(-1, 3)
-    if (influences is None or part["uv"] is None or not np.isfinite(uv).all() or len(indices) > 500000
-            or not len(indices) or np.min(indices) < 0 or np.max(indices) >= len(native)):
-        return []
+    native, uv, indices = geometry
     hashes, deltas = _shape_deltas(mesh, len(native))
     matches = []
     for signs in ((1, 1, 1), (-1, 1, 1), (1, -1, 1), (1, 1, -1)):
         found = _explained_mapping(part, native * signs, uv, deltas * signs, indices)
-        if found is None or not _contained_triangles(part, mesh, indices, found[0]):
+        if found is None or not _section_triangles(part, mesh, indices, found[0], complete=False):
             continue
         mapping, expression = found
         order = [mapping[compact] for compact in range(len(mapping))]
@@ -323,34 +325,23 @@ def match_attachment_candidates(part, mesh):
     return matches
 
 
-def _contained_triangles(part, mesh, indices, mapping):
-    """Captured triangles, with repeats, form a sub-multiset of one native section."""
+def _section_triangles(part, mesh, indices, mapping, complete=True):
+    """Prove the captured triangle multiset (repeats included) against one native section.
+
+    ``complete`` requires the whole section; otherwise the capture may be a
+    sub-multiset of it (weightless attachments draw parts of a section).
+    """
     if len(mapping) != len(part["positions"]):
         return False
     captured = Counter(tuple(sorted(mapping[int(vertex)] for vertex in row)) for row in part["indices"])
+    size = len(part["indices"]) * 3
     for section in mesh.get("sections", [dict(first=0, count=len(indices) * 3)]):
         first, count = section["first"], section["count"]
         if (type(first) is not int or type(count) is not int or first < 0 or first % 3 or count % 3
-                or count < len(part["indices"]) * 3 or first + count > len(indices) * 3):
+                or (count != size if complete else count < size) or first + count > len(indices) * 3):
             continue
         native = Counter(tuple(sorted(row)) for row in indices[first // 3:(first + count) // 3])
-        if all(native[triangle] >= number for triangle, number in captured.items()):
-            return True
-    return False
-
-
-def _same_triangles(part, mesh, indices, mapping):
-    """Prove one complete native section, preserving repeated triangle counts."""
-    if len(mapping) != len(part["positions"]):
-        return False
-    captured = Counter(tuple(sorted(mapping[int(vertex)] for vertex in row)) for row in part["indices"])
-    sections = mesh.get("sections", [dict(first=0, count=len(indices) * 3)])
-    for section in sections:
-        first, count = section["first"], section["count"]
-        if (type(first) is not int or type(count) is not int or first < 0 or first % 3
-                or count != len(part["indices"]) * 3 or first + count > len(indices) * 3):
-            continue
-        if captured == Counter(tuple(sorted(row)) for row in indices[first // 3:(first + count) // 3]):
+        if captured == native if complete else all(native[row] >= number for row, number in captured.items()):
             return True
     return False
 

@@ -599,13 +599,12 @@ def test_gi_facial_curves_play_relative_to_the_captured_expression(tmp_path):
 def test_gi_facial_weights_follow_one_known_game_policy(policies, expected):
     from app.assets.game_extract import gi_animation
 
-    clips = [dict(blend_shape_clamp=policy) for policy in policies]
     facial = dict(offsets={"target": .5})
     if expected is None:
         with pytest.raises(ValueError, match="weight policy"):
-            gi_animation._morphs({"target": np.array([2.0, 0.0])}, clips, facial)
+            gi_animation._morphs({"target": np.array([2.0, 0.0])}, set(policies), facial)
         return
-    morph = gi_animation._morphs({"target": np.array([2.0, 0.0])}, clips, facial)
+    morph = gi_animation._morphs({"target": np.array([2.0, 0.0])}, set(policies), facial)
     # Clamping (or not) precedes removing the captured expression.
     assert morph["weights"][:, 0] == pytest.approx(np.array(expected) - .5)
     assert morph["clamp"] is policies[0]

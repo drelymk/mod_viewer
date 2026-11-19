@@ -96,8 +96,9 @@ On the first clip read, the helper reads only the contained game's PlayerSetting
 blend-shape clamp policy from `globalgamemanagers`. Extraction records and honors
 that policy instead of assuming signed or clamped playback. Engines before Unity
 2018.3 (Genshin's 2017.4) have no such setting and always clamp, which the
-serialized engine version establishes. Unknown policy is not guessed. Clip-only runtime revisions keep the separate metadata-index version,
-so this conversion correction does not require rebuilding a ready format-3 index.
+serialized engine version establishes. Unknown policy is not guessed. Clip-only
+runtime revisions keep the separate metadata-index version, so this conversion
+correction does not require rebuilding a ready format-3 index.
 Unchanged mod Blend streams may use an exact verified fingerprint. Other weight
 layouts keep the existing inferred rig until independently proven.
 

@@ -169,11 +169,10 @@ def _morph_column(binding, channel, facial):
     return name, channel[:, 0] / full_weight
 
 
-def _morphs(columns, clips, facial):
-    """Clamp per the game's policy, then remove the expression the capture already shows."""
+def _morphs(columns, policies, facial):
+    """Clamp per the contributing clips' one game policy, then remove the expression the capture already shows."""
     if not columns:
         return None
-    policies = {clip.get("blend_shape_clamp") for clip in clips}
     if len(policies) != 1 or type(next(iter(policies))) is not bool:
         raise ValueError("The native blend-shape weight policy is unavailable.")
     clamp = next(iter(policies))
@@ -215,15 +214,14 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
     poses = np.array([[*b["translation"], *b["rotation"], *b["scale"]] for b in rig["bones"]], dtype=float)
     output = np.broadcast_to(poses, (frames, *poses.shape)).copy()
     omitted = dict(non_transform=0, translation_dof=0, humanoid_owned=0, unbound=0, masked=0)
-    written, channels, morph_columns, morph_sources = set(), {}, {}, []
+    written, channels, morph_columns, policies = set(), {}, {}, set()
     for binding, channel in _bindings(body, sample_channels(body, work, targets, reserved, QUATERNION_TOLERANCE)):
         morph = _morph_column(binding, channel, facial)
         if morph is not None:
             if morph[0] in morph_columns:
                 raise ValueError("The native clip has duplicate morph tracks.")
             morph_columns[morph[0]] = morph[1]
-            if body not in morph_sources:
-                morph_sources.append(body)
+            policies.add(body.get("blend_shape_clamp"))
             continue
         if binding["type"] == "Animator" and binding["custom"] == 8 and not binding["pointer"]:
             attribute = binding["attribute"]
@@ -268,8 +266,7 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
                     raise ValueError("The native streamer clip has duplicate morph tracks.")
                 layer_morphs.add(morph[0])
                 morph_columns[morph[0]] = morph[1]
-                if streamer not in morph_sources:
-                    morph_sources.append(streamer)
+                policies.add(streamer.get("blend_shape_clamp"))
                 continue
             if binding["type"] != "Transform":
                 continue  # Streamer root motion and scalar curves are not part of the body pose.
@@ -287,7 +284,7 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
     if not np.isfinite(output).all() or np.any(np.abs(output) > 1e6):
         raise ValueError("The native animation transform table is invalid.")
     binary = output.astype("<f4").tobytes()
-    morph = _morphs(morph_columns, morph_sources, facial)
+    morph = _morphs(morph_columns, policies, facial)
     if morph is not None:
         binary += morph["weights"].tobytes()
     if len(binary) > 128 * 1024 * 1024:

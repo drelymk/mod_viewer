@@ -256,7 +256,7 @@ export function createWeightModelSession({
           if (!knownMeshes.has(mesh)) continue;
           const state = stateFor(mesh);
           const entry = preview?.meshes?.[mesh.userData.semanticKey];
-          if (!entry && mesh.userData.rigAttachmentAvailable && !mesh.userData.skinningAvailable) {
+          if (!entry && mesh.userData.rigAttachmentAvailable) {
             // An unproven weightless part simply has no weights; it is not a load error.
             state.loaded = false;
             state.attachmentUnproven = true;
