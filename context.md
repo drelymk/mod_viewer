@@ -1212,8 +1212,15 @@ of documentation, comments and tests; use portable fixtures instead.
   new run when its default/conditional binding differs, and in-place semantic
   refresh must recompute those boundaries before reconciling the run.
 - Environment, outlines and render modes are viewer state, never staged INI or
-  material reinterpretation. Outlines use child inverted hulls sharing geometry;
-  wireframe/debug suppression retains the user's preference.
+  material reinterpretation. Preset floors are composited in the background
+  node, never as scene geometry, and cached IBL captures the floorless sky;
+  preset ambient/hemisphere tints derive from the same palette as the backdrop.
+  The floor, grid and shadow receiver share one ground frame locked from the
+  visible rest-pose base (never padded animation bounds) at fit/load and
+  re-anchored only by quarter turns or Reset View; posing, physics, animation,
+  visibility and translation never move it. Shadow frustums grow in
+  model-scaled steps and snap to texels. Outlines use child inverted hulls
+  sharing geometry; wireframe/debug suppression retains the user's preference.
   Both normal and selection hulls need slope-aware raster depth bias scaled to
   display pixel density: keeping vertex depth alone lets screen-space extrusion
   cover sloped two-sided faces.

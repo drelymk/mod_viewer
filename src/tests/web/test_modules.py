@@ -310,7 +310,15 @@ export const RendererUtils = {
       const direction = lightTarget.children[0].position.clone().normalize().toArray();
       const consistent = sun.every((v,i) => Math.abs(v-direction[i])<1e-10)
         && JSON.stringify(sun) === JSON.stringify(controller.getDominantLightDirection())
-        && environmentProbe.captures[0].node === outdoor;
+        && environmentProbe.captures[0].node.isNode && environmentProbe.captures[0].node !== outdoor;
+      const ground = () => JSON.stringify(controller.getDebugState().ground);
+      controller.setGround({y:-2, center:[1,3], size:4});
+      const placed = ground() === JSON.stringify({height:-2, center:[1,3], scale:4})
+        && controller.getDebugState().floorActive && scene.backgroundNode === outdoor;
+      controller.setGround(null);
+      const grounded = ground() === JSON.stringify({height:0, center:[0,0], scale:2});
+      const derived = hemisphereLight.groundColor.getHex() === controller.getPreset().lightColors.ground
+        && controller.getPreset().palette.floor === controller.getPreset().atmosphere.groundColor;
       controller.setPreset('indoor'); controller.setPreset('studio'); await controller.prepare();
       const skipped = !controller.getDebugState().resources.indoor.attempted;
       const rooms = {};
@@ -364,7 +372,7 @@ export const RendererUtils = {
       await new Promise(r => setTimeout(r,0));
       const stateFailure = unexpected.getDebugState().resources.outdoor.error === 'renderer state failed';
       unexpected.dispose();
-      return {cold, consistent, smallReflections:environmentProbe.captures.every(c => c.size === 256), skipped, sunset, reused, restored,
+      return {cold, consistent, placed, grounded, derived, smallReflections:environmentProbe.captures.every(c => c.size === 256), skipped, sunset, reused, restored,
         roomLighting, roomReuse, roomDisposals,
         balanced, rejected, captures:environmentProbe.captures.length, notifications,
         failure:!failure.environmentActive && !!failure.resources.outdoor.error,
@@ -374,7 +382,8 @@ export const RendererUtils = {
         stateFailure, unhandled};
     }""")
     assert result == {
-        'cold': 0, 'consistent': True, 'smallReflections': True, 'skipped': True, 'sunset': True,
+        'cold': 0, 'consistent': True, 'placed': True, 'grounded': True, 'derived': True,
+        'smallReflections': True, 'skipped': True, 'sunset': True,
         'reused': True, 'restored': True, 'balanced': True, 'rejected': True,
         'captures': 4, 'notifications': 5, 'failure': True, 'allDisposed': True,
         'roomLighting': True, 'roomReuse': True, 'roomDisposals': 2,
@@ -721,7 +730,7 @@ def test_camera_clipping_tracks_zoom_pan_and_model_lifecycle(module_page):
     assert result['empty']['near'] == pytest.approx(result['minimumNear'])
 
 
-def test_key_light_projection_and_visible_floor_follow_mesh_changes(module_page):
+def test_key_light_projection_and_locked_floor_survive_mesh_changes(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
       const {createCharacterShadowController} = await import('./js/scene/character-shadow-controller.js');
@@ -773,10 +782,11 @@ def test_key_light_projection_and_visible_floor_follow_mesh_changes(module_page)
     assert result['after'] == result['before']
     assert result['parallel']
     assert all(abs(depth) <= 1 for depth in result['depths'])
-    for floor, expected in zip(result['floors'], [2, -8, 2]):
+    # The floor locks to the visible base at load; outfit swaps never move it.
+    for floor, expected in zip(result['floors'], [2, 2, 2]):
         assert floor['grid'] == expected
         assert expected - 0.01 < floor['ground'] < expected
-    assert result['clearedFloors'] == [0, 2, 0]
+    assert result['clearedFloors'] == [2, 2, 0]
 
 
 def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(module_page):
