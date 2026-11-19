@@ -924,7 +924,10 @@ of documentation, comments and tests; use portable fixtures instead.
   a left/right pair, never one eye) and supplies the shared targets from the first
   catalog clip that has one; playback time drives it, paused playback and clips
   with their own facial curves are never altered, and any failure keeps the clip
-  playable without it.
+  playable without it. Genshin clips record each target's captured weight
+  (`rest_weights`); there the blink uses the `Eye_WinkB` left/right pair of one
+  renderer and crossfades that renderer's captured channels to the closed pose
+  through per-shape `scales` (pair: 1 minus captured weight; others: minus it).
   Only exact compatible authored rigs expose the library, including matching mods.
   Catalogs and clips use opaque loaded-session IDs, contained paths and lazy blob
   transport; clear publications on replacement and reject stale loads. Playback
@@ -1004,8 +1007,8 @@ of documentation, comments and tests; use portable fixtures instead.
   Never publish private configuration, keys or native logs. Settings > Game
   directory persists native-picker game folders per tool (`gameFolders` in
   config.json). Settings and extraction share the same UI for every registered
-  game, driven by `game_extract/backends.py` capabilities. WWMI and ZZMI have
-  adapters; unavailable games keep folder selection but cannot start jobs.
+  game, driven by `game_extract/backends.py` capabilities. WWMI, ZZMI and GIMI
+  have adapters; unregistered games keep folder selection but cannot start jobs.
   Extraction prefills only its Asset's game folder, re-validated and re-granted
   by the backend. Opaque grants include the game kind and cannot cross games.
   Game adapters own validation, native clients, indexing and package building;
@@ -1115,7 +1118,9 @@ of documentation, comments and tests; use portable fixtures instead.
   dense, streamed Hermite and constant tracks into endpoint-inclusive TQS samples;
   unknown transform paths reject a clip and omitted non-transform channels remain
   explicit in metadata/reports. Prove whole native submesh triangle multisets,
-  including repeated triangles, in both correspondence paths. Bound intermediate
+  including repeated triangles, in both correspondence paths (GIMI weightless
+  attachments, which take per-vertex native weights and so cannot depend on the
+  drawn subset, prove a sub-multiset instead). Bound intermediate
   Float64 curve sampling before reading/allocating it, independently of clip size.
   Facial curves require captured-geometry correspondence, native shape hashes,
   and a renderer path under the proven Animator Avatar. Resolve explicit mesh
@@ -1128,7 +1133,9 @@ of documentation, comments and tests; use portable fixtures instead.
   the game's exact `legacyClampBlendShapeWeights` PlayerSettings policy
   lazily from contained `globalgamemanagers` data. Clamp normalized single-frame
   weights to 0..1 only when that policy is true; preserve signed/extrapolated
-  weights when false and refuse unknown policy instead of guessing. Record the
+  weights when false and refuse unknown policy instead of guessing; engines before
+  Unity 2018.3 have no such setting and always clamp, established by the
+  serialized engine version. Record the
   policy in converted clips; it must apply equally to runtime data and facial GLB.
   Each facial clip
   carries a contained, checksummed playable GLB with an embedded sparse runtime
@@ -1136,6 +1143,58 @@ of documentation, comments and tests; use portable fixtures instead.
   then uses the shared morph-before-skinning playback and restoration lifecycle.
   Preserve compatible libraries and user files in the
   existing staging transaction. Extraction/indexing stays off ordinary load paths.
+- Genshin Impact (GIMI) extraction runs the same pinned reader in `--gi` mode with the
+  database ACL decoder rebuilt from the same unmodified source. Accept only the
+  global `GenshinImpact_Data` layout; the effective block set is
+  `StreamingAssets` plus `Persistent` one directory below `AssetBundles/blocks`,
+  where a `Persistent` copy replaces the same relative path. Index Mesh, Avatar,
+  AnimationClip, AnimatorController and SkinnedMeshRenderer metadata as
+  `game-gimi-<hash>.json` with the ZZZ reuse/staleness rules; renderer rows keep
+  only the path and explicit mesh/Avatar pointers, so null-mesh renderers stay
+  unrouted. Resolve controller clip and renderer pointers only by
+  case-insensitive CAB name plus PathID; a CAB in several blocks is ambiguous.
+  A character's meshes are those sharing its Avatar's bundle (generic mesh names
+  are not evidence) and still need the complete ZZZ native proof; an unproven
+  name match falls back to geometry and never swallows cancellation. Meshes are
+  bound in the Avatar's default pose, which is the exported rig reference; the
+  Humanoid-normalized skeleton pose never proves inverse binds. GI placement
+  tolerates 1e-3 inverse-bind noise; ZZZ keeps 2e-4. GI submeshes share
+  overlapping vertex ranges, so index shapes narrow GI meshes by index count
+  only; ZZZ keeps exact vertex/index shapes.
+  Weightless GIMI captures (face parts) are attachments of a fully weighted native
+  mesh. Captures may show an expression: every captured position must equal the
+  native rest pose plus one least-squares combination of the mesh's single-frame
+  blend shapes (each weight within 0..1 up to 0.05 slack) within 1e-4, each
+  vertex matched by UV and explained position and resolved through shared
+  triangles where seam duplicates coincide; the captured triangles must form a
+  sub-multiset of one native section, and the match must share the placement a
+  skinned palette proved. The Rig.json palette's `attachment` holds the per-vertex
+  native weights and slots in captured compact order plus the solved expression;
+  it adds no skin binding. Asset Weight/Rig publishes those weights (namespace
+  `gimi_attachment`) only for a part whose own captured fingerprints admit that
+  palette; unproven parts publish nothing and are not errors.
+  Facial curves route through renderer rows under the proven Avatar to captured
+  skinned or attachment targets. Clamp per the clip's policy, then subtract the
+  captured expression from each animated channel only; unanimated channels keep
+  the captured weight. Facial routing failures leave body motion unaffected and
+  are reported as `facial_error`.
+  Playable body motion exists only as Humanoid muscle curves. Convert it with the
+  Mecanim solver (ZYRoll axes and limits, segment-midpoint centre of mass, up-exact
+  body orientation) in place relative to Motion, and reject a clip whose hands are
+  more than 0.1 human scale from its own IK goals. Each Base Layer state becomes one
+  clip: its body clip plus the unique synced override layer's clip (any motion set)
+  at the body's normalized time, writing only non-human bones in that layer's
+  skeleton mask. Pair only through controller states, never names; a plain state's
+  name wins over a blend-tree leaf sharing its clips. Skip mirrored states,
+  mismatched blend trees and empty body clips with reasons; report additive synced
+  layers as unapplied. Count unbound, Humanoid-owned, masked, translation-DoF and
+  non-transform channels instead of hiding them.
+  GIMI mods prove a palette only through a stock skinning pass: a safe
+  `TextureOverride` closure binding a file-backed, unaliased stride-32 Blend at vb1
+  with `handling = skip` and `draw = <count>, 0` (literal or variable). Allowed
+  external helpers are the stock texture/ORFix/NNFix ones; any other helper keeps
+  inferred rigging. Hash Assets that identify an exact range by first index only
+  match a unique captured component by geometry hash and first index.
 - Model Rig assembly is a viewer-owned graph over source rigs. Preserve
   `SourceBoneRef {sourceKey,boneId}` and `${sourceKey}#bone=${boneId}`; only
   models whose sources all declare validated model-wide IDs in one domain (R16

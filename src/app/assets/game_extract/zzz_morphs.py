@@ -14,9 +14,10 @@ MAX_BYTES = 128 * 1024 * 1024
 
 
 def _references(lookup, owner, reference, kind):
-    if not isinstance(reference, dict):
+    if not isinstance(reference, dict) or not isinstance(reference.get("cab"), str):
         return set()
-    matches = lookup.get((kind, reference.get("cab"), reference.get("path_id")), ())
+    # External pointers may spell CAB names in another case (Genshin lowercases them).
+    matches = lookup.get((kind, reference["cab"].casefold(), reference.get("path_id")), ())
     if "file_ordinal" in reference:
         matches = [row for row in matches if (row["block"], row["offset"], row["file_ordinal"])
                    == (owner["block"], reference.get("offset"), reference["file_ordinal"])]
@@ -61,8 +62,12 @@ def _channels(mesh):
     return result
 
 
-def prepare(chosen, captured, rows):
-    """Adopt routes only through native renderer mesh and Animator Avatar pointers."""
+def prepare(chosen, captured, rows, expressions=None):
+    """Adopt routes only through native renderer mesh and Animator Avatar pointers.
+
+    ``expressions`` maps a captured part number to the native blend-shape weights
+    (by channel hash) its capture already shows; they become per-target offsets.
+    """
     native = chosen["native"]
     sources = {zzz_index.identity(item["row"]) for items in native.values() for item in items}
     source_meshes = {zzz_index.identity(item["row"]): item["mesh"] for items in native.values() for item in items}
@@ -71,7 +76,7 @@ def prepare(chosen, captured, rows):
     lookup = {}
     for row in rows:
         if row["type"] in ("Mesh", "Avatar"):
-            lookup.setdefault((row["type"], row["cab"], row["path_id"]), []).append(row)
+            lookup.setdefault((row["type"], row["cab"].casefold(), row["path_id"]), []).append(row)
     routes = {}
     for owner in rows:
         renderer = owner.get("renderer") if owner["type"] == "SkinnedMeshRenderer" else None
@@ -104,10 +109,11 @@ def prepare(chosen, captured, rows):
             continue
         for source in meshes:
             routes.setdefault(source, set()).add(key)
-    bindings, components = {}, []
+    bindings, components, offsets = {}, [], {}
     channel_cache = {}
     for number, items in native.items():
         part = captured[number]
+        shown = (expressions or {}).get(number, {})
         candidates = []
         for item in items:
             source = zzz_index.identity(item["row"])
@@ -129,6 +135,10 @@ def prepare(chosen, captured, rows):
                     if identity in bindings and bindings[identity] != binding:
                         raise ValueError("Native facial curve routing is ambiguous.")
                     bindings[identity] = binding
+                    offset = float(shown.get(str(key), 0.0))
+                    # One rendered target is shared by its parts; their captures must agree.
+                    if abs(offsets.setdefault(name, offset) - offset) > 0.02:
+                        raise ValueError("Captured facial expressions disagree.")
                     target = {}
                     for compact, original in mapping.items():
                         if original in channel["rows"]:
@@ -145,7 +155,7 @@ def prepare(chosen, captured, rows):
             components.append(dict(part=part, targets=candidates[0]))
     if len(bindings) > 256:
         raise ValueError("Native facial curves exceed playback limits.")
-    return dict(bindings=bindings, components=components)
+    return dict(bindings=bindings, components=components, offsets=offsets)
 
 
 def export_glb(facial, morph, frames, duration, directory):

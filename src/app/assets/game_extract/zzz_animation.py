@@ -10,7 +10,7 @@ def dimension(binding):
     return {1: 3, 2: 4, 3: 3, 4: 3}.get(binding["attribute"], 1) if binding["type"] == "Transform" else 1
 
 
-def _sample(times, values, targets, *, quaternion=False):
+def _sample(times, values, targets, *, quaternion=False, tolerance=.001):
     times, values = np.asarray(times, dtype=float), np.asarray(values, dtype=float)
     if (times.ndim != 1 or len(times) != len(values) or not len(times) or not np.isfinite(times).all()
             or not np.isfinite(values).all() or np.any(np.diff(times) <= 0)):
@@ -18,7 +18,7 @@ def _sample(times, values, targets, *, quaternion=False):
     if not quaternion:
         return np.column_stack([np.interp(targets, times, values[:, i]) for i in range(values.shape[1])])
     lengths = np.linalg.norm(values, axis=1)
-    if np.any(np.abs(lengths - 1) > .001):
+    if np.any(np.abs(lengths - 1) > tolerance):
         raise ValueError("Native animation rotations are not normalized.")
     values = values / lengths[:, None]
     upper = np.clip(np.searchsorted(times, targets, side="right"), 1, max(1, len(times) - 1))
@@ -40,15 +40,13 @@ def _sample(times, values, targets, *, quaternion=False):
     return result / np.linalg.norm(result, axis=1)[:, None]
 
 
-def convert(metadata, work, rig, avatar, morphs=None):
-    start, stop = metadata["start"], metadata["stop"]
-    duration = stop - start
-    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (start, stop)) or not 0 < duration <= 3600:
-        raise ValueError("Native clip timing is unsupported.")
-    frames = max(2, round(duration * 60) + 1)
-    if frames > 60000 or frames * len(rig["bones"]) * 40 > 128 * 1024 * 1024:
-        raise ValueError("Native animation exceeds playback limits.")
-    targets = np.linspace(start, stop, frames)
+def sample_channels(metadata, work, targets, reserved_bytes, quaternion_tolerance=.001):
+    """Sample every native channel family onto the target frame times.
+
+    Rotation samples must be unit length within ``quaternion_tolerance`` before
+    they are normalized and interpolated.
+    """
+    frames = len(targets)
     times = metadata["times"]
     acl_count = metadata["acl_count"]
     filename = metadata["file"]
@@ -62,8 +60,7 @@ def convert(metadata, work, rig, avatar, morphs=None):
         raise ValueError("The native curve table exceeds its limits.")
     # Bound intermediate Float64 sampling as well as the published TQS data.
     # Constant/scalar channels can vastly outnumber the skeleton's transforms.
-    if (frames * total * 8 + file.stat().st_size + frames * len(rig["bones"]) * 40
-            > 128 * 1024 * 1024):
+    if frames * total * 8 + file.stat().st_size + reserved_bytes > 128 * 1024 * 1024:
         raise ValueError("Native animation exceeds the sampling memory budget.")
     values = np.fromfile(file, dtype="<f4").reshape(len(times), acl_count)
     sampled = np.empty((frames, total), dtype=float)
@@ -75,7 +72,8 @@ def convert(metadata, work, rig, avatar, morphs=None):
         if cursor + width > acl_count:
             break
         if binding["type"] == "Transform" and binding["attribute"] == 2:
-            sampled[:, cursor:cursor + width] = _sample(times, values[:, cursor:cursor + width], targets, quaternion=True)
+            sampled[:, cursor:cursor + width] = _sample(times, values[:, cursor:cursor + width], targets, quaternion=True,
+                                                         tolerance=quaternion_tolerance)
         cursor += width
     if dense_count:
         if not 0 < dense["rate"] <= 1000:
@@ -90,7 +88,8 @@ def convert(metadata, work, rig, avatar, morphs=None):
             if (binding["type"] == "Transform" and binding["attribute"] == 2
                     and dense_start <= cursor and cursor + width <= dense_start + dense_count):
                 offset = cursor - dense_start
-                sampled[:, cursor:cursor + width] = _sample(dense_times, dense_values[:, offset:offset + width], targets, quaternion=True)
+                sampled[:, cursor:cursor + width] = _sample(dense_times, dense_values[:, offset:offset + width], targets,
+                                                         quaternion=True, tolerance=quaternion_tolerance)
             cursor += width
     curves = [[] for _ in range(streamed_count)]
     for frame in metadata.get("streamed", []):
@@ -118,6 +117,20 @@ def convert(metadata, work, rig, avatar, morphs=None):
         sampled[:, acl_count + index] = result
     if metadata["constant"]:
         sampled[:, total - len(metadata["constant"]):] = metadata["constant"]
+    return sampled
+
+
+def convert(metadata, work, rig, avatar, morphs=None):
+    start, stop = metadata["start"], metadata["stop"]
+    duration = stop - start
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (start, stop)) or not 0 < duration <= 3600:
+        raise ValueError("Native clip timing is unsupported.")
+    frames = max(2, round(duration * 60) + 1)
+    if frames > 60000 or frames * len(rig["bones"]) * 40 > 128 * 1024 * 1024:
+        raise ValueError("Native animation exceeds playback limits.")
+    targets = np.linspace(start, stop, frames)
+    sampled = sample_channels(metadata, work, targets, frames * len(rig["bones"]) * 40)
+    total = sampled.shape[1]
     poses = np.array([[*b["translation"], *b["rotation"], *b["scale"]] for b in rig["bones"]], dtype=float)
     output = np.broadcast_to(poses, (frames, *poses.shape)).copy()
     hash_to_bone = {bone["hash"]: index + 1 for index, bone in enumerate(avatar["bones"])}

@@ -1,10 +1,12 @@
 """Private captured-weight manifests for direct, indexed Asset previews."""
 
 from dataclasses import dataclass
+import struct
 
 from core.geometry.skinning import SkinningSource, decode_skinning
 from core.geometry.migoto_dump import parse_vertex_dump
 from . import paths
+from .rig import ATTACHMENT_NAMESPACE
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,11 +24,43 @@ class CapturedDumpSkinning:
     index_file: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class CapturedAttachment:
+    """A weightless captured part that an extracted rig may prove against native weights."""
+    file: str
+    vertices: tuple
+    index_file: str
+
+
 def capture_dump_skinning(root, file, layout, vertices, index_file=None):
     relative = paths.relative_asset_path(root, file)
     declared = any(item.name == "BLENDINDICES" and item.index == 0 for item in layout.semantics)
     index_relative = paths.relative_asset_path(root, index_file) if index_file else ""
     return CapturedDumpSkinning(relative, tuple(vertices), index_relative or "") if relative and declared else None
+
+
+def capture_attachment(root, file, layout, vertices, index_file):
+    relative = paths.relative_asset_path(root, file)
+    index_relative = paths.relative_asset_path(root, index_file) if index_file else ""
+    if not relative or not index_relative or any(item.name in ("BLENDINDICES", "BLENDWEIGHT", "BLENDWEIGHTS")
+                                                 for item in layout.semantics):
+        return None
+    return CapturedAttachment(relative, tuple(vertices), index_relative)
+
+
+def attachment_skinning(manifest, attachment):
+    """Native weights proven for a weightless capture, in captured compact vertex order.
+
+    Callers take ``attachment`` only from a validated Rig.json palette that the
+    part's own captured fingerprints admitted.
+    """
+    count = len(manifest.vertices)
+    weights, slots = attachment["weights"], attachment["slots"]
+    if len(weights) != count * 4 or len(slots) != count * 4:
+        raise ValueError("The proven attachment does not match the captured part.")
+    raw = b"".join(struct.pack("<4f4I", *weights[i:i + 4], *slots[i:i + 4]) for i in range(0, count * 4, 4))
+    source = SkinningSource(manifest.file, 32, 4, "gimi_f32_u32_4", bone_id_namespace=ATTACHMENT_NAMESPACE)
+    return source, decode_skinning(source, raw, range(count))
 
 
 def capture_skinning(root, file, layout, vertices):

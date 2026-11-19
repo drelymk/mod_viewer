@@ -8,7 +8,7 @@ from . import runtime
 from .bundle import runtime_directory
 
 PARSER_COMMIT = "76234e9f6f5a839504f41f9612719529fe2309a5"
-VERSION = "zzz-3-" + PARSER_COMMIT[:12]
+VERSION = "zzz-5-" + PARSER_COMMIT[:12]
 # Runtime clip decoding can change without changing cached discovery metadata.
 INDEX_VERSION = "zzz-2-" + PARSER_COMMIT[:12]
 BLOCK_DIRS = ("ZenlessZoneZero_Data/StreamingAssets/Blocks", "ZenlessZoneZero_Data/Persistent/Blocks")
@@ -50,23 +50,23 @@ def ensure_runtime(cancel, bundle=None):
     try:
         record = json.loads((root / "runtime.json").read_text(encoding="utf-8"))
         if not isinstance(record, dict):
-            raise ValueError("Unsupported ZZZ extraction runtime manifest.")
+            raise ValueError("Unsupported extraction runtime manifest.")
         files = record.get("files")
-        required = {"ModViewer.ZzzExtract.exe", "UnityReader.dll", "AnimeStudio.ACL.ZZZV2.dll", "oodle-data-shared.dll",
+        required = {"ModViewer.ZzzExtract.exe", "UnityReader.dll", "AnimeStudio.ACL.ZZZV2.dll", "AnimeStudio.ACL.DB.dll", "oodle-data-shared.dll",
                     "ModViewer.ZzzExtract.deps.json", "ModViewer.ZzzExtract.runtimeconfig.json"}
         if (record.get("version") != VERSION or record.get("parser") != PARSER_COMMIT
                 or not isinstance(files, dict) or not required.issubset(files) or len(files) > 2000):
-            raise ValueError("Unsupported ZZZ extraction runtime manifest.")
+            raise ValueError("Unsupported extraction runtime manifest.")
         for relative, digest in files.items():
             runtime.check_cancelled(cancel)
             file = (root / relative).resolve()
             if not file.is_relative_to(root.resolve()) or not file.is_file():
-                raise ValueError("Unsafe or missing ZZZ extraction runtime file.")
+                raise ValueError("Unsafe or missing extraction runtime file.")
             with file.open("rb") as stream:
                 if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
-                    raise ValueError("ZZZ extraction runtime checksum verification failed.")
+                    raise ValueError("Extraction runtime checksum verification failed.")
     except (OSError, TypeError, json.JSONDecodeError) as error:
-        raise ValueError("The bundled ZZZ reader is unavailable. Build it with tools/build_zzz_extract.py or reinstall the viewer.") from error
+        raise ValueError("The bundled game reader is unavailable. Build it with tools/build_zzz_extract.py or reinstall the viewer.") from error
     return root / "ModViewer.ZzzExtract.exe"
 
 
@@ -86,7 +86,7 @@ class Client(runtime.Client):
         names = [Path(block).relative_to(self.root).as_posix() for block in blocks]
         items = self.call("scan_batch", blocks=names)["items"]
         if len(items) != len(names) or [item.get("block") for item in items] != names:
-            raise ValueError("The native ZZZ metadata scan is incomplete.")
+            raise ValueError("The native metadata scan is incomplete.")
         return [{**row, "block": item["block"]} for item in items for row in item["rows"]]
 
     def read(self, locator):

@@ -414,13 +414,15 @@ unavailable for Assets.
 
 #### Extract a game rig and animations
 
-For an indexed WWMI Asset, open its `…` menu or right-click it and choose
-`Extract Rig/Animation`. Browse to the Wuthering Waves installation folder
-(or its `Paks` folder), check the prefilled character name, and click `OK`.
-Set the folder once under `Settings` > `Game directory` (GIMI, ZZMI and WWMI
-rows, each with `Select folder`); the saved WWMI folder is prefilled here.
-Choose a folder: a character's mesh, skeleton and secondary animations can span
-several archives.
+For an indexed WWMI, ZZMI or GIMI Asset, open its `…` menu or right-click it and
+choose `Extract Rig/Animation`. Browse to the game's installation folder (for
+Wuthering Waves, the installation or its `Paks` folder; for Genshin Impact, the
+folder containing `GenshinImpact_Data`), check the prefilled character name, and
+click `OK`. Set each folder once under `Settings` > `Game directory` (GIMI, ZZMI
+and WWMI rows, each with `Select folder`); the saved folder for the Asset's game
+is prefilled here. Choose a folder: a character's mesh, skeleton and animations
+can span several archives. ZZZ and Genshin Impact build a one-time game index
+first.
 
 The application bundles the pinned extraction helper and checksum-verified
 WuWa AES keys during packaging. Extraction works offline; a game update may
@@ -433,8 +435,8 @@ clips and original exports are preserved. Progress and cancellation are shown
 in the dialog; a failed extraction preserves the previous sidecars.
 
 The current Asset reloads after a successful save. Open `Weight/Rig` to inspect
-the rig and select an animation. This action currently supports WuWa/WWMI;
-other games and runtime cloth collision simulation are outside its scope.
+the rig and select an animation. Runtime cloth collision simulation is outside
+its scope; Genshin Impact body motion is converted from Humanoid curves in place.
 See [game extraction details](docs/asset-rig.md#game-folder-extraction).
 
 #### Extract or update an Asset

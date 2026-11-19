@@ -1,6 +1,8 @@
 """Prove Unity meshes against captured ZZZ triangles, UVs and float skin weights."""
 
 import hashlib
+import itertools
+import math
 from collections import Counter
 from pathlib import Path
 import struct
@@ -13,44 +15,52 @@ from core.geometry.migoto_dump import parse_vertex_dump
 from .native import read_limited
 from .pipeline import rest_worlds
 
+_LABELS = {"ZZMI": "ZZZ", "GIMI": "Genshin Impact"}
 
-def capture(root, record):
-    result = load_hash_asset("ZZMI", root, record)
+
+def capture(root, record, asset_type="ZZMI"):
+    label = _LABELS[asset_type]
+    result = load_hash_asset(asset_type, root, record)
     asset = Path(paths.safe_asset_dir(root, record["path"]) or "")
-    components, files, dumps = [], {}, {}
+    components, weightless, files, dumps = [], [], {}, {}
     for part in result.parts:
-        manifest = part.skinning
+        manifest = part.skinning or part.attachment
         if manifest is None:
             continue
         vb = paths.safe_asset_path(root, manifest.file)
         ib = paths.safe_asset_path(root, manifest.index_file)
         metadata = paths.safe_asset_path(root, part.metadata_path)
         if not all((vb, ib, metadata)):
-            raise ValueError("The captured ZZZ geometry is unavailable.")
+            raise ValueError(f"The captured {label} geometry is unavailable.")
         for file in (vb, ib, metadata):
             if file not in files:
                 files[file] = hashlib.sha256(read_limited(file, 512 * 1024 * 1024, "Captured geometry")).hexdigest()
         if vb not in dumps:
             dumps[vb] = parse_vertex_dump(vb, include_skinning=True)
         dump = dumps[vb]
-        if not dump.blend_data:
-            continue
-        blends = [struct.unpack_from("<4f4I", dump.blend_data, vertex * 32) for vertex in manifest.vertices]
-        components.append(dict(geometry_hash=part.geometry_hash, component_ordinal=part.component_ordinal,
+        component = dict(geometry_hash=part.geometry_hash, component_ordinal=part.component_ordinal,
             first_index=part.first_index, index_count=part.index_count,
             vertex_sha256=files[vb], index_sha256=files[ib], metadata_sha256=files[metadata],
             vertex_file=Path(vb).relative_to(asset).as_posix(), index_file=Path(ib).relative_to(asset).as_posix(),
             metadata_file=Path(metadata).relative_to(asset).as_posix(), metadata_entry=part.metadata_entry,
-            blend_sha256=hashlib.sha256(dump.blend_data).hexdigest(),
             source_vertex_count=dump.layout.vertex_count,
             source_vertices=manifest.vertices,
             positions=np.frombuffer(part.positions, dtype="<f4").reshape(-1, 3),
             normals=np.frombuffer(part.normals, dtype="<f4").reshape(-1, 3) if part.normals else None,
             uv=np.frombuffer(part.uvs, dtype="<f4").reshape(-1, 2) if part.uvs else None,
-            indices=np.frombuffer(part.indices, dtype="<u4").reshape(-1, 3), blends=blends))
+            indices=np.frombuffer(part.indices, dtype="<u4").reshape(-1, 3))
+        if part.skinning is None:
+            # Weightless captures (GIMI faces) are proven separately as attachments
+            # that take a native mesh's own weights; they never carry a Blend palette.
+            weightless.append({**component, "weightless": True})
+            continue
+        if not dump.blend_data:
+            continue
+        blends = [struct.unpack_from("<4f4I", dump.blend_data, vertex * 32) for vertex in manifest.vertices]
+        components.append({**component, "blend_sha256": hashlib.sha256(dump.blend_data).hexdigest(), "blends": blends})
     if not components:
-        raise ValueError("ZZZ rig extraction requires captured vertex weights and index dumps.")
-    return components, files
+        raise ValueError(f"{label} rig extraction requires captured vertex weights and index dumps.")
+    return components + weightless, files
 
 
 def avatar_bones(avatar):
@@ -73,7 +83,7 @@ def avatar_bones(avatar):
     return bones
 
 
-def mesh_placement(mesh, avatar):
+def mesh_placement(mesh, avatar, tolerance=2e-4):
     """Require every used inverse bind to prove one common mesh-to-Avatar placement."""
     bones = avatar_bones(avatar)
     worlds = rest_worlds(bones, affine=True)
@@ -91,7 +101,7 @@ def mesh_placement(mesh, avatar):
     # ReadMatrix and the native indexer preserve ZZZ's serialized row-major
     # float order despite Matrix4x4's column-major field names.
     matrices = [worlds[mapping[bone]] @ np.asarray(poses[bone]).reshape(4, 4) for bone in used]
-    if not all(np.allclose(matrix, matrices[0], rtol=0, atol=2e-4) for matrix in matrices):
+    if not all(np.allclose(matrix, matrices[0], rtol=0, atol=tolerance) for matrix in matrices):
         return None
     return mapping, matrices[0]
 
@@ -102,25 +112,34 @@ def match_component(part, mesh):
     return matches[0] if len(matches) == 1 else None
 
 
-def match_component_candidates(part, mesh):
-    """Retain coordinate hypotheses for the model-wide placement proof."""
+def _native_geometry(part, mesh):
+    """Bounded native (positions, viewer-space UVs, triangles) for a UV-carrying capture, or None."""
     native = np.asarray(mesh["vertices"], dtype=float).reshape(-1, 3)
-    if not 0 < len(native) <= 250000 or not np.isfinite(native).all():
-        return []
+    if part["uv"] is None or not 0 < len(native) <= 250000 or not np.isfinite(native).all():
+        return None
     # Captures contain mesh-local coordinates. The verified inverse bind placement
     # is applied to the Avatar root when building the rig, never to capture data.
     uv = np.asarray(mesh["uv"], dtype=float)
     # UV-less helper meshes are valid native candidates, but cannot establish
     # captured position/UV correspondence. Reject them before reshaping.
     if uv.ndim != 1 or uv.size not in (len(native) * 2, len(native) * 3, len(native) * 4):
-        return []
+        return None
     uv = uv.reshape(len(native), -1)[:, :2].copy()
     if not np.isfinite(uv).all():
-        return []
+        return None
     uv[:, 1] = 1 - uv[:, 1]
     indices = np.asarray(mesh["indices"], dtype=int).reshape(-1, 3)
-    if part["uv"] is None or len(indices) > 500000 or np.min(indices) < 0 or np.max(indices) >= len(native):
+    if not 0 < len(indices) <= 500000 or np.min(indices) < 0 or np.max(indices) >= len(native):
+        return None
+    return native, uv, indices
+
+
+def match_component_candidates(part, mesh):
+    """Retain coordinate hypotheses for the model-wide placement proof."""
+    geometry = _native_geometry(part, mesh)
+    if geometry is None:
         return []
+    native, uv, indices = geometry
     # Unity and captured coordinates can differ by one axis reflection. Every
     # triangle and weight must prove the same conversion; never fit arbitrary geometry.
     matches = []
@@ -131,11 +150,11 @@ def match_component_candidates(part, mesh):
         if (len(original) == len(part["positions"]) and np.max(original) < len(native)
                 and np.allclose(part["positions"], positions[original], rtol=0, atol=1e-4)
                 and np.allclose(part["uv"], uv[original], rtol=0, atol=1e-4)):
-            if _same_triangles(part, mesh, indices, dict(enumerate(original))):
+            if _section_triangles(part, mesh, indices, dict(enumerate(original))):
                 mapping = dict(enumerate(original))
         if not mapping:
             mapping = _triangle_mapping(part, positions, uv, indices)
-        if mapping is None or not _same_triangles(part, mesh, indices, mapping):
+        if mapping is None or not _section_triangles(part, mesh, indices, mapping):
             continue
         palette = _weight_palette(part, mesh, mapping)
         if palette:
@@ -143,18 +162,186 @@ def match_component_candidates(part, mesh):
     return matches
 
 
-def _same_triangles(part, mesh, indices, mapping):
-    """Prove one complete native section, preserving repeated triangle counts."""
+ATTACHMENT_TOLERANCE = 1e-4
+# Captured expressions are clamped game weights; allow only least-squares noise outside 0..1.
+EXPRESSION_SLACK = 0.05
+
+
+def _native_influences(mesh, count):
+    """Native (weights, slots) arrays, each vertex fully weighted, or None."""
+    weights = np.asarray(mesh.get("weights") or [], dtype=float)
+    slots = np.asarray(mesh.get("bone_indices") or [])
+    bones = len(mesh.get("bone_hashes") or [])
+    if (weights.shape != (count, 4) or slots.shape != (count, 4) or slots.dtype.kind not in "iu"
+            or not np.isfinite(weights).all() or np.any(weights < 0) or np.any(slots < 0)
+            or np.any(slots[weights > 0] >= bones) or np.any(np.abs(weights.sum(axis=1) - 1) > 1e-3)):
+        return None
+    return weights, slots.astype(int)
+
+
+def _shape_deltas(mesh, count):
+    """Single-frame native blend shapes as (hashes, full-weight deltas[K, N, 3])."""
+    raw = mesh.get("blend_shapes") or {}
+    channels, frames, weights, vertices = (raw.get(key) or [] for key in ("channels", "frames", "weights", "vertices"))
+    hashes, deltas = [], []
+    for channel in channels[:256]:
+        first, frame_count = channel.get("first"), channel.get("count")
+        if (frame_count != 1 or type(first) is not int or not 0 <= first < min(len(frames), len(weights))
+                or type(channel.get("hash")) is not int or channel["hash"] in hashes):
+            continue
+        frame, full = frames[first], weights[first]
+        begin, size = frame.get("first"), frame.get("count")
+        if (type(full) not in (int, float) or not math.isfinite(full) or full <= 0
+                or type(begin) is not int or type(size) is not int or begin < 0 or size < 0 or begin + size > len(vertices)):
+            continue
+        delta = np.zeros((count, 3))
+        for row in vertices[begin:begin + size]:
+            index = row.get("index")
+            if type(index) is not int or not 0 <= index < count:
+                break
+            delta[index] = row["position"]
+        else:
+            if np.isfinite(delta).all():
+                hashes.append(channel["hash"])
+                deltas.append(delta)
+    return hashes, (np.stack(deltas) if deltas else np.zeros((0, count, 3)))
+
+
+def _uv_cells(uv):
+    cells = {}
+    for index, key in enumerate(map(tuple, np.floor(uv / ATTACHMENT_TOLERANCE).astype(np.int64))):
+        cells.setdefault(key, []).append(index)
+    return cells
+
+
+def _uv_candidates(cells, uv, texcoord):
+    key = np.floor(np.asarray(texcoord) / ATTACHMENT_TOLERANCE).astype(np.int64)
+    found = [index for du in (-1, 0, 1) for dv in (-1, 0, 1)
+             for index in cells.get((int(key[0] + du), int(key[1] + dv)), ())]
+    return [index for index in found if np.all(np.abs(uv[index] - texcoord) <= ATTACHMENT_TOLERANCE)]
+
+
+def _explained_mapping(part, positions, uv, deltas, indices):
+    """Map each captured vertex to its unique native vertex at native rest plus one shared expression.
+
+    Every captured vertex must have a same-UV native vertex whose rest position,
+    displaced by the solved blend-shape weights, matches within tolerance, and no
+    other same-UV vertex may. Returns (mapping, weights) or None.
+    """
+    cells = _uv_cells(uv)
+    candidates = [_uv_candidates(cells, uv, texcoord) for texcoord in part["uv"]]
+    if any(not items for items in candidates) or len(candidates) > 250000:
+        return None
+    captured = np.asarray(part["positions"], dtype=float)
+    weights = np.zeros(len(deltas))
+    chosen = None
+    for _round in range(4):
+        posed = positions + np.tensordot(weights, deltas, axes=1) if len(deltas) else positions
+        chosen = np.array([min(items, key=lambda index: np.linalg.norm(posed[index] - point))
+                           for items, point in zip(candidates, captured)])
+        if not len(deltas):
+            break
+        system = deltas[:, chosen, :].reshape(len(deltas), -1).T
+        solved, *_ = np.linalg.lstsq(system, (captured - positions[chosen]).ravel(), rcond=None)
+        if np.allclose(solved, weights, rtol=0, atol=1e-7):
+            break
+        weights = solved
+    if np.any(weights < -EXPRESSION_SLACK) or np.any(weights > 1 + EXPRESSION_SLACK):
+        return None
+    posed = positions + np.tensordot(weights, deltas, axes=1) if len(deltas) else positions
+    options = [{index for index in items if np.all(np.abs(posed[index] - point) <= ATTACHMENT_TOLERANCE)}
+               for items, point in zip(candidates, captured)]
+    mapping = _triangle_assignment(part["indices"], options, indices)
+    return None if mapping is None else (mapping, weights)
+
+
+def _triangle_assignment(captured, options, indices):
+    """Resolve each captured vertex's explained candidates through shared native triangles.
+
+    Seam duplicates share position and UV; only their triangles tell them apart.
+    Every captured triangle must keep a native triangle consistent with its
+    vertices' options, and every vertex must end with exactly one distinct native vertex.
+    """
+    if any(not option for option in options):
+        return None
+    by_vertex = {}
+    for number, row in enumerate(indices):
+        for vertex in set(row.tolist()):
+            by_vertex.setdefault(vertex, []).append(number)
+    rows = [tuple(int(v) for v in row) for row in captured]
+    for _pass in range(8):
+        changed = False
+        for row in rows:
+            if len(set(row)) != 3:
+                return None
+            found = [set(), set(), set()]
+            for number in {t for v in options[row[0]] for t in by_vertex.get(v, ())}:
+                for order in itertools.permutations(indices[number].tolist()):
+                    if all(order[k] in options[row[k]] for k in range(3)):
+                        for k in range(3):
+                            found[k].add(order[k])
+            for k, vertex in enumerate(row):
+                narrowed = options[vertex] & found[k]
+                if not narrowed:
+                    return None
+                if narrowed != options[vertex]:
+                    options[vertex], changed = narrowed, True
+        if not changed:
+            break
+    if any(len(option) != 1 for option in options):
+        return None
+    mapping = {compact: next(iter(option)) for compact, option in enumerate(options)}
+    return mapping if len(set(mapping.values())) == len(mapping) else None
+
+
+def match_attachment_candidates(part, mesh):
+    """Prove a weightless capture against a native skinned mesh and adopt its own weights.
+
+    The capture may show the mesh in an expression: its positions must equal the
+    native rest pose plus one solved blend-shape combination, every vertex matched
+    uniquely by UV and explained position, and its triangles must form a
+    sub-multiset of one native section. The drawn subset then binds through the
+    native per-vertex influences. Returns (palette, signs, mapping, attachment).
+    """
+    geometry = _native_geometry(part, mesh)
+    influences = _native_influences(mesh, len(geometry[0])) if geometry else None
+    if influences is None:
+        return []
+    native, uv, indices = geometry
+    hashes, deltas = _shape_deltas(mesh, len(native))
+    matches = []
+    for signs in ((1, 1, 1), (-1, 1, 1), (1, -1, 1), (1, 1, -1)):
+        found = _explained_mapping(part, native * signs, uv, deltas * signs, indices)
+        if found is None or not _section_triangles(part, mesh, indices, found[0], complete=False):
+            continue
+        mapping, expression = found
+        order = [mapping[compact] for compact in range(len(mapping))]
+        weights, slots = influences[0][order], influences[1][order]
+        slots[weights <= 0] = 0
+        used = sorted({int(slot) for slot in slots[weights > 0]})
+        attachment = dict(weights=weights.ravel().tolist(), slots=slots.ravel().tolist(),
+                          expression={str(key): float(value) for key, value in zip(hashes, expression)})
+        matches.append(({str(slot): slot for slot in used}, signs, mapping, attachment))
+    return matches
+
+
+def _section_triangles(part, mesh, indices, mapping, complete=True):
+    """Prove the captured triangle multiset (repeats included) against one native section.
+
+    ``complete`` requires the whole section; otherwise the capture may be a
+    sub-multiset of it (weightless attachments draw parts of a section).
+    """
     if len(mapping) != len(part["positions"]):
         return False
     captured = Counter(tuple(sorted(mapping[int(vertex)] for vertex in row)) for row in part["indices"])
-    sections = mesh.get("sections", [dict(first=0, count=len(indices) * 3)])
-    for section in sections:
+    size = len(part["indices"]) * 3
+    for section in mesh.get("sections", [dict(first=0, count=len(indices) * 3)]):
         first, count = section["first"], section["count"]
-        if (type(first) is not int or type(count) is not int or first < 0 or first % 3
-                or count != len(part["indices"]) * 3 or first + count > len(indices) * 3):
+        if (type(first) is not int or type(count) is not int or first < 0 or first % 3 or count % 3
+                or (count != size if complete else count < size) or first + count > len(indices) * 3):
             continue
-        if captured == Counter(tuple(sorted(row)) for row in indices[first // 3:(first + count) // 3]):
+        native = Counter(tuple(sorted(row)) for row in indices[first // 3:(first + count) // 3])
+        if captured == native if complete else all(native[row] >= number for row, number in captured.items()):
             return True
     return False
 

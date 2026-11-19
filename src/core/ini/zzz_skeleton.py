@@ -22,18 +22,11 @@ def _candidate_sections(section_info):
             yield name.casefold(), match.hash, history
 
 
-def stock_zzz_palette_sources(sections, resources, section_info, resolve_vertex_info):
-    """Retain native input hashes for file-backed, unremapped vb2 streams.
+def safe_call_sections(commands, helpers):
+    """Sections whose call closure cannot rebind vertex or shader state.
 
-    Returns ``(blend_hashes, position_blends, safe_sections)``: native hashes
-    per Blend file, proven Blend files per Position file, and the lowercase
-    sections whose call closure cannot rebind vertex state.
+    ``helpers`` are external command lists known to bind pixel state only.
     """
-    candidates = list(_candidate_sections(section_info))
-    commands = _commands(sections) if candidates else {}
-    if not commands:
-        return {}, {}, set()
-
     safe, visiting = {}, set()
 
     def safe_calls(name):
@@ -49,12 +42,27 @@ def stock_zzz_palette_sources(sections, resources, section_info, resolve_vertex_
                 result = False
                 break
             left, _, target = text.partition(" = ")
-            if left == "run" and not (safe_calls(target) if target in commands else target in _TEXTURE_HELPERS):
+            if left == "run" and not (safe_calls(target) if target in commands else target in helpers):
                 result = False
                 break
         visiting.remove(name)
         safe[name] = result
         return result
+
+    return {name for name in commands if safe_calls(name)}
+
+
+def stock_zzz_palette_sources(sections, resources, section_info, resolve_vertex_info):
+    """Retain native input hashes for file-backed, unremapped vb2 streams.
+
+    Returns ``(blend_hashes, position_blends, safe_sections)``: native hashes
+    per Blend file, proven Blend files per Position file, and the lowercase
+    sections whose call closure cannot rebind vertex state.
+    """
+    candidates = list(_candidate_sections(section_info))
+    commands = _commands(sections) if candidates else {}
+    if not commands:
+        return {}, {}, set()
 
     # Any assignment to, or non-vb2 use of, a Blend resource can write through
     # the immutable file binding.
@@ -67,7 +75,7 @@ def stock_zzz_palette_sources(sections, resources, section_info, resolve_vertex_
                 if left.strip() != "vb2":
                     referenced.update(right.split())
 
-    safe_sections = {name for name in commands if safe_calls(name)}
+    safe_sections = safe_call_sections(commands, _TEXTURE_HELPERS)
     hashes, position_blends = {}, {}
     for name, native_hash, history in candidates:
         if name not in safe_sections:

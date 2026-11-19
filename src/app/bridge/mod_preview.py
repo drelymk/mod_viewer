@@ -405,7 +405,8 @@ class ModPreview:
             rig_cache = {}
             enabled_roots = {os.path.normcase(item["path"]) for item in
                              [*asset_folders.enabled_entries_for_type(context.asset_folders, "WWMI"),
-                              *asset_folders.enabled_entries_for_type(context.asset_folders, "ZZMI")]}
+                              *asset_folders.enabled_entries_for_type(context.asset_folders, "ZZMI"),
+                              *asset_folders.enabled_entries_for_type(context.asset_folders, "GIMI")]}
             pieces = []
             offset = 0
             buffers = BufferStore(

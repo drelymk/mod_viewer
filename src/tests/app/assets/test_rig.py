@@ -450,7 +450,9 @@ def test_zzz_merged_ids_map_through_each_captured_native_blend_stream(monkeypatc
     assert rig._zzz_merged_bone_map(model, "", own, layout, {}) is None
 
 
-def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_override(tmp_path, monkeypatch):
+@pytest.mark.parametrize("asset_type, native", [("ZZMI", "11111111"), ("GIMI", "33333333")])
+def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_override(tmp_path, monkeypatch, asset_type, native):
+    # ZZZ proves the stream by its position input; GIMI by its skinning pass's Blend input.
     from app.assets import rig
 
     streams = {0: {"blend_vb": "33333333", "position_vb": "11111111"},
@@ -470,22 +472,86 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
     monkeypatch.setattr(rig, "_zzz_morph_reference", lambda *_: object())
     monkeypatch.setattr(rig, "_mod_morph_vertices", lambda *_args, **_kwargs: [0])
 
-    def resolve(geometry_hash, ordinal, ids, hashes=("11111111",)):
-        binding = SimpleNamespace(asset_type="ZZMI", root=str(tmp_path), metadata="hash.json",
-                                  geometry_hash=geometry_hash, first_index=ordinal * 3, index_count=3,
+    def resolve(geometry_hash, ordinal, ids, hashes=(native,), merged_layout=(), count=3):
+        binding = SimpleNamespace(asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
+                                  geometry_hash=geometry_hash, first_index=ordinal * 3, index_count=count,
                                   component_ordinal=ordinal)
         source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4", native_palette_hashes=hashes)
-        return resolve_game_rig(binding, source, ids, set(), {})
+        return resolve_game_rig(binding, source, ids, set(), {}, merged_layout=merged_layout)
 
     # Each captured component holds only the slice of the stream palette it
     # used; a component of that stream skins with the whole captured palette.
     own = resolve("aaaaaaaa", 1, (0, 1, 2))
     assert own["bone_map"] == {"0": 5, "1": 6, "2": 7} and own["morph_binding"]["vertices"] == [0]
+    # An exact range known only by its first index (no metadata count) finds the same
+    # unique component; a contradicting count does not.
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), count=None)["bone_map"] == own["bone_map"]
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), count=4) is None
     # Another component's override drawing that stream uses the stream palette,
     # but its own morph reference describes different geometry.
     drawn_elsewhere = resolve("bbbbbbbb", 0, (0, 2))
     assert drawn_elsewhere["bone_map"] == {"0": 5, "1": 6, "2": 7} and drawn_elsewhere["morph_binding"] is None
     assert resolve("aaaaaaaa", 1, (3,)) is None
-    assert resolve("aaaaaaaa", 1, (0,), ("11111111", "22222222")) is None
+    assert resolve("aaaaaaaa", 1, (0,), (native, "22222222")) is None
+    if asset_type == "GIMI":
+        # Merged skeleton layouts are a ZZZ program; GIMI keeps the native stream palette.
+        assert resolve("aaaaaaaa", 1, (0, 1, 2), merged_layout=(("44444444", 0, 4),))["bone_map"] == own["bone_map"]
     model["components"].append(component("aaaaaaaa", 2, 0, {"0": 9}))
     assert resolve("aaaaaaaa", 1, (0,)) is None
+
+
+ATTACHMENT = dict(weights=[.75, .25, 0, 0, 1, 0, 0, 0], slots=[1, 0, 0, 0, 0, 0, 0, 0], expression={"7": 1.0})
+
+
+def test_attachment_palette_admits_only_the_assets_own_attachment_stream(tmp_path, monkeypatch):
+    from app.assets import rig
+
+    (tmp_path / "hash.json").write_text("{}")
+    attached = dict(geometry_hash="cccccccc", component_ordinal=0, first_index=0, index_count=6, metadata_file="hash.json",
+                    metadata_entry=0, bone_map={"0": 1, "1": 0}, attachment=ATTACHMENT,
+                    vertex_sha256="a" * 64, index_sha256="b" * 64)
+    skinned = {**attached, "geometry_hash": "dddddddd", "metadata_entry": 1}
+    del skinned["attachment"]
+    model = {"id": "rig", "version": 2, "bones": [], "skin_bindings": [], "components": [attached, skinned]}
+    monkeypatch.setattr(rig, "_admitted_rig", lambda *_: (str(tmp_path), model))
+    monkeypatch.setattr(rig, "_zzz_metadata", lambda *_: {})
+
+    def binding(geometry_hash, asset_type="GIMI"):
+        return SimpleNamespace(asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
+                               geometry_hash=geometry_hash, first_index=0, index_count=6, component_ordinal=0)
+
+    def resolve(geometry_hash, attachment, asset_type="GIMI", captured=True):
+        source = SkinningSource("part.txt", 32, 4, "gimi_f32_u32_4",
+                                bone_id_namespace=rig.ATTACHMENT_NAMESPACE if attachment else "model")
+        return resolve_game_rig(binding(geometry_hash, asset_type), source, (0, 1), set(), {}, captured_palette=captured)
+
+    assert rig.game_attachment(binding("cccccccc"), set(), {}) == ATTACHMENT
+    assert rig.game_attachment(binding("dddddddd"), set(), {}) is None
+    assert rig.game_attachment(binding("cccccccc", "ZZMI"), set(), {}) is None
+    resolved = resolve("cccccccc", True)
+    assert resolved["bone_map"] == {"0": 1, "1": 0}
+    assert resolved["morph_binding"] == dict(vertex_sha256="a" * 64, index_sha256="b" * 64)
+    # Attachment weights never bind a skinned palette, a mod draw or another game;
+    # captured Blend weights never bind an attachment palette.
+    assert resolve("dddddddd", True) is None
+    assert resolve("cccccccc", True, captured=False) is None
+    assert resolve("cccccccc", True, asset_type="ZZMI") is None
+    assert resolve("cccccccc", False) is None
+    assert resolve("dddddddd", False)["bone_map"] == {"0": 1, "1": 0}
+
+
+@pytest.mark.parametrize("change", [
+    dict(weights=[.75, .25, 0, 0, .5, 0, 0, 0]), dict(weights=[.75, .25, 0, 0, 1, 0, 0]),
+    dict(slots=[2, 0, 0, 0, 0, 0, 0, 0]), dict(weights=[1.5, -.5, 0, 0, 1, 0, 0, 0]),
+    dict(expression={"name": 1.0}), dict(expression={"7": float("nan")}), dict(extra=1)])
+def test_rig_rejects_invalid_attachment_palettes(change):
+    bones = [{"name": "Root", "parent": -1, "translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+             {"name": "Joint01", "parent": 0, "translation": [0, 1, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}]
+    component = dict(geometry_hash="cccccccc", component_ordinal=0, first_index=0, index_count=6,
+                     bone_map={"0": 1, "1": 0}, vertex_sha256="a" * 64, index_sha256="b" * 64)
+    raw = dict(format="mod-viewer-rig", version=2, coordinate_space="asset", bones=bones, skin_bindings=[],
+               components=[{**component, "attachment": ATTACHMENT}])
+    assert validate_rig(raw)["components"][0]["attachment"] == ATTACHMENT
+    raw["components"] = [{**component, "attachment": {**ATTACHMENT, **change}}]
+    with pytest.raises(ValueError):
+        validate_rig(raw)

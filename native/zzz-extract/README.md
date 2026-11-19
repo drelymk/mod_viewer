@@ -14,7 +14,8 @@ python tools/build_zzz_extract.py --verify-format
 
 The build pins original AnimeStudio commit
 `76234e9f6f5a839504f41f9612719529fe2309a5` and verifies its source archive's
-SHA-256. It compiles its managed Unity reader and ZZZ V2 ACL decoder from source.
+SHA-256. It compiles its managed Unity reader, the ZZZ V2 ACL decoder and the
+Genshin Impact database ACL decoder (`AnimeStudio.ACL.DB`) from source.
 SDK discovery is shared with the WuWa helper: PATH or an explicit `--dotnet`
 override, with a prerequisite warning when the required SDK is missing. See the
 [build prerequisites](../game-extract/README.md).
@@ -42,6 +43,35 @@ clip paths are unique with Windows case-insensitive semantics.
 Locators include game-relative block path, bundle offset, internal file ordinal,
 CAB and PathID. Never resolve an object by CAB basename or PathID alone.
 
+## Genshin Impact mode
+
+`--gi <game folder> --work <directory>` reads Genshin Impact `Blb` blocks with
+the same pinned reader and protocol. Block paths must name a file one directory
+below `GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/` or
+`GenshinImpact_Data/Persistent/AssetBundles/blocks/`; choosing between a
+`Persistent` copy and its `StreamingAssets` original is the Python adapter's job.
+Scans list meshes (with section shapes), Avatars, animation clips,
+AnimatorControllers and SkinnedMeshRenderer routes with complete locators. The
+GI index keeps only a renderer's path and explicit mesh/Avatar pointers (external
+pointers spell CAB names in lower case); null-mesh renderers stay unrouted. Reads export:
+
+- meshes whose skin covers every vertex (packed or partial skins are rejected);
+- the Avatar skeleton with `m_TOS` paths and the model's default pose, which is
+  the pose Genshin meshes are bound in (the Avatar skeleton pose is Humanoid
+  normalized and does not prove inverse binds), plus its Humanoid definition (human
+  skeleton, ZYRoll axes and limits, bone/hand indices, masses, scale, twist
+  settings, human-to-Avatar node map and root). Other axes types are rejected;
+- clips decoded by the rebuilt database ACL decoder, in the ZZZ clip shape plus
+  the muscle clip's mirror flag and the blend-shape clamp policy. The decoder
+  reports failure only through empty or inconsistent output, so frame/curve
+  counts and finite values are checked;
+- controller layers (names, motion sets, blend modes, weights, skeleton masks)
+  and Base Layer states with each motion set's blend-tree leaves as
+  `(cab, path_id)` clip pointers. Pairing and conversion happen in Python.
+
+GCC rejects one uninstantiated ACL template body that MSVC accepts, so the
+database decoder is built with `-Wno-template-body`; its source is unmodified.
+
 The index caches metadata only. Captured triangles, positions, UVs and positive
 float weights prove mesh correspondence and an unambiguous palette. Avatar path
 hashes and all used inverse binds prove the hierarchy and mesh-to-Avatar basis.
@@ -64,9 +94,11 @@ skinning, and restores the original geometry when playback ends. Unsupported
 in-between targets remain omitted. Curve sampling has an independent memory budget.
 On the first clip read, the helper reads only the contained game's PlayerSettings
 blend-shape clamp policy from `globalgamemanagers`. Extraction records and honors
-that policy instead of assuming signed or clamped playback. Unknown policy is not
-guessed. Clip-only runtime revisions keep the separate metadata-index version,
-so this conversion correction does not require rebuilding a ready format-3 index.
+that policy instead of assuming signed or clamped playback. Engines before Unity
+2018.3 (Genshin's 2017.4) have no such setting and always clamp, which the
+serialized engine version establishes. Unknown policy is not guessed. Clip-only
+runtime revisions keep the separate metadata-index version, so this conversion
+correction does not require rebuilding a ready format-3 index.
 Unchanged mod Blend streams may use an exact verified fingerprint. Other weight
 layouts keep the existing inferred rig until independently proven.
 

@@ -13,7 +13,7 @@ from core.textures import normalize_texture_role
 
 from app.assets import paths as asset_paths
 from app.assets.metadata import entries as _entries, texture_role
-from app.assets.skinning import capture_dump_skinning
+from app.assets.skinning import capture_attachment, capture_dump_skinning
 from . import gimi_face_alignment
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      make_texture, part_filter_matches)
@@ -775,6 +775,12 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 label = f"{label} {ordinal + 1}"
             key = (f"{asset_path}::{item.metadata_path}::"
                    f"{component or 'part'}::{geometry_hash}::{ordinal}")
+            skinning = (capture_dump_skinning(root, item.vb_file, vertex_dump.layout, used_vertices, _ib_file)
+                        if asset_type in ("ZZMI", "GIMI") else None)
+            # GIMI faces are drawn without Blend data; only an extracted rig's
+            # attachment proof may later bind them through native weights.
+            attachment = (capture_attachment(root, item.vb_file, vertex_dump.layout, used_vertices, _ib_file)
+                          if asset_type == "GIMI" and skinning is None else None)
             parts.append(AssetMeshPart(
                 key=key, label=label, asset_type=asset_type,
                 asset_path=asset_path, geometry_hash=geometry_hash,
@@ -785,8 +791,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 uvs=uvs, normals=normals, textures=textures,
                 texture_candidates=texture_candidates, metadata_path=item.metadata_path,
                 metadata_entry=item.entry_index, texture_range=ordinal,
-                skinning=(capture_dump_skinning(root, item.vb_file, vertex_dump.layout, used_vertices, _ib_file)
-                          if asset_type == "ZZMI" else None)))
+                skinning=skinning, attachment=attachment))
     if not parts:
         raise AssetLoadError("Asset contains no complete renderable parts.")
     return AssetAdapterResult(tuple(parts), tuple(warnings))

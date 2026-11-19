@@ -16,8 +16,8 @@ from app.assets import paths as asset_paths
 from app.assets import texture_assignments
 from app.assets import sections as asset_sections
 from app.assets.animations import AnimationSessions
-from app.assets.skinning import decode_captured_skinning
-from app.assets.rig import resolve_game_rig
+from app.assets.skinning import attachment_skinning, decode_captured_skinning
+from app.assets.rig import game_attachment, resolve_game_rig
 from app.assets.resolver import AssetComponentBinding
 from app.assets.composition import plan_missing_asset_parts
 from app.assets.loader.models import build_asset_fill_payload
@@ -201,18 +201,28 @@ class AssetPreview:
                 return self._weight_session is session and self._preview_generation == session["generation"]
             meshes, rigs, cache, pieces, offset = {}, {}, {}, [], 0
             for part in session["parts"]:
-                if not part.skinning:
+                manifest = part.skinning or part.attachment
+                if not manifest:
                     continue
                 if not is_current():
                     raise ValueError("The Asset preview is no longer active.")
-                source, decoded = decode_captured_skinning(session["root"], part.skinning)
-                entry, data = ModPreview._skin_entry(decoded, source, offset)
                 binding = AssetComponentBinding(status="exact", range_status="exact", asset_type=part.asset_type,
                     root=session["root"], asset=session["asset"], metadata=part.metadata_path,
                     geometry_hash=part.geometry_hash, component_ordinal=part.component_ordinal,
                     first_index=part.first_index, index_count=part.index_count)
-                rig = resolve_game_rig(binding, source, decoded.bone_ids,
-                    {os.path.normcase(session["root"])}, cache, captured_palette=True)
+                roots = {os.path.normcase(session["root"])}
+                if part.skinning:
+                    source, decoded = decode_captured_skinning(session["root"], part.skinning)
+                else:
+                    # Weights exist only for a weightless part its own proven attachment admits.
+                    attachment = game_attachment(binding, roots, cache)
+                    if attachment is None:
+                        continue
+                    source, decoded = attachment_skinning(part.attachment, attachment)
+                rig = resolve_game_rig(binding, source, decoded.bone_ids, roots, cache, captured_palette=True)
+                if not part.skinning and not rig:
+                    continue
+                entry, data = ModPreview._skin_entry(decoded, source, offset)
                 if rig:
                     if rig["id"] not in rigs:
                         rigs[rig["id"]] = {"id": rig["id"], "version": rig["version"], "bones": rig["bones"],
@@ -221,7 +231,7 @@ class AssetPreview:
                             **session["animations"].catalog(session["root"], session["asset"], rig, is_current)}
                     entry.update(game_rig_id=rig["id"], game_bone_map=rig["bone_map"])
                     if rig["morph_binding"]:
-                        entry["game_morph_binding"] = {**rig["morph_binding"], "vertices": list(part.skinning.vertices)}
+                        entry["game_morph_binding"] = {**rig["morph_binding"], "vertices": list(manifest.vertices)}
                 meshes[session["mesh_prefix"] + part.key] = entry
                 pieces.append(data)
                 offset += len(data)

@@ -21,6 +21,7 @@ from .draw_scan import _buffer_resource_at_draw, _scan_sections_for_draws
 from .sections import ResourceTable, first_source
 from .wwmi_skeleton import native_wwmi_component_palettes, stock_wwmi_merged_layouts
 from .zzz_merged_skeleton import zzz_merged_palettes
+from .gimi_skeleton import stock_gimi_palette_sources
 from .zzz_skeleton import stock_zzz_palette_sources
 from .texture_roles import (TextureOverrideIndex, _condition_group_is_consistent,
                             _condition_difference)
@@ -210,6 +211,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     resolve_vertex_info = resolved_buffers["resolve_vertex_info"]
     zzz_hashes, zzz_position_blends, zzz_sections = stock_zzz_palette_sources(
         sections, resources, section_info, resolve_vertex_info)
+    gimi_hashes, gimi_sections = stock_gimi_palette_sources(sections, resources, section_info)
     zzz_merged = zzz_merged_palettes(
         sections, resources, resolve_vertex_info, _shader_reader(sections, resource_source))
     component_buffers = resolved_buffers["component_buffers"]
@@ -609,11 +611,13 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     skinning_source = SkinningSource(next(iter(blends)), 32, 4, "gimi_f32_u32_4")
                     skinning_resolution["resolution_source"] = "verified_zzz"
             draw.skinning_source = skinning_source
-            if (skinning_source is not None and section_name.casefold() in zzz_sections and not merged_zzz
+            if (skinning_source is not None and not merged_zzz
                     and skinning_source.encoding == "gimi_f32_u32_4"
                     and not skinning_source.bone_id_offset and not skinning_source.blend_remap
                     and not skinning_source.vertex_vg_file):
-                palette_hash = zzz_hashes.get(normalize_skinning_source_file(skinning_source.file))
+                blend_file = normalize_skinning_source_file(skinning_source.file)
+                palette_hash = (zzz_hashes.get(blend_file) if section_name.casefold() in zzz_sections else None) or (
+                    gimi_hashes.get(blend_file) if section_name.casefold() in gimi_sections else None)
                 if palette_hash:
                     draw.skinning_source = replace(skinning_source, native_palette_hashes=palette_hash)
             draw.skinning_error = skinning_error

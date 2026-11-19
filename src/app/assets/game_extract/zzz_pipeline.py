@@ -13,7 +13,7 @@ from . import zzz_animation, zzz_index, zzz_morphs
 from .native import humanoid_controls
 from .pipeline import clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
 from .runtime import ExtractionCancelled, check_cancelled
-from .zzz_native import avatar_bones, capture, match_component_candidates, mesh_placement
+from .zzz_native import avatar_bones, capture, match_attachment_candidates, match_component_candidates, mesh_placement
 
 
 def _search_name(value):
@@ -84,37 +84,57 @@ def _rig(avatar, basis, palettes):
     return validate_rig(raw)
 
 
-def verify_candidates(client, captured, rows, query, cancel):
+def exact_shape(shape):
+    """ZZZ submesh vertex counts equal the captured component's referenced vertices."""
+    return tuple(shape)
+
+
+def index_shape(shape):
+    """Overlapping submesh vertex ranges leave only the index count comparable."""
+    return None, shape[1]
+
+
+def verify_candidates(client, captured, rows, query, cancel, *,
+                      mesh_hint=lambda avatar_row, family, mesh_row: _mesh_family_hint(family, mesh_row["name"]), label="ZZZ",
+                      placement_tolerance=2e-4, shape_key=exact_shape):
+    skinned = [part for part in captured if not part.get("weightless")]
+    weightless_counts = [part["index_count"] for part in captured if part.get("weightless")]
+    # Shapes only narrow candidates; every adopted part still needs proof.
+    wanted = {shape_key((len(part["positions"]), part["index_count"])) for part in skinned}
     avatars = [row for row in rows if row["type"] == "Avatar" and _family(row["name"])]
     named = [row for row in avatars if _search_name(query) in _search_name(row["name"])] if query else []
     if not named:
-        # Shape fallback only narrows candidates; every adopted part still needs proof.
-        wanted = {(len(part["positions"]), part["index_count"]) for part in captured}
-        meshes = [row for row in rows if row["type"] == "Mesh" and any(tuple(s) in wanted for s in row.get("shape") or [])]
+        meshes = [row for row in rows if row["type"] == "Mesh" and any(shape_key(s) in wanted for s in row.get("shape") or [])]
         scores = {}
         for avatar in avatars:
             family = _family(avatar["name"])
-            shapes = {tuple(shape) for mesh in meshes if _mesh_family_hint(family, mesh["name"]) for shape in mesh.get("shape") or []}
+            shapes = {shape_key(shape) for mesh in meshes if mesh_hint(avatar, family, mesh) for shape in mesh.get("shape") or []}
             scores[family] = sum(count for vertices, count in wanted & shapes)
         best = max(scores.values(), default=0)
         named = [avatar for avatar in avatars if best and scores[_family(avatar["name"])] == best]
     if not 1 <= len(named) <= 32:
-        raise ValueError("Enter the character's game name to narrow the ZZZ Avatar search.")
+        raise ValueError(f"Enter the character's game name to narrow the {label} Avatar search.")
     candidates = []
     seen_avatars = {}
-    wanted = {(len(part["positions"]), part["index_count"]) for part in captured}
+
+    def shape_wanted(shape):
+        # A weightless attachment may draw only part of its native section.
+        return shape_key(shape) in wanted or any(shape[1] >= count for count in weightless_counts)
+
     for avatar_row in sorted(named, key=zzz_index.identity):
         check_cancelled(cancel)
         family = _family(avatar_row["name"])
-        mesh_rows = [row for row in rows if row["type"] == "Mesh" and _mesh_family_hint(family, row["name"])
+        mesh_rows = [row for row in rows if row["type"] == "Mesh" and mesh_hint(avatar_row, family, row)
                      and not re.search(r"_LOD[1-9]", row["name"], re.I)
-                     and (row.get("shape") is None or any(tuple(shape) in wanted for shape in row["shape"]))]
+                     and (row.get("shape") is None or any(shape_wanted(shape) for shape in row["shape"]))]
         if not mesh_rows:
             continue
         if len(mesh_rows) > 128:
             raise ValueError("The character has too many native mesh variants to verify uniquely.")
         avatar = client.read(avatar_row)
-        avatar_content = json.dumps(avatar, sort_keys=True, separators=(",", ":"))
+        # Humanoid data is not part of skeleton/palette identity.
+        avatar_content = json.dumps({key: value for key, value in avatar.items() if key != "human"},
+                                    sort_keys=True, separators=(",", ":"))
         avatar_key = family, avatar_content
         if avatar_key in seen_avatars:
             seen_avatars[avatar_key].add(zzz_index.identity(avatar_row))
@@ -126,22 +146,29 @@ def verify_candidates(client, captured, rows, query, cancel):
             mesh = client.read(mesh_row)
             if not mesh.get("bone_hashes"):
                 continue
-            placed = mesh_placement(mesh, avatar)
+            placed = mesh_placement(mesh, avatar, placement_tolerance)
             if placed is None:
                 continue
             bone_map, placement = placed
             for number, part in enumerate(captured):
-                if not any(section["count"] == part["index_count"] for section in mesh["sections"]):
+                if part.get("weightless"):
+                    found = match_attachment_candidates(part, mesh)
+                elif any(section["count"] == part["index_count"] for section in mesh["sections"]):
+                    found = match_component_candidates(part, mesh)
+                else:
                     continue
-                for palette, signs, vertices in match_component_candidates(part, mesh):
+                for palette, signs, vertices, *attachment in found:
                     conversion = np.diag([*signs, 1]) @ np.linalg.inv(placement)
                     group = next((item for item in placements if np.allclose(item["basis"], conversion, rtol=0, atol=2e-4)), None)
                     if group is None:
                         group = dict(basis=conversion, matches={}, ambiguous=set(), sources=set(), native={})
                         placements.append(group)
                     result = {key: value for key, value in part.items() if key not in
-                              ("positions", "normals", "uv", "indices", "blends", "source_vertices", "source_vertex_count", "blend_sha256")}
+                              ("positions", "normals", "uv", "indices", "blends", "source_vertices", "source_vertex_count",
+                               "blend_sha256", "weightless")}
                     result["bone_map"] = {key: bone_map[value] + 1 for key, value in palette.items()}
+                    if attachment:
+                        result["attachment"] = attachment[0]
                     if number in group["matches"] and group["matches"][number] != result:
                         group["ambiguous"].add(number)
                     group["matches"][number] = result
@@ -149,7 +176,8 @@ def verify_candidates(client, captured, rows, query, cancel):
                     group["native"].setdefault(number, []).append(dict(row=mesh_row, mesh=mesh, signs=signs, vertices=vertices))
         for group in placements:
             matches = {number: value for number, value in group["matches"].items() if number not in group["ambiguous"]}
-            if matches:
+            # Weightless attachments follow a placement that a skinned palette has proven.
+            if any("attachment" not in value for value in matches.values()):
                 rig = _rig(avatar, group["basis"], [matches[i] for i in sorted(matches)])
                 score = sum(captured[i]["index_count"] for i in matches)
                 candidates.append(dict(rig=rig, avatar=avatar, family=family, score=score, matched=matches,
@@ -157,7 +185,7 @@ def verify_candidates(client, captured, rows, query, cancel):
                                        avatar_copies=seen_avatars[avatar_key],
                                        native={i: group["native"][i] for i in matches}))
     if not candidates:
-        raise ValueError("No ZZZ mesh could be verified against the captured triangles, UVs, weights and Avatar inverse binds.")
+        raise ValueError(f"No {label} mesh could be verified against the captured triangles, UVs, weights and Avatar inverse binds.")
     best = max(item["score"] for item in candidates)
     best_candidates = [item for item in candidates if item["score"] == best]
     largest = min(best_candidates, key=lambda item: (-len(item["rig"]["bones"]), item["source"]))
@@ -177,22 +205,14 @@ def verify_candidates(client, captured, rows, query, cancel):
     # hierarchy/world/palette proof establishes equivalence; exact JSON equality
     # would reject equivalent copies. Animation family ownership must still agree.
     if not compatible or len({item["family"] for item in best_candidates}) != 1:
-        raise ValueError("The matching ZZZ skeleton is ambiguous. Existing Asset files were preserved.")
+        raise ValueError(f"The matching {label} skeleton is ambiguous. Existing Asset files were preserved.")
     largest["avatar_sources"] = set().union(*(item["avatar_copies"] for item in best_candidates))
     return largest
 
 
-def build(client, root, record, output, query, progress, cancel, index=None):
-    captured, fingerprints = capture(root, record)
-    if index is None:
-        index = zzz_index.scan(client, client.root, progress, cancel)
-    progress("search", 0, 0)
-    chosen = verify_candidates(client, captured, index, query, cancel)
-    rig, avatar = chosen["rig"], chosen["avatar"]
-    progress("rig", 1, 1)
-    asset, output = Path(root) / record["path"], Path(output)
-    library = output / "Animation"
-    library.mkdir(parents=True)
+def adopt_rig(asset, chosen, captured, label="ZZZ"):
+    """Adopt the proven rig against the saved Asset Rig.json without changing its identity."""
+    rig = chosen["rig"]
     previous = None
     if (asset / "Rig.json").is_file():
         try:
@@ -210,11 +230,13 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     # to reuse the proven palette. Preserve compatible explicitly authored profiles.
     profiles = {}
     for number, palette in chosen["matched"].items():
+        if "attachment" in palette:
+            continue  # A weightless attachment has no Blend stream for mods to reuse.
         digest = captured[number]["blend_sha256"]
         mapping = profiles.setdefault(digest, {})
         for key, bone in palette["bone_map"].items():
             if key in mapping and mapping[key] != bone:
-                raise ValueError("Captured ZZZ palettes disagree about the same Blend stream.")
+                raise ValueError(f"Captured {label} palettes disagree about the same Blend stream.")
             mapping[key] = bone
     raw = {**rig, "skin_bindings": [dict(sha256=digest, encoding="gimi_f32_u32_4", bone_map=mapping)
                                   for digest, mapping in profiles.items()]}
@@ -224,6 +246,21 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         identities = {(p["sha256"], p["encoding"]) for p in raw["skin_bindings"]}
         raw["skin_bindings"] += [p for p in previous["skin_bindings"] if (p["sha256"], p["encoding"]) not in identities]
     rig = validate_rig(raw)
+    return rig, previous
+
+
+def build(client, root, record, output, query, progress, cancel, index=None):
+    captured, fingerprints = capture(root, record)
+    if index is None:
+        index = zzz_index.scan(client, client.root, progress, cancel)
+    progress("search", 0, 0)
+    chosen = verify_candidates(client, captured, index, query, cancel)
+    avatar = chosen["avatar"]
+    progress("rig", 1, 1)
+    asset, output = Path(root) / record["path"], Path(output)
+    library = output / "Animation"
+    library.mkdir(parents=True)
+    rig, previous = adopt_rig(asset, chosen, captured)
     validated_morphs = set()
     entries = preserve_library(asset, library, rig, previous, validated_morphs=validated_morphs)
     existing = {key: read_clip(str(library), entry, rig, validated_morphs=validated_morphs)[0] for key, entry in entries.items()}

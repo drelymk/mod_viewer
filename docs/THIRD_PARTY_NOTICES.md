@@ -61,11 +61,12 @@ distributed or invoked.
 ## ZZZ extraction reader
 
 - Original AnimeStudio revision `76234e9f6f5a839504f41f9612719529fe2309a5`
-  provides the Unity reader and ZZZ V2 ACL decoder source (MIT).
+  provides the Unity reader, ZZZ V2 ACL decoder and Genshin Impact database ACL
+  decoder source (MIT), both decoders rebuilt from that source.
   Source: https://github.com/Escartem/AnimeStudio
 - The build excludes the GUI, media exporters, FBX library and Ooz distribution.
-  It reuses the pinned WuWa Oodle decoder described above. The ZZZ native ACL
-  source embeds ACL/RTM code under their MIT licenses; those notices are retained.
+  It reuses the pinned WuWa Oodle decoder described above. Both native ACL
+  sources embed ACL/RTM code under their MIT licenses; those notices are retained.
 - Managed libraries use committed NuGet dependency locks and retain their license
   texts, package metadata and inventory under `assets/zzz-extract/licenses`.
   The source license is included there too. Build pins and deliberate reader
