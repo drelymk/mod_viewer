@@ -148,17 +148,39 @@ several components' palettes to every draw. Equal numeric IDs from different
 skin sources do not establish joint identity without verified palette provenance.
 
 For generic loading, the parser must recognize the stock WWMI skeleton-merger
-template within the mod's own INI, including legacy frame-state and newer
-merge-status variants. It checks the native CB inputs, RW outputs,
+template within the mod's own INI (frame-state and merge-status variants share
+one adapter). It checks the native CB inputs, RW outputs,
 merged-buffer publication, runtime CB replacement, direct Blend binding and full
 component offset/count layout. Direct component draws can have ordinary texture
 bindings, toggle guards and the supported RabbitFX pixel helper. Extra vertex
-slots do not change palette identity. Local overrides of external helpers,
-modified scaling, unknown calls in the draw scope, unproven Blend bindings,
+slots do not change palette identity. A draw scope may also call a list from a
+sibling INI in the same mod (by its unique namespace, or by a unique global name
+from a sibling without a namespace) when that list's whole closure only does
+pixel work and draws: pixel/output-merger state, RabbitFX maps and parameters,
+IniParams, local variables, draws, geometry-stage shaders inside custom shader
+sections (which restore them) and, for a namespaced sibling, writes to its own
+declared resources, as skin-oil, shine or transparency-layer add-ons do. Compute,
+UAVs, vertex/index buffers and writes to qualified names are never allowed. Local overrides of external helpers, modified
+scaling, other unknown calls in the draw scope, unproven Blend bindings,
 different layouts and custom remappers cannot establish this proof.
 The proof is retained with the loaded skinning manifest, without reading INIs
 again during Weight access. Every captured component used by the shared palette
 must still pass its VB/IB fingerprints, including undrawn components.
+
+Mods without a merger keep WWMI's native per-component skeleton: each
+`match_first_index` component override draws with the palette the game bound
+for that component, so its R8 Blend IDs index that component's `bone_map`. The
+parser admits this only when the INI never runs a skeleton or Blend remapper and
+never assigns the vertex shader, `vs-cb3`/`vs-cb4`, the Blend input layout or
+the WWMI palette variables outside custom shader sections (which restore their
+state), calls nothing outside itself except WWMI core helpers, the RabbitFX
+pixel helpers, output-only 3DMigoto built-ins and the sibling pixel/draw lists
+described above, and the draw's file-backed Blend resource is never assigned or
+read other than as a `vbN` binding. Such sources use `namespace=wwmi_component` with
+a domain naming the root override's hash and index range, so equal IDs in
+different components stay distinct. The Rig resolver requires that domain to
+name the exact Asset binding and every used ID to fall inside that component's
+palette.
 
 Verified merged R8 IDs are already shared palette indices. The decoder preserves
 them directly: `vg_offset` places matrices in the merged buffer and is not added
@@ -288,6 +310,13 @@ Rigid facial components can additionally match unique UV triangles when vertices
 were split, reordered, or reshaped. Ambiguous or conflicting matches and new UVs
 remain unmapped; shared UV corners inherit an established, unique source.
 Morphs apply before skinning on the GPU and Stop restores the baseline.
+Clips without facial curves play a procedural idle blink while running, using the
+library's eye-closing native shape (a whole-face shape such as `E_Close`, else a
+matched left/right pair, where weight 1 is full closure). The first catalog clip
+whose targets include one supplies the shared sparse targets; libraries without
+such a shape, or whose target data cannot be read, leave the face unchanged.
+Paused playback keeps the eyes open and clips with their own facial curves are
+never altered.
 Events and game physics are not included.
 
 Opening Weight/Rig loads weights and the animation catalog first, then builds

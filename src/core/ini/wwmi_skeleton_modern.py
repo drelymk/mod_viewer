@@ -403,7 +403,7 @@ def _remap_program(plain, initializer, remapper, targets, blend, component_proxi
     return results
 
 
-def modern_wwmi_merged_layouts(commands, plain):
+def modern_wwmi_merged_layouts(commands, plain, external_neutral=frozenset()):
     """Recognize complete current stock programs; leave custom programs unproven."""
     if any(name in commands for name in (_MERGER, _BLEND_REMAP, _SKELETON_REMAP, *_PIXEL_HELPERS)):
         return {}
@@ -461,7 +461,8 @@ def modern_wwmi_merged_layouts(commands, plain):
               and any(_match(_CHECK, line) for line in lines)
               and all(_match(_CHECK, line) or _control(line) or _local_flag(line) for line in lines)}
     neutral = _neutral_lists(plain)
-    checks |= neutral
+    # Sibling pixel/draw lists cannot rebind Blend, skeleton CBs or the VS.
+    checks |= neutral | (external_neutral - set(commands))
     marked = [lines for name, lines in plain.items() if name.startswith("textureoverride") and lines
               and f"filter_index = {marker}" in lines]
     if not marked or any(not any(_match(r"hash = [0-9a-f]{8}", line) for line in lines) for lines in marked):

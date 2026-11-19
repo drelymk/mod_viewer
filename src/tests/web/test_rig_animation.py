@@ -693,3 +693,95 @@ def test_morph_compaction_interpolation_cpu_skinning_and_release(module_page):
                                              -.5 / 1.25 ** .5,0,1 / 1.25 ** .5], abs=1e-6)
     assert result['restored'] == [1,0,0,0,1,0,1,1,0]
     assert result['weight'] == .5 and result['wrong'] and result['mod']
+
+
+def test_gpu_animation_bounds_enclose_posed_vertices_until_finalize(module_page):
+    result = module_page.evaluate('''async () => {
+      const T=await import('three');
+      const {createSkinningRuntime}=await import('./js/weight-rig/skinning-runtime.js');
+      const {createWeightRuntimeState}=await import('./js/weight-rig/weight-runtime.js');
+      const runtime=createWeightRuntimeState(),skin=createSkinningRuntime({...runtime,requestRender:()=>{}});
+      const geometry=new T.BufferGeometry();
+      geometry.setAttribute('position',new T.Float32BufferAttribute([0,0,0,1,0,0,0,1,0],3));
+      geometry.setAttribute('normal',new T.Float32BufferAttribute([0,0,1,0,0,1,0,0,1],3));
+      geometry.computeBoundingBox();geometry.computeBoundingSphere();
+      const mesh=new T.Mesh(geometry,new T.MeshBasicMaterial()),state=runtime.stateFor(mesh);
+      Object.assign(state,{loaded:true,baselinePositions:geometry.attributes.position.array.slice(),
+        baselineNormals:geometry.attributes.normal.array.slice(),influenceCount:2,
+        indices:new Uint32Array([1,0,1,0,1,2]),weights:new Float32Array([1,0,1,0,.5,.5])});
+      const forward=new T.Matrix4().makeTranslation(0,0,5);
+      state.poseTransforms=new Map([[1,forward]]);state.poseRotations=new Map([[1,new T.Quaternion()]]);
+      state.poseActiveVertices=new Uint32Array([0,1,2]);
+      skin.applyDeformation(mesh,state,{invalidateShadow:false,gpu:true});
+      const positions=[...geometry.attributes.position.array];
+      const posed=geometry.boundingBox.clone(),culled=mesh.frustumCulled;
+      const sphere=geometry.boundingSphere.clone();
+      skin.finalizeDeformationGeometry(mesh,state);
+      const exact=geometry.boundingBox.clone(),restored=mesh.frustumCulled;
+      const contains=positions.every((value,index)=>{
+        const axis=index%3;return value>=posed.min.getComponent(axis)&&value<=posed.max.getComponent(axis);});
+      const points=[0,1,2].map(i=>new T.Vector3().fromArray(positions,i*3));
+      skin.disposeMesh(mesh);geometry.dispose();mesh.material.dispose();
+      return {positions,contains,posedMax:posed.max.toArray(),posedMin:posed.min.toArray(),culled,restored,
+        sphereHolds:points.every(point=>sphere.containsPoint(point)),exact:[...exact.min.toArray(),...exact.max.toArray()]};
+    }''')
+    assert result['positions'] == pytest.approx([0, 0, 5, 1, 0, 5, 0, 1, 2.5], abs=1e-6)
+    assert result['contains'] and result['sphereHolds']
+    assert result['posedMax'][2] >= 5 and result['posedMax'][0] < 1.5
+    assert result['culled'] is False and result['restored'] is True
+    assert result['exact'] == pytest.approx([0, 0, 2.5, 1, 1, 5], abs=1e-6)
+
+
+def test_idle_blink_schedule_and_clips_without_facial_curves(module_page):
+    result = module_page.evaluate('''async () => {
+      const {idleBlinkWeight}=await import('./js/weight-rig/idle-blink.js');
+      const {createRigAnimation}=await import('./js/weight-rig/rig-animation.js');
+      const samples=Array.from({length:3000},(_,i)=>idleBlinkWeight(i/100));
+      const blinks=samples.filter((value,i)=>value>0.99&&samples[i-1]<=0.99).length;
+      const repeat=samples.every((value,i)=>value===idleBlinkWeight(i/100));
+      const rig={id:'rig01',bones:[
+        {name:'Root',parent:-1,translation:[0,0,0],rotation:[0,0,0,1]},
+        {name:'Joint01',parent:0,translation:[1,0,0],rotation:[0,0,0,1]}],
+        animations:['plain','facial','broken'].map(id=>({id,name:id,duration:1})),animation_session:'session01'};
+      const values=new Float32Array(28);
+      const bones=URL.createObjectURL(new Blob([values]));
+      const shapes=URL.createObjectURL(new Blob([new Uint8Array(28)]));
+      const facial=URL.createObjectURL(new Blob([new Float32Array(30)]));
+      const idle={names:['E_Close'],components:[{vertex_sha256:'b'.repeat(64),index_sha256:'c'.repeat(64),
+        vertex_count:3,targets:[{name:'E_Close',offset:0,count:1}]}],data:{url:shapes,length:28}};
+      const base={skeleton_id:rig.id,frame_count:2,bone_count:2,duration:1,data:{url:bones,length:values.byteLength}};
+      const clips={
+        plain:{...base,idle_morphs:idle},
+        facial:{...base,data:{url:facial,length:120},morphs:{names:['Smile'],components:idle.components,data:{url:shapes,length:28}},idle_morphs:idle},
+        broken:{...base,idle_morphs:{...idle,data:{url:shapes,length:27}}},
+      };
+      let scheduled=null,applied=null;
+      window.requestAnimationFrame=callback=>{scheduled=callback;return 1;};
+      window.cancelAnimationFrame=()=>{scheduled=null;};
+      Object.defineProperty(performance,'now',{value:()=>0,configurable:true});
+      const runtime=createRigAnimation({getRig:()=>rig,loadClip:async (_,id)=>({status:'ok',clip:{id,...clips[id]}}),
+        applyPose:(transforms,{morphs}={})=>{applied={transforms,morphs};},suspendPhysics:()=>{},prepare:()=>{},notify:()=>{}});
+      const play=async id=>{await runtime.select(id);return applied.morphs;};
+      const first=await play('plain');
+      const seeded=first&&first.weights[0]===0&&first.names[0]==='E_Close'&&first.buffer.byteLength===28;
+      let peak=0,frames=0,stable=true;
+      for(let now=16.7;now<=6000;now+=16.7){
+        scheduled(now);
+        stable=stable&&applied.morphs===first;peak=Math.max(peak,applied.morphs.weights[0]);
+        if(applied.morphs.weights[0]>0)frames++;
+      }
+      runtime.setPlaying(false);
+      const pausedOpen=applied.morphs.weights[0]===0;
+      const own=await play('facial');
+      const brokenMorphs=await play('broken');
+      runtime.stop();
+      [bones,shapes,facial].forEach(url=>URL.revokeObjectURL(url));
+      return {blinks,repeat,low:Math.min(...samples),high:Math.max(...samples),seeded,peak,frames,stable,pausedOpen,
+        ownNames:own.names,ownIdle:own===first,brokenMorphs};
+    }''')
+    assert result['repeat'] and result['low'] == 0 and result['high'] == pytest.approx(1)
+    assert 8 <= result['blinks'] <= 10
+    assert result['seeded'] and result['stable'] and result['pausedOpen']
+    assert result['peak'] == pytest.approx(1) and 5 <= result['frames'] <= 40
+    assert result['ownNames'] == ['Smile'] and not result['ownIdle']
+    assert result['brokenMorphs'] is None

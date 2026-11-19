@@ -10,7 +10,7 @@ from threading import RLock
 
 from app.runtime import server
 from . import paths
-from .animation_morphs import morph_names, read_morphs
+from .animation_morphs import blink_targets, morph_names, read_morphs
 
 
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -73,6 +73,38 @@ def read_clip(directory, entry, rig, *, validated_morphs=None):
     """Validate one contained clip without publishing it."""
     raw, data, _morph_data = _read_clip(directory, entry, rig, validated_morphs=validated_morphs)
     return raw, data
+
+
+def _idle_face(session):
+    """Blink shapes shared by a library, for clips that carry no facial curves.
+
+    The first catalog clip whose sparse targets include an eye-closing shape
+    supplies the shared target data; the clip's own bones and weights are unused.
+    Any problem leaves the clip without an idle face rather than failing it.
+    """
+    try:
+        source = session.get("idle_source")
+        if source is None:
+            source = False
+            for entry in session["entries"].values():
+                try:
+                    raw = _json(paths.safe_asset_path(session["directory"], entry["file"]))
+                    names = blink_targets(raw["morphs"]["components"])
+                    if names:
+                        morph_names(raw["morphs"])
+                        source = (entry, names)
+                        break
+                except (OSError, ValueError, TypeError, KeyError):
+                    continue
+            session["idle_source"] = source
+        if not source:
+            return None
+        entry, names = source
+        morphs = _json(paths.safe_asset_path(session["directory"], entry["file"]))["morphs"]
+        data = read_morphs(session["directory"], morphs, full_validation=False)
+        return dict(names=names, components=morphs["components"]), data
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return None
 
 
 class AnimationSessions:
@@ -140,20 +172,23 @@ class AnimationSessions:
                 if not entry:
                     raise ValueError("Choose an animation from the current Asset.")
             raw, data, morph_data = _read_clip(session["directory"], entry, session["rig"], full_validation=False)
+            idle = _idle_face(session) if morph_data is None else None
             with self._lock:
                 if self._sessions.get(token) is not session or not session["is_current"]():
                     raise ValueError("The animation preview is no longer active.")
-                url = server.publish_geometry(data, replace=False)
+                published = []
                 try:
-                    morph_url = server.publish_geometry(morph_data, replace=False) if morph_data is not None else None
+                    for payload in (data, morph_data, idle[1] if idle else None):
+                        published.append(server.publish_geometry(payload, replace=False) if payload is not None else None)
                 except BaseException:
-                    server.release_geometry(url)
+                    for url in published:
+                        if url:
+                            server.release_geometry(url)
                     raise
+                url, morph_url, idle_url = published
                 for previous in session["urls"]:
                     server.release_geometry(previous)
-                session["urls"] = {url}
-                if morph_url:
-                    session["urls"].add(morph_url)
+                session["urls"] = {item for item in published if item}
             clip = {"id": clip_id, "name": entry["name"], "skeleton_id": raw["skeleton_id"],
                     "version": raw["version"], "layout": raw["layout"],
                     "frame_count": raw["frame_count"], "bone_count": raw["bone_count"], "duration": raw["duration"],
@@ -161,6 +196,8 @@ class AnimationSessions:
             if morph_data is not None:
                 clip["morphs"] = {"names": raw["morphs"]["names"], "components": raw["morphs"]["components"],
                                   "data": {"url": morph_url, "length": len(morph_data)}}
+            elif idle:
+                clip["idle_morphs"] = {**idle[0], "data": {"url": idle_url, "length": len(idle[1])}}
             return {"status": "ok", "clip": clip}
         except (OSError, ValueError, TypeError, KeyError, RecursionError) as error:
             return {"status": "error", "error": str(error)}

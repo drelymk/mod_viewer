@@ -248,7 +248,7 @@ def test_animation_library_containment_integrity_and_session_lifecycle(tmp_path,
     current = False
     assert sessions.load(token, "clip01")["status"] == "error"
     sessions.clear()
-    assert released == ["/geometry/1", "/geometry/2"]
+    assert sorted(released) == ["/geometry/1", "/geometry/2"]
     manifest["skeleton_id"] = "b" * 64
     (directory / "manifest.json").write_text(json.dumps(manifest))
     assert sessions.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animations"] == []
@@ -439,3 +439,69 @@ def test_extraction_validation_cache_reuses_only_unchanged_morph_sidecars(tmp_pa
         target.write_bytes(bytes(len(target_data)))
         with pytest.raises(ValueError, match="incomplete or has changed"):
             read()
+
+
+@pytest.mark.parametrize("names, expected", [
+    (["E_Close", "E_Close_L", "E_Close_R", "M_Close", "Smile"], ["E_Close"]),
+    (["eyeBlink", "mouthClose"], ["eyeBlink"]),
+    (["Blink_L", "Blink_R", "M_Close"], ["Blink_L", "Blink_R"]),
+    (["left_eye_blink", "right_eye_blink"], ["left_eye_blink", "right_eye_blink"]),
+    (["Blink_L"], []),
+    (["M_Close", "Close", "Smile"], []),
+])
+def test_blink_targets_prefer_whole_face_shape_and_never_wink(names, expected):
+    from app.assets.animation_morphs import blink_targets
+
+    components = [dict(targets=[dict(name=name) for name in names[:2]]), dict(targets=[dict(name=name) for name in names[2:]])]
+    assert blink_targets(components) == expected
+    assert blink_targets(None) == [] and blink_targets([dict(targets=None), "x"]) == []
+
+
+def test_clips_without_facial_curves_share_the_library_blink_targets(tmp_path, monkeypatch):
+    rig, source = sample()
+    frames, bone_data = converter()(source, rig, 1)
+    directory = tmp_path / "Asset01/Animation"
+    directory.mkdir(parents=True)
+    target_data = struct.pack("<I6f", 1, 0, 0, 2, 0, 1, 0) * 2
+    targets = [dict(name="Smile", offset=0, count=1), dict(name="E_Close", offset=28, count=1)]
+    components = [dict(vertex_sha256="b" * 64, index_sha256="c" * 64, vertex_count=3, targets=targets)]
+    morphs = dict(names=["Smile"], file="Morph01.bin", sha256=hashlib.sha256(target_data).hexdigest(),
+                  components=components)
+
+    def write(name, data, morphs=None):
+        base = dict(format="mod-viewer-animation", version=1, coordinate_space="asset", layout="frame-major-tq-f32le",
+                    skeleton_id=rig["id"], frame_count=frames, bone_count=2, duration=1, data_file=name + ".bin",
+                    sha256=hashlib.sha256(data).hexdigest())
+        (directory / (name + ".bin")).write_bytes(data)
+        (directory / (name + ".json")).write_text(json.dumps({**base, **({"morphs": morphs} if morphs else {})}))
+
+    write("Plain", bone_data)
+    write("Facial", bone_data + struct.pack("<2f", 0, 1), morphs)
+    (directory / "Morph01.bin").write_bytes(target_data)
+    clips = [dict(id=name.lower(), name=name, file=name + ".json", duration=1) for name in ("Plain", "Facial")]
+    (directory / "manifest.json").write_text(json.dumps(dict(
+        format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=clips)))
+    published, released = [], []
+    monkeypatch.setattr("app.assets.animations.server.publish_geometry",
+                        lambda data, **_: published.append(data) or f"/geometry/{len(published)}")
+    monkeypatch.setattr("app.assets.animations.server.release_geometry", released.append)
+    sessions = AnimationSessions()
+    token = sessions.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animation_session"]
+
+    plain = sessions.load(token, "plain")["clip"]
+    assert "morphs" not in plain
+    assert plain["idle_morphs"]["names"] == ["E_Close"] and plain["idle_morphs"]["components"] == components
+    assert plain["idle_morphs"]["data"] == {"url": "/geometry/2", "length": len(target_data)}
+    assert published == [bone_data, target_data]
+
+    facial = sessions.load(token, "facial")["clip"]
+    assert "idle_morphs" not in facial and facial["morphs"]["names"] == ["Smile"]
+    assert sorted(released) == ["/geometry/1", "/geometry/2"]
+
+    # A library with no eye-closing shape plays plain clips without an idle face.
+    targets[1]["name"] = "Frown"
+    (directory / "Facial.json").write_text(json.dumps({**json.loads((directory / "Facial.json").read_text()),
+                                                       "morphs": {**morphs, "components": components}}))
+    other = AnimationSessions()
+    token = other.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animation_session"]
+    assert "idle_morphs" not in other.load(token, "plain")["clip"]

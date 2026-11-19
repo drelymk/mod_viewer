@@ -526,3 +526,16 @@ $\\Target\\style = $state
     assert parsed.defaults["mod(5)::style"] == "3"
     panel = build_menu_panel(parsed.menu, parsed.defaults)
     assert next(iter(panel.values()))["default"] == "3"
+
+
+def test_sibling_pixel_draw_lists_use_the_names_callers_resolve():
+    from app.mods.analysis import _sibling_pixel_draw_lists
+    from core.ini.sections import parse_sections
+
+    shine = "[CommandListShine]\nps-t11 = ResourceCube\ndrawindexed = 3, 0, 0\n[CommandListBind]\nvb0 = ResourceCube\n"
+    records = [{"namespace": r"Mod\Shine", "sections": parse_sections("shine-01.ini", text=shine)},
+               {"namespace": None, "sections": parse_sections("global-01.ini", text="[CommandListGlow]\nps = glow.hlsl\n")},
+               {"namespace": None, "sections": parse_sections("global-02.ini", text="[CommandListDup]\nps = a.hlsl\n")},
+               {"namespace": None, "sections": parse_sections("global-03.ini", text="[CommandListDup]\nps = b.hlsl\n")}]
+    targets = {r"mod\shine": records[0]}
+    assert _sibling_pixel_draw_lists(records, targets) == {r"commandlist\mod\shine\shine", "commandlistglow"}

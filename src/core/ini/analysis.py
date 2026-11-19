@@ -41,7 +41,7 @@ class IniAnalysis:
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
                 seen=None, extra_gating_vars=None, qualified_vars=None,
-                canonical_vars=None, resource_source=None):
+                canonical_vars=None, resource_source=None, external_neutral=frozenset()):
     """Analyze ``sections`` once and return all derived semantic models.
 
     Extractors accept the shared canonical spelling map so a normal load does
@@ -108,7 +108,7 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         seen=seen, gating_vars=scan_gating_vars,
         animation_vars=animation_analysis.frame_vars,
         qualified_vars=qualified_vars, section_info=section_info,
-        resource_source=resource_source)
+        resource_source=resource_source, external_neutral=external_neutral)
     return IniAnalysis(
         sections=sections,
         canonical_vars=canonical_vars,

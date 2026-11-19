@@ -4,22 +4,22 @@ import { isGameRigSkeleton } from './game-rig.js';
 import { getLooseParts } from '../mesh/loose-parts.js';
 import { bindAnimationMorphs } from './animation-morphs.js';
 
+// Every used ID of a loaded mesh resolved to a joint of its game skeleton, or null.
+function gameBoneMapping(state) {
+  const rig = state?.gameRig;
+  if (!state?.loaded || !rig?.bones?.length || !state.boneIds?.length) return null;
+  const mapping = new Map(state.boneIds.map((bone) => [bone, rig.boneMap?.[bone]]));
+  for (const target of mapping.values()) {
+    if (!Number.isInteger(target) || target < 0 || target >= rig.bones.length) return null;
+  }
+  return mapping;
+}
+
 // Playback bindings stay per mesh; they never promote inferred model joints to game bones.
 export function buildAnimationMeshBinding(meshes, states) {
-  const candidates = [...meshes].filter((mesh) => {
-    const state = states.get(mesh);
-    const rig = state?.gameRig;
-    return (
-      state?.loaded &&
-      rig?.animations?.length &&
-      rig.bones?.length &&
-      state.boneIds?.length &&
-      state.boneIds.every((bone) => {
-        const target = rig.boneMap?.[bone];
-        return Number.isInteger(target) && target >= 0 && target < rig.bones.length;
-      })
-    );
-  });
+  const candidates = [...meshes].filter(
+    (mesh) => states.get(mesh)?.gameRig?.animations?.length && gameBoneMapping(states.get(mesh)),
+  );
   if (!candidates.length) return null;
   const rig = states.get(candidates[0]).gameRig;
   if (candidates.some((mesh) => states.get(mesh).gameRig.id !== rig.id)) return null;
@@ -38,11 +38,9 @@ export function buildAnimationMeshBinding(meshes, states) {
   const members = new Map();
   for (const mesh of meshes) {
     const state = states.get(mesh);
-    if (!state?.loaded || state.gameRig?.id !== rig.id || !sameSkeleton(state.gameRig.bones) || !state.boneIds?.length)
-      continue;
-    const mapping = new Map(state.boneIds.map((bone) => [bone, state.gameRig.boneMap?.[bone]]));
-    if ([...mapping.values()].some((bone) => !Number.isInteger(bone) || bone < 0 || bone >= rig.bones.length)) continue;
-    members.set(mesh, mapping);
+    if (state?.gameRig?.id !== rig.id || !sameSkeleton(state.gameRig.bones)) continue;
+    const mapping = gameBoneMapping(state);
+    if (mapping) members.set(mesh, mapping);
   }
   return { rig, meshes: members };
 }
