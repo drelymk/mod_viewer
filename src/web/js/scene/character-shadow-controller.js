@@ -2,7 +2,7 @@
 
 import * as THREE from 'three/webgpu';
 import { float, reference } from 'three/tsl';
-import { computeModelBounds } from './model-bounds.js';
+import { computeModelBounds, computeRestBounds } from './model-bounds.js';
 import { stableShadowFilter } from './stable-shadow-filter.js';
 
 const FIT_MARGIN = 0.12;
@@ -11,6 +11,7 @@ const NORMAL_BIAS_SCALE = 0.0015;
 const MIN_SIZE = 0.001;
 const SHADOW_OPACITY = 0.32;
 const SHADOW_REFERENCE_INTENSITY = 1.0;
+const FRUSTUM_STEPS = 32;
 
 function finiteBox(box) {
   return !box.isEmpty() && [box.min.x, box.min.y, box.min.z, box.max.x, box.max.y, box.max.z].every(Number.isFinite);
@@ -34,6 +35,16 @@ function shadowOpacityForIntensity(intensity) {
   return SHADOW_OPACITY * THREE.MathUtils.clamp(intensity / SHADOW_REFERENCE_INTENSITY, 0, 1);
 }
 
+// Grow a light-space range in model-scaled steps and snap its centre to the
+// shadow-map texel grid, so small per-frame bound changes from posing, physics
+// or animation keep the same texel layout instead of shimmering edges.
+function stableRange(min, max, margin, step, resolution) {
+  const extent = Math.max(Math.ceil((max - min + margin * 2) / step) * step, step);
+  const texel = extent / resolution;
+  const center = Math.round((min + max) / 2 / texel) * texel;
+  return [center - extent / 2, center + extent / 2];
+}
+
 function fitShadowCamera(light, points, modelSize) {
   const direction = light.target.position.clone().sub(light.position).normalize();
   const camera = light.shadow.camera;
@@ -52,10 +63,9 @@ function fitShadowCamera(light, points, modelSize) {
   const marginX = Math.max(size.x * FIT_MARGIN, MIN_SIZE);
   const marginY = Math.max(size.y * FIT_MARGIN, MIN_SIZE);
   const marginDepth = Math.max(size.z * FIT_MARGIN, MIN_SIZE);
-  camera.left = bounds.min.x - marginX;
-  camera.right = bounds.max.x + marginX;
-  camera.bottom = bounds.min.y - marginY;
-  camera.top = bounds.max.y + marginY;
+  const step = Math.max(modelSize / FRUSTUM_STEPS, MIN_SIZE);
+  [camera.left, camera.right] = stableRange(bounds.min.x, bounds.max.x, marginX, step, light.shadow.mapSize.x);
+  [camera.bottom, camera.top] = stableRange(bounds.min.y, bounds.max.y, marginY, step, light.shadow.mapSize.y);
   camera.near = -bounds.max.z - marginDepth;
   camera.far = Math.max(camera.near + MIN_SIZE, -bounds.min.z + marginDepth);
   camera.updateProjectionMatrix();
@@ -64,7 +74,7 @@ function fitShadowCamera(light, points, modelSize) {
   return true;
 }
 
-export function createCharacterShadowController({ renderer, scene, light, grid = null }) {
+export function createCharacterShadowController({ renderer, scene, light, grid = null, onGroundChange = null }) {
   // The floor can retain a shadow at grazing angles without changing model lighting.
   const floorLight = new THREE.DirectionalLight();
   floorLight.shadow.autoUpdate = false;
@@ -97,10 +107,16 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
 
   let meshes = [];
   let modelBoundsDirty = true;
+  let casterBoundsDirty = true;
   let shadowFitDirty = true;
   let shadowMapDirty = true;
   let modelBounds = new THREE.Box3();
   let casterBounds = new THREE.Box3();
+  // The ground is measured once per load (or explicit re-seat) and then held:
+  // posing, physics, animation, visibility and translation never move it.
+  let groundFrame = null;
+  let groundFrameDirty = true;
+  let groundLockCount = 0;
   let lastLightPosition = null;
   let lastLightTarget = null;
   let groundAvailable = false;
@@ -109,11 +125,13 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
 
   function invalidateGeometry() {
     modelBoundsDirty = true;
+    casterBoundsDirty = true;
     shadowFitDirty = true;
     shadowMapDirty = true;
   }
 
   function invalidateVisibility() {
+    casterBoundsDirty = true;
     shadowFitDirty = true;
     shadowMapDirty = true;
   }
@@ -122,9 +140,15 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     shadowMapDirty = true;
   }
 
+  /** Re-measure the ground on the next update, e.g. after an orientation change. */
+  function reanchorGround() {
+    groundFrameDirty = true;
+    invalidateGeometry();
+  }
+
   function setMeshes(nextMeshes = []) {
     meshes = [...new Set(nextMeshes.filter(Boolean))];
-    invalidateGeometry();
+    reanchorGround();
   }
 
   function adoptMeshes(nextMeshes = []) {
@@ -141,7 +165,9 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     const removed = new Set(nextMeshes);
     const before = meshes.length;
     meshes = meshes.filter((mesh) => !removed.has(mesh));
-    if (meshes.length !== before) invalidateGeometry();
+    if (meshes.length === before) return;
+    if (!meshes.length) groundFrameDirty = true;
+    invalidateGeometry();
   }
 
   function projectGroundFootprint(corners, floorY, size, direction) {
@@ -157,23 +183,55 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     return result;
   }
 
-  function fitShadow() {
+  function refreshBounds() {
     if (modelBoundsDirty) {
       modelBounds = computeModelBounds(meshes);
       modelBoundsDirty = false;
     }
-    casterBounds = computeModelBounds(meshes, { visibleOnly: true });
-    if (!finiteBox(modelBounds) || !finiteBox(casterBounds)) {
+    // Key-light drags refit every frame; casters only change with geometry
+    // or visibility invalidation.
+    if (casterBoundsDirty) {
+      casterBounds = computeModelBounds(meshes, { visibleOnly: true });
+      casterBoundsDirty = false;
+    }
+  }
+
+  // Lock the floor to the model's rest pose: the visible base when anything is
+  // visible, otherwise the whole model. Rest bounds keep a re-anchor during
+  // playback from reading padded animation bounds. Grid, shadow receiver and
+  // environment floor share this frame, including while the key light is off.
+  function lockGround() {
+    if (!groundFrameDirty) return groundFrame;
+    groundFrameDirty = false;
+    const whole = computeRestBounds(meshes);
+    const visible = computeRestBounds(meshes, { visibleOnly: true });
+    const base = finiteBox(visible) ? visible : whole;
+    groundFrame = finiteBox(base)
+      ? Object.freeze({
+          y: base.min.y,
+          center: Object.freeze([(base.min.x + base.max.x) / 2, (base.min.z + base.max.z) / 2]),
+          size: Math.max(whole.getSize(new THREE.Vector3()).length(), MIN_SIZE),
+        })
+      : null;
+    groundLockCount += 1;
+    if (grid) grid.position.y = groundFrame ? groundFrame.y : 0;
+    onGroundChange?.(groundFrame);
+    return groundFrame;
+  }
+
+  function fitShadow() {
+    lockGround();
+    refreshBounds();
+    if (!groundFrame || !finiteBox(casterBounds)) {
       groundAvailable = false;
       ground.visible = false;
-      if (grid) grid.position.y = 0;
       shadowFitDirty = false;
       fitCount += 1;
       return false;
     }
 
-    const modelSize = Math.max(modelBounds.getSize(new THREE.Vector3()).length(), MIN_SIZE);
-    const floorY = casterBounds.min.y;
+    const modelSize = groundFrame.size;
+    const floorY = groundFrame.y;
     const lightDirection = light.target.position.clone().sub(light.position);
     if (lightDirection.lengthSq() < 0.00000001) lightDirection.set(0, -1, 0);
     lightDirection.normalize();
@@ -209,7 +267,6 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
       Math.max(footprintSize.z + groundMargin * 2, MIN_SIZE),
       1,
     );
-    if (grid) grid.position.y = floorY;
 
     // Ordinary angles share the key shadow map; only the floor fallback needs another projection.
     if (
@@ -221,7 +278,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
       shadowFitDirty = false;
       return false;
     }
-    groundAvailable = light.position.y > casterBounds.min.y;
+    groundAvailable = light.position.y > floorY;
     ground.visible = groundAvailable && light.intensity > 0;
     shadowFitDirty = false;
     fitCount += 1;
@@ -240,6 +297,8 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     }
     if (light.intensity <= 0) {
       ground.visible = false;
+      // Keep the shadow fit pending for when the light returns.
+      lockGround();
       return;
     }
     if (shadowFitDirty) fitShadow();
@@ -258,13 +317,17 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     modelBounds = new THREE.Box3();
     casterBounds = new THREE.Box3();
     modelBoundsDirty = false;
+    casterBoundsDirty = false;
     shadowFitDirty = false;
     shadowMapDirty = false;
+    groundFrame = null;
+    groundFrameDirty = true;
     lastLightPosition = null;
     lastLightTarget = null;
     groundAvailable = false;
     ground.visible = false;
     if (grid) grid.position.y = 0;
+    onGroundChange?.(null);
   }
 
   function getDebugState() {
@@ -282,6 +345,9 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
       fitCount,
       shadowUpdateCount,
       groundVisible: ground.visible,
+      groundHeight: ground.position.y,
+      groundLockCount,
+      shadowFrustum: ['left', 'right', 'bottom', 'top'].map((side) => light.shadow.camera[side]),
       normalBias: light.shadow.normalBias,
     };
   }
@@ -290,6 +356,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     setMeshes,
     adoptMeshes,
     forgetMeshes,
+    reanchorGround,
     invalidateGeometry,
     invalidateVisibility,
     invalidateMap,

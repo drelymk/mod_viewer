@@ -348,6 +348,63 @@ def test_environment_backgrounds_are_independent_of_model_geometry_and_clipping(
           const mesh = window.modViewer.activeMeshes[0]; mesh.scale.setScalar(scale);
           s.fitTo([mesh]); s.frameView([mesh]);
         }""", scale)
+    # The floor is locked when a model is fitted (even with the key light off),
+    # holds through translation, posing/physics invalidation and visibility,
+    # and re-anchors only when a quarter turn re-seats the model.
+    page.evaluate("""async () => {
+      const s = await import('./js/scene/scene.js');
+      const {requestRender} = await import('./js/scene/render-scheduler.js');
+      const {Box3} = await import('three/webgpu');
+      window.__floorStep = async action => {
+        const count = window.modViewer.getRenderCount();
+        await action(s, window.modViewer.activeMeshes[0]); requestRender();
+        while(window.modViewer.getRenderCount() <= count) await new Promise(r => setTimeout(r, 10));
+        const box = new Box3().setFromObject(window.modViewer.activeMeshes[0]);
+        const {ground} = s.getEnvironmentDebugState(), shadow = s.getCharacterShadowDebugState();
+        return {ground, lock:shadow.groundLockCount, groundHeight:shadow.groundHeight, groundVisible:shadow.groundVisible,
+          frustum:shadow.shadowFrustum,
+          base:[box.min.y, (box.min.x + box.max.x) / 2, (box.min.z + box.max.z) / 2]};
+      };
+    }""")
+
+    def step(action):
+        return page.evaluate(f'window.__floorStep({action})')
+
+    def on_base(state):
+        floor = [state['ground']['height'], *state['ground']['center']]
+        return max(abs(a - b) for a, b in zip(floor, state['base'])) < 1e-6
+
+    loaded = step('async () => {}')
+    assert on_base(loaded) and loaded['groundVisible']
+    held = [
+        step("async (s, mesh) => s.translateModel([mesh], [0.5, 0.25, -0.5])"),
+        step("async (s, mesh) => {mesh.scale.multiplyScalar(1.002); s.invalidateCharacterShadowGeometry();}"),
+        step("async (s, mesh) => {mesh.visible = false; s.invalidateCharacterShadowVisibility();}"),
+        step("async (s, mesh) => {mesh.visible = true; s.setKeyLightIntensity(0); s.translateModel([mesh], [0, 0.25, 0]);}"),
+    ]
+    assert all(state['ground'] == loaded['ground'] and state['lock'] == loaded['lock'] for state in held)
+    assert not on_base(held[0]) and not held[-1]['groundVisible']
+    # A posing-sized bound change keeps the shadow frustum extent and moves it
+    # only by whole shadow-map texels, so shadow edges do not shimmer.
+    before, after = held[0]['frustum'], held[1]['frustum']
+    for low, high in ((0, 1), (2, 3)):
+        extent = before[high] - before[low]
+        assert abs((after[high] - after[low]) - extent) < 1e-9
+        texels = ((after[low] + after[high]) - (before[low] + before[high])) / 2 / (extent / 2048)
+        assert abs(texels - round(texels)) < 1e-6
+    refitted = step("async (s, mesh) => s.fitTo([mesh])")
+    assert on_base(refitted) and refitted['lock'] == loaded['lock'] + 1
+    turned = step("async (s, mesh) => {s.setKeyLightIntensity(1); s.rotateModelHorizontalQuarterTurn([mesh]);}")
+    assert on_base(turned) and turned['ground'] != refitted['ground'] and turned['groundVisible']
+    assert abs(turned['groundHeight'] - turned['ground']['height']) < 1e-3
+    # Playback replaces geometry bounds with padded posed boxes; Reset View
+    # during playback must still seat the floor on the rest-pose base.
+    reset = step("""async (s, mesh) => {
+      mesh.geometry.boundingBox.min.y -= 0.5; s.invalidateCharacterShadowGeometry(); s.resetView();
+    }""")
+    assert reset['ground'] == refitted['ground'] and reset['lock'] == turned['lock'] + 1
+    assert reset['ground']['height'] > reset['base'][0] + 0.4
+    page.evaluate('window.modViewer.activeMeshes[0].geometry.computeBoundingBox()')
     page.locator('#view-gizmo .gizmo-axis[data-axis="z"][data-sign="1"]').press('Enter')
     page.locator('#camera-reset-view-btn').click()
     page.set_viewport_size({'width': 1400, 'height': 950})

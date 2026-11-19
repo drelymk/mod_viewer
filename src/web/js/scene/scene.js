@@ -174,6 +174,7 @@ const characterShadowController = createCharacterShadowController({
   scene,
   light: keyLight,
   grid,
+  onGroundChange: environmentController.setGround,
 });
 const viewportRenderPipeline = createViewportRenderPipeline({
   renderer,
@@ -302,7 +303,9 @@ export function resetView() {
   const reset = cameraFrame.resetView();
   const restoredMeshes = reset?.meshes || [];
   resetOutlineProjectionReference(camera, controls.target);
-  characterShadowController.invalidateGeometry();
+  // Reset and quarter turns re-seat the model, so the floor re-anchors;
+  // other transforms keep the floor locked from load.
+  characterShadowController.reanchorGround();
   viewportRenderPipeline.invalidateGeometry();
   notifyModelTransformChanged(restoredMeshes, 'reset-view', reset?.translationDeltaWorld || null);
   requestRender();
@@ -497,7 +500,7 @@ export function setBloomSuppressedByDebug(value) {
 
 export function rotateModelQuarterTurn(meshes = []) {
   const changedMeshes = cameraFrame.rotateModelQuarterTurn(meshes);
-  characterShadowController.invalidateGeometry();
+  characterShadowController.reanchorGround();
   viewportRenderPipeline.invalidateGeometry();
   notifyModelTransformChanged(changedMeshes, 'rotate-y');
   requestRender();
@@ -505,7 +508,7 @@ export function rotateModelQuarterTurn(meshes = []) {
 
 export function rotateModelHorizontalQuarterTurn(meshes = []) {
   const changedMeshes = cameraFrame.rotateModelHorizontalQuarterTurn(meshes);
-  characterShadowController.invalidateGeometry();
+  characterShadowController.reanchorGround();
   viewportRenderPipeline.invalidateGeometry();
   notifyModelTransformChanged(changedMeshes, 'rotate-x');
   requestRender();
