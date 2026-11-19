@@ -511,14 +511,12 @@ def test_clear_loaded_model_releases_all_model_private_state():
     preview._current_model_folder = "mod"
     preview._active_mesh_keys["mod"] = {"Component01-1"}
     preview._skinning_manifests["mod"] = {"Component01-1": object()}
-    preview._last_skinning_diagnostics["mod"] = {"total_seconds": 1}
 
     preview.clear_loaded_model()
 
     assert preview._current_model_folder is None
     assert preview._active_mesh_keys == {}
     assert preview._skinning_manifests == {}
-    assert preview._last_skinning_diagnostics == {}
 
 
 def test_skinning_publications_follow_model_generation_and_fetch_lifecycle(

@@ -6,13 +6,13 @@ import math
 import os
 import re
 import struct
-from itertools import product
 
 from core.geometry.migoto_format import MigotoBinaryLayout, MigotoElement, parse_fmt
 from core.geometry.migoto_dump import parse_vertex_dump, parse_index_dump, pack_indices
 from core.geometry.skinning import wwmi_component_domain
 
 from . import paths
+from .morph_vertex_match import CELL_SCALE, match_positions
 from .metadata import entries as metadata_entries
 
 
@@ -350,7 +350,7 @@ def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, sig
                 point = struct.unpack_from("<3f", data, index * layout.stride + element.offset)
                 if not all(math.isfinite(value) for value in point):
                     return None
-                cell = tuple(math.floor(value * 10000) for value in point)
+                cell = tuple(math.floor(value * CELL_SCALE) for value in point)
                 bucket = buckets.setdefault(cell, {})
                 bucket[point] = -1 if point in bucket else index
                 if len(bucket) > 64:
@@ -359,25 +359,7 @@ def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, sig
         buckets = reference["buckets"]
         if buckets is None:
             return None
-        vertices = []
-        for point in struct.iter_unpack("<3f", positions):
-            if not all(math.isfinite(value) for value in point):
-                vertices.append(-1)
-                continue
-            cell = tuple(math.floor(value * 10000) for value in point)
-            exact = buckets.get(cell, {}).get(point)
-            if exact is not None:
-                vertices.append(exact)
-                continue
-            best, distance = -1, 1e-8
-            for delta in product((-1, 0, 1), repeat=3):
-                for reference_point, index in buckets.get(tuple(a + b for a, b in zip(cell, delta)), {}).items():
-                    squared = sum((a - b) ** 2 for a, b in zip(point, reference_point))
-                    if squared < distance:
-                        best, distance = index, squared
-                    elif squared == distance:
-                        best = -1
-            vertices.append(best)
+        vertices = match_positions(buckets, positions, reference)
         if uv_triangles and reference_topology is not None:
             result = _mod_morph_uv_triangles(reference, len(vertices), topology)
             if result is not None:

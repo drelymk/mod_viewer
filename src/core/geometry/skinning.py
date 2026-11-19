@@ -3,12 +3,14 @@
 import hashlib
 import math
 import ntpath
-import os
 import posixpath
 import re
 import struct
-import time
 from dataclasses import dataclass, field
+
+
+# Streams below this size stay on the scalar decoder.
+_MIN_BATCH_VERTICES = 2048
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,6 +367,12 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None, *,
             if len(data) < (remap.remap_id + 1) * remap.bone_count * width or len(data) % width:
                 raise SkinningPreviewError("invalid_blend_remap", "The WWMI blend-remap table is truncated.")
     count = len(used_vertices)
+    if not source.vertex_vg_file and count >= _MIN_BATCH_VERTICES:
+        # Import only when a stream is large enough to benefit from arrays.
+        from .skinning_batch import decode_skinning_batch
+        batch = decode_skinning_batch(source, raw_data, used_vertices)
+        if batch is not None:
+            return _decoded_skinning(source, count, **batch)
     item_bytes = source.influence_count * 4
     index_bytes = bytearray(count * item_bytes)
     weight_bytes = bytearray(count * item_bytes)
@@ -482,12 +490,31 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None, *,
                 else:
                     stats[2] += weight
 
+    bone_stats = {
+        bone: {
+            "affected_vertex_count": stats[1],
+            "total_weight": stats[2],
+        }
+        for bone, stats in bone_stats_accum.items()
+    }
+    return _decoded_skinning(
+        source, count, index_bytes, weight_bytes, bone_ids, bone_stats,
+        invalid=invalid, zero_weight=zero_weight, truncated=truncated,
+        out_of_range=out_of_range, vertex_vg_truncated=vertex_vg_truncated,
+        min_weight_sum=min(sums, default=0.0),
+        max_weight_sum=max(sums, default=0.0))
+
+
+def _decoded_skinning(source, count, index_bytes, weight_bytes, bone_ids,
+                      bone_stats, *, invalid, zero_weight, truncated,
+                      out_of_range, vertex_vg_truncated, min_weight_sum,
+                      max_weight_sum):
     diagnostics = {
         "vertex_count": count,
         "influence_count": source.influence_count,
         "bone_count": len(bone_ids),
-        "min_weight_sum": min(sums, default=0.0),
-        "max_weight_sum": max(sums, default=0.0),
+        "min_weight_sum": min_weight_sum,
+        "max_weight_sum": max_weight_sum,
         "zero_weight_vertices": zero_weight,
         "invalid_weight_vertices": invalid,
         "truncated_vertices": truncated,
@@ -501,42 +528,11 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None, *,
     }
     if source.vertex_vg_file:
         diagnostics["bone_id_namespace"] = source.bone_id_namespace
-    bone_stats = {
-        bone: {
-            "affected_vertex_count": stats[1],
-            "total_weight": stats[2],
-        }
-        for bone, stats in bone_stats_accum.items()
-    }
     return DecodedSkinning(
         vertex_count=count, influence_count=source.influence_count,
         indices=bytes(index_bytes), weights=bytes(weight_bytes),
         bone_ids=tuple(sorted(bone_ids)), diagnostics=diagnostics,
         bone_stats=bone_stats)
-
-
-def _error_for_draw(draw):
-    if draw.skinning_error == "ambiguous_skinning_source":
-        return SkinningPreviewError(
-            "ambiguous_skinning_source",
-            "More than one possible Blend stream is active for this draw.")
-    if draw.skinning_error == "unsupported_skinning_layout":
-        return SkinningPreviewError(
-            "unsupported_skinning_layout",
-            "This Blend format is not supported by the experiment.")
-    if draw.skinning_error == "invalid_vertex_vg_remap":
-        return SkinningPreviewError(
-            "invalid_vertex_vg_remap",
-            "The WWMI VertexVG remap resource is invalid.")
-    if draw.skinning_error == "missing_vertex_vg_remap":
-        return SkinningPreviewError(
-            "skinning_remap_unavailable",
-            "The WWMI VertexVG remap binding is unavailable.")
-    if draw.skinning_source is None:
-        return SkinningPreviewError(
-            "skinning_not_available",
-            "No skin-weight stream was found for this draw.")
-    return None
 
 
 def read_blend_remap_tables(source, resolve, exists, buffers):
@@ -555,69 +551,11 @@ def read_blend_remap_tables(source, resolve, exists, buffers):
     return result
 
 
-def build_skinning_preview(draw, group, mod_dir, *, buffers,
-                           default_streams, default_index_size,
-                           geometry_convention, timing=None, source=None):
-    """Prepare the selected draw, decode its source, and return canonical data."""
-    from .packing import _prepare_draw_vertices
-    from ..resource_paths import safe_resource_path
-
-    error = _error_for_draw(draw)
-    if error:
-        raise error
-    resolve = source.resolve_resource if source is not None \
-        else lambda value: safe_resource_path(mod_dir, value)
-    exists = source.is_file if source is not None else os.path.exists
-    source_path = resolve(draw.skinning_source.file)
-    if not source_path or not exists(source_path):
-        raise SkinningPreviewError(
-            "skinning_not_available",
-            "The skin-weight buffer could not be found.")
-    remap_path = None
-    if draw.skinning_source.vertex_vg_file:
-        remap_path = resolve(draw.skinning_source.vertex_vg_file)
-        if not remap_path or not exists(remap_path):
-            raise SkinningPreviewError(
-                "skinning_remap_unavailable",
-                "The WWMI VertexVG remap buffer could not be found.")
-    prepare_started = time.perf_counter() if timing is not None else None
-    prepared = _prepare_draw_vertices(
-        draw, group, mod_dir=mod_dir, default_streams=default_streams,
-        default_index_size=default_index_size, buffers=buffers,
-        geometry_convention=geometry_convention, source=source)
-    if timing is not None:
-        timing["prepare_draw_vertices_seconds"] += (
-            time.perf_counter() - prepare_started)
-        timing["prepare_draw_vertices_calls"] += 1
-    if prepared is None:
-        raise SkinningPreviewError(
-            "geometry_not_available",
-            "The rendered draw geometry could not be prepared.")
-    decode_started = time.perf_counter() if timing is not None else None
-    decoded = decode_skinning(
-        draw.skinning_source, buffers.raw(source_path),
-        prepared.used_vertices,
-        (buffers.raw(remap_path) if draw.skinning_source.vertex_vg_file
-         else None), **read_blend_remap_tables(draw.skinning_source, resolve, exists, buffers))
-    if timing is not None:
-        timing["decode_skinning_seconds"] += (
-            time.perf_counter() - decode_started)
-    if decoded.diagnostics["truncated_vertices"]:
-        raise SkinningPreviewError(
-            "skinning_buffer_truncated",
-            "The skin-weight buffer is truncated.")
-    if decoded.diagnostics["vertex_vg_truncated_vertices"]:
-        raise SkinningPreviewError(
-            "skinning_remap_truncated",
-            "The WWMI VertexVG remap buffer is truncated.")
-    return decoded
-
-
 __all__ = [
     "SkinningSource", "SkinningManifestEntry", "DecodedSkinning",
     "SkinningPreviewError",
     "normalize_skinning_source_file", "skinning_source_key", "wwmi_component_domain",
     "skinning_source_descriptor", "skinning_bone_ids_model_wide",
     "resolve_skinning_source", "WwmiBlendRemap", "read_blend_remap_tables",
-    "decode_skinning", "build_skinning_preview",
+    "decode_skinning",
 ]

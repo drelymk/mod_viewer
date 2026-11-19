@@ -22,3 +22,23 @@ def strided_view(np, data, *, stride, width, dtype, offset=0):
     return np.ndarray(
         (count, width), dtype=dtype, buffer=data, offset=offset,
         strides=(stride, dtype.itemsize))
+
+
+def python_float_sum(np, columns):
+    """Row-wise ``sum()`` of Float64 columns with Python 3.12+ rounding.
+
+    ``sum()`` over floats uses Neumaier compensation and adds the compensation
+    once at the end when it is finite and nonzero. Matching it lets array paths
+    equal scalar decoders exactly.
+    """
+    total = np.asarray(columns[0], dtype=np.float64).copy()
+    compensation = np.zeros_like(total)
+    for column in columns[1:]:
+        following = total + column
+        compensation += np.where(
+            np.abs(total) >= np.abs(column),
+            (total - following) + column,
+            (column - following) + total)
+        total = following
+    return np.where((compensation != 0) & np.isfinite(compensation),
+                    total + compensation, total)

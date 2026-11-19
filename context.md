@@ -794,6 +794,13 @@ of documentation, comments and tests; use portable fixtures instead.
   exact members for evidence but keep provenance. Infer only conservative
   maximum-spanning topology from overlap/centers: Blend data provides no names,
   canonical skeleton, hierarchy, bind pose, animation or semantic labels.
+- Large Blend streams without VertexVG remaps, and rest-position morph
+  matching, use bounded NumPy batches that must equal their scalar paths
+  (per-vertex failures, ``sum()`` rounding, unique-nearest ties). Unusual inputs
+  fall back to the scalar paths. Per-mesh surface graphs build on at most four
+  same-origin module workers, copying only each view's bytes. The cooperative
+  main-thread build is the fallback. Rigs, errors and aggregation keep source
+  and member order.
 - Exact registered WWMI and ZZMI Asset/range bindings may provide an optional root
   `Rig.json` (`mod-viewer-rig`, versions 1/2, Asset coordinates). Read it only on
   Weight/Rig access from retained skinning manifests, through Asset containment

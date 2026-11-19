@@ -159,12 +159,6 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
     assert rendered.skinning_manifest["Component01Blend-1"].positions == b""
     assert rendered.skinning_manifest["Component01Blend-1"].morph_topology == ()
     assert result_entry["source"]["file"] == "component01.blend"
-    assert preview._last_skinning_diagnostics[str(tmp_path)][
-        "mapping_source"] == "loaded_model_manifest"
-    assert preview._last_skinning_diagnostics[str(tmp_path)][
-        "resolve_draw_count"] == 0
-    assert preview._last_skinning_diagnostics[str(tmp_path)][
-        "prepare_draw_vertices_calls"] == 0
 
 
 def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(

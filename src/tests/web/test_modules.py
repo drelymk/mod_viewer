@@ -2155,8 +2155,7 @@ def test_independent_sources_bind_shared_controls_pose_and_reset_without_vertex_
       for (const rig of rigs) Object.defineProperty(rig,'vertexEvidence',{
         get() {throw new Error('Independent binding must not read vertex evidence');}});
       const options = {};
-      const timings = {};
-      const model = await window.__buildRig(rigs,options,{timings});
+      const model = await window.__buildRig(rigs,options);
       const original = JSON.stringify(model);
       const reversed = await window.__buildRig([...rigs].reverse(),options);
       const rebuilt = await window.__buildRig(rigs,options);
@@ -2195,7 +2194,6 @@ def test_independent_sources_bind_shared_controls_pose_and_reset_without_vertex_
         separate:model.joints.every(joint => joint.members.length===1),
         localEdges:model.edges.every(edge => model.joints[edge.jointA].members[0].sourceKey===
           model.joints[edge.jointB].members[0].sourceKey),
-        graphMeasured:Number.isFinite(timings.graphBuildMs),
         partialControls:[...partialBinding.jointBindings.values()].map(value => value.controlKey),
         stable:original===JSON.stringify(reversed) && original===JSON.stringify(rebuilt),
         unbound:binding.unboundJointIds,rows,
@@ -2205,7 +2203,6 @@ def test_independent_sources_bind_shared_controls_pose_and_reset_without_vertex_
     assert result['mode'] == 'independent' and result['identity'] == 'source-local'
     assert result['jointCount'] == result['mapSize'] == 9
     assert result['separate'] and result['localEdges'] and result['stable']
-    assert result['graphMeasured']
     assert result['unbound'] == []
     assert result['partialControls'] == ['head', 'head']
     assert result['mapped'] == 'mapped' and result['automatic'] == 'automatic'
@@ -2670,6 +2667,40 @@ def test_surface_graph_rebaseline_discards_inflight_evidence(module_page):
     assert result['obsolete'] and result['cachePreserved']
     assert result['center'] == pytest.approx([10 + 1 / 3, 1 / 3, 0])
     assert result['weights'] == [1, 1, 1]
+
+
+def test_surface_graph_worker_pool_matches_cooperative_build_and_falls_back(module_page):
+    result = module_page.evaluate("""async () => {
+      const surface = await import('./js/weight-rig/weight-rig-surface.js');
+      const {createSurfaceGraphPool, buildSurfaceInfluenceGraphParallel} =
+        await import('./js/weight-rig/surface-graph-pool.js');
+      const positions = new Float32Array([0,0,0, 1,0,0, 0,1,0, 1,1,0, 2,1,0]);
+      const triangles = new Uint16Array([0,1,2, 1,3,2, 1,4,3]);
+      // Skin arrays are views into one shared download buffer.
+      const shared = new ArrayBuffer(256);
+      const indices = new Uint32Array(shared, 32, 10);
+      indices.set([1,2, 2,3, 1,3, 3,0, 2,3]);
+      const weights = new Float32Array(shared, 96, 10);
+      weights.set([0.5,0.5, 1,0, 0.25,0.75, 1,0, 0.4,0.6]);
+      const args = [positions, triangles, indices, weights, 2, [1,2,3], 2];
+      const expected = await surface.buildSurfaceInfluenceGraphCooperative(...args);
+      const pool = createSurfaceGraphPool({size: 2});
+      const parallel = await Promise.all([0,1,2].map(() => buildSurfaceInfluenceGraphParallel(...args, {pool})));
+      const stale = await buildSurfaceInfluenceGraphParallel(...args, {pool, isCurrent: () => false});
+      pool.terminate();
+      const missing = createSurfaceGraphPool({createWorker: () => null});
+      const broken = createSurfaceGraphPool({createWorker: () =>
+        new Worker(new URL('./js/weight-rig/missing-surface-worker.js', location.href), {type: 'module'})});
+      const fallbacks = await Promise.all([missing, broken].map(item => buildSurfaceInfluenceGraphParallel(...args, {pool: item})));
+      return {expected, parallel, stale, fallbacks, unavailable: [missing.available, broken.available],
+        inputsIntact: shared.byteLength === 256 && positions.length === 15 && indices[9] === 3};
+    }""")
+    assert result['parallel'] == [result['expected']] * 3
+    assert result['fallbacks'] == [result['expected']] * 2
+    assert result['stale'] is None
+    assert result['unavailable'] == [False, False]
+    assert result['inputsIntact']
+    assert result['expected']['validTriangleCount'] == 3
 
 
 def test_control_conditions_preserve_or_groups_negation_and_contradictions(module_page):

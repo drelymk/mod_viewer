@@ -7,10 +7,6 @@ import { createWorkBudget } from './cooperative-scheduler.js';
 import { weightRigStatus } from './weight-rig-status.js';
 import { mergeGameRigBindings } from './game-rig.js';
 
-function clockNow() {
-  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
-}
-
 function memberEvidenceArrays(member = {}) {
   const state = member.state || {};
   return [state.boneIds, member.surfaceIndices, state.indices, state.weights, state.baselinePositions];
@@ -110,57 +106,35 @@ export function createRigSourceSession({
   }
 
   async function aggregateInfluenceGraphCooperative(members, { budget, isCurrent = () => true }) {
-    const timings = {
-      sourceKey: String(states.get(members[0])?.skinningSourceKey || ''),
-      meshCount: 0,
-      vertexCount: 0,
-      triangleCount: 0,
-      meshPreparationMs: 0,
-      surfaceGraphMs: 0,
-    };
     const loadedMembers = [];
     for (const mesh of members) {
       if (!isCurrent()) return null;
       const state = states.get(mesh);
       if (!state?.loaded) continue;
-      const preparationStartedAt = clockNow();
       if (!ensureRigMeshPrepared(mesh, state)) return null;
-      timings.meshPreparationMs += clockNow() - preparationStartedAt;
       loadedMembers.push(preparedMember(mesh, state));
       await budget.checkpoint();
     }
     const uniqueMembers = await normalizeMembersCooperative(loadedMembers, budget, isCurrent);
-    if (!uniqueMembers) return null;
-    timings.meshCount = loadedMembers.length;
-    timings.vertexCount = uniqueMembers.reduce(
-      (sum, member) => sum + Math.floor((member.state.baselinePositions?.length || 0) / 3),
-      0,
+    if (!uniqueMembers || !isCurrent()) return null;
+    // Request every member graph at once so the worker pool builds them in
+    // parallel; validation and aggregation keep member order.
+    const memberGraphs = await Promise.all(
+      uniqueMembers.map((member) => ensureInfluenceGraphCooperative(member.mesh, member.state, { budget, isCurrent })),
     );
     const graphs = [];
-    for (const member of uniqueMembers) {
-      if (!isCurrent()) return null;
-      const graphStartedAt = clockNow();
-      const graph = await ensureInfluenceGraphCooperative(member.mesh, member.state, {
-        budget,
-        isCurrent,
-      });
-      if (!graph) return null;
-      if (!isCurrent()) return null;
+    for (const graph of memberGraphs) {
+      if (!graph || !isCurrent()) return null;
       if (!(graph.validTriangleCount > 0 && graph.totalSurfaceArea > 0)) {
         const error = new Error('Rig requires usable triangle geometry for every source member.');
         error.code = 'rig_surface_unavailable';
         throw error;
       }
-      timings.surfaceGraphMs += clockNow() - graphStartedAt;
-      timings.triangleCount += graph.triangleCount;
       graphs.push(graph);
-      await budget.checkpoint();
     }
+    await budget.checkpoint();
     const graph = aggregateInfluenceGraphs(graphs);
-    return {
-      ...finalizeInfluenceGraph(graph, loadedMembers, uniqueMembers),
-      __cooperativeTimings: timings,
-    };
+    return finalizeInfluenceGraph(graph, loadedMembers, uniqueMembers);
   }
 
   function assembleSourceSkinningRig(sourceKey, members, influenceGraph, inferredForest) {
@@ -205,27 +179,17 @@ export function createRigSourceSession({
       isCurrent,
     });
     if (!influenceGraph || !isCurrent()) return null;
-    const forestStartedAt = clockNow();
     const inferredForest = buildInferredRigForest(influenceGraph);
-    if (influenceGraph.__cooperativeTimings) {
-      influenceGraph.__cooperativeTimings.inferredForestMs = clockNow() - forestStartedAt;
-    }
     await budget.checkpoint();
     if (!isCurrent()) return null;
     const rig = assembleSourceSkinningRig(sourceKey, members, influenceGraph, inferredForest);
     await budget.checkpoint();
     if (!isCurrent()) return null;
-    const restFrameStartedAt = clockNow();
     rebuildRestFrames(rig);
-    if (influenceGraph.__cooperativeTimings) {
-      influenceGraph.__cooperativeTimings.restFrameMs = clockNow() - restFrameStartedAt;
-    }
     await budget.checkpoint();
     if (!isCurrent()) return null;
     rig.defaultInferredForest = cloneForest(rig.inferredForest);
     rig.defaultJointPivotByBoneId = new Map([...rig.jointPivotByBoneId].map(([boneId, pivot]) => [boneId, [...pivot]]));
-    rig.__cooperativeStats = budget.getStats();
-    rig.__cooperativeTimings = influenceGraph.__cooperativeTimings || null;
     return rig;
   }
 
@@ -237,21 +201,20 @@ export function createRigSourceSession({
   const sourceErrors = new Map();
 
   async function ensureCooperative(sourceKey, members, { isCurrent = () => true } = {}) {
-    const current = isCurrent;
-    if (!current()) return null;
+    if (!isCurrent()) return null;
     const existing = sourceSkinningRigs.get(sourceKey);
     if (existing && sameMeshSet(existing.meshes, members)) return existing;
     if (inFlight.has(sourceKey)) {
       const pending = await inFlight.get(sourceKey);
-      if (!current()) return null;
+      if (!isCurrent()) return null;
       if (pending && sameMeshSet(pending.meshes, members)) return pending;
     }
     const budget = createWorkBudget();
     const promise = (async () => {
       await budget.checkpoint();
-      if (!current()) return null;
-      const rig = await createSourceSkinningRigCooperative(sourceKey, members, budget, current);
-      if (!rig || !current()) return null;
+      if (!isCurrent()) return null;
+      const rig = await createSourceSkinningRigCooperative(sourceKey, members, budget, isCurrent);
+      if (!rig || !isCurrent()) return null;
       sourceErrors.delete(sourceKey);
       sourceSkinningRigs.set(sourceKey, rig);
       return rig;
@@ -260,7 +223,7 @@ export function createRigSourceSession({
     try {
       return await promise;
     } catch (error) {
-      if (current() && error.code === 'rig_surface_unavailable') {
+      if (isCurrent() && error.code === 'rig_surface_unavailable') {
         sourceErrors.set(sourceKey, error.message);
         sourceSkinningRigs.delete(sourceKey);
       }
@@ -290,25 +253,29 @@ export function createRigSourceSession({
     for (const sourceKey of sourceErrors.keys()) {
       if (!groups.has(sourceKey)) sourceErrors.delete(sourceKey);
     }
-    return [...sourceSkinningRigs.values()];
+    return [...groups.keys()].map((sourceKey) => sourceSkinningRigs.get(sourceKey)).filter(Boolean);
   }
 
-  async function buildAllCooperative({ generation = null, isCurrent = () => true } = {}) {
+  async function buildAllCooperative({ isCurrent = () => true } = {}) {
     const groups = groupLoadedMeshes();
-    const budget = createWorkBudget();
-    for (const [sourceKey, members] of groups) {
-      if (!isCurrent()) return null;
-      try {
-        const rig = await ensureCooperative(sourceKey, members, { generation, isCurrent });
-        if (!rig) return null;
-      } catch (error) {
-        if (error.code !== 'rig_surface_unavailable') throw error;
-      }
-      await budget.checkpoint();
+    // Build every source at once so their member graphs share the worker
+    // pool; outcomes, rigs and errors are still read in source order.
+    const outcomes = await Promise.all(
+      [...groups].map(([sourceKey, members]) =>
+        ensureCooperative(sourceKey, members, { isCurrent }).then(
+          (rig) => ({ rig }),
+          (error) => ({ error }),
+        ),
+      ),
+    );
+    for (const { rig, error } of outcomes) {
+      if (error && error.code !== 'rig_surface_unavailable') throw error;
+      if (!error && !rig) return null;
     }
     if (!isCurrent()) return null;
     const rigs = retainSourceRigs(groups);
-    if (!rigs.length && sourceErrors.size) throw new Error([...sourceErrors.values()][0]);
+    const surfaceError = [...groups.keys()].map((sourceKey) => sourceErrors.get(sourceKey)).find(Boolean);
+    if (!rigs.length && surfaceError) throw new Error(surfaceError);
     return rigs;
   }
 

@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 import { applyWeightedNormalDeformationInto, applyWeightedTransformDeformationInto } from './weight-deformation.js';
-import { buildSurfaceInfluenceGraphCooperative } from './weight-rig.js';
+import { buildSurfaceInfluenceGraphParallel } from './surface-graph-pool.js';
 import { buildSelectedWeightMask } from './weight-selection.js';
 import { EMPTY_ACTIVE_VERTICES } from './weight-runtime.js';
 import { createWorkBudget } from './cooperative-scheduler.js';
@@ -422,7 +422,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     }
     if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
     const radius = Number(mesh.geometry.boundingSphere?.radius);
-    const promise = buildSurfaceInfluenceGraphCooperative(
+    const promise = buildSurfaceInfluenceGraphParallel(
       baselinePositions,
       mesh.geometry?.index?.array || null,
       state.indices,
