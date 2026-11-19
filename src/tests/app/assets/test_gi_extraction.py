@@ -1,14 +1,18 @@
 """Synthetic Genshin Impact archive, metadata index and pointer contracts."""
 
+from collections import Counter
+from copy import deepcopy
 import json
 import os
 import shutil
 import threading
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
-from app.assets.game_extract import gi_index, gi_runtime
+from app.assets import index
+from app.assets.game_extract import gi_index, gi_pipeline, gi_runtime, zzz_index, zzz_native
 from app.settings import paths
 
 
@@ -154,3 +158,295 @@ def test_gi_client_command_and_folder_validation(tmp_path):
     assert client.command()[2] == str(folder.resolve())
     with pytest.raises(ValueError):
         gi_runtime.Client("helper.exe", tmp_path / "missing", tmp_path / "work", threading.Event())
+
+
+GI_BLOCK = "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/1.blk"
+GI_OTHER_BLOCK = "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/2.blk"
+
+
+def gi_row(name, kind, path_id, block=GI_BLOCK, offset=0, shape=None):
+    row = dict(name=name, type=kind, block=block, cab="CAB-01", offset=offset, file_ordinal=0, path_id=path_id)
+    if shape is not None:
+        row["shape"] = shape
+    return row
+
+
+def gimi_fixture(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Character01"
+    asset.mkdir(parents=True)
+    vertices = [[.2, .3, .4], [1.2, .4, .8], [.4, 1.2, .7]]
+    uv = [[.1, .2], [.3, .4], [.5, .6]]
+    vb = asset / "mesh-vb0=11111111.txt"
+    # Real GIMI dumps declare signed integer BLENDINDICES; the parser reads them as plain values.
+    lines = ["stride: 52", "vertex count: 3",
+             "element[0]: POSITION0, format: R32G32B32_FLOAT",
+             "element[1]: TEXCOORD0, format: R32G32_FLOAT",
+             "element[2]: BLENDWEIGHTS0, format: R32G32B32A32_FLOAT",
+             "element[3]: BLENDINDICES0, format: R32G32B32A32_SINT"]
+    for number, (position, texcoord) in enumerate(zip(vertices, uv)):
+        for name, values in (("POSITION", position), ("TEXCOORD", texcoord),
+                             ("BLENDWEIGHTS", [.75, .25, 0, 0]), ("BLENDINDICES", [8, 12, 0, 0])):
+            lines.append(f"vb0[{number}]+000 {name}: " + ", ".join(map(str, values)))
+    vb.write_text("\n".join(lines) + "\n")
+    ib = asset / "mesh-ib=22222222.txt"
+    ib.write_text("first index: 0\nindex count: 3\ntopology: trianglelist\n0 1 2\n")
+    (asset / "hash.json").write_text(json.dumps([dict(component_name="Body", position_vb="11111111",
+        ib="22222222", object_indexes=[0], object_indexes_count=[3], object_classifications=["A"],
+        vb_file=vb.name, ib_files=[ib.name])]))
+    record = index.build_index("GIMI", str(root))["assets"][0]
+    avatar = dict(name="Avatar_Type01_Name01_ModelAvatar", human=dict(synthetic=True), bones=[
+        dict(path="", hash=0, parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
+        dict(path="Root/Joint01", hash=100, parent=0, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 2, 1])])
+    mesh = dict(name="Body", vertices=np.array(vertices).ravel().tolist(),
+        uv=np.array(uv).ravel().tolist(), indices=[0, 1, 2], weights=[[.75, .25, 0, 0]] * 3,
+        bone_indices=[[0, 1, 0, 0]] * 3, bone_hashes=[0, 100],
+        bind_poses=[matrix.ravel(order="C").tolist() for matrix in (np.eye(4), np.diag([1, .5, 1, 1]))],
+        sections=[dict(first=0, count=3, vertex_first=0, vertex_count=3)])
+    shape = [[3, 3]]
+    rows = [gi_row(avatar["name"], "Avatar", 1),
+            gi_row("Body", "Mesh", 2, shape=shape),
+            # Same name and shape in another bundle must never be read for this Avatar.
+            gi_row("Body", "Mesh", 3, offset=64, shape=shape),
+            gi_row("Body_LOD1", "Mesh", 4, shape=shape)]
+    documents = {1: avatar, 2: mesh, 3: deepcopy(mesh), 4: deepcopy(mesh)}
+
+    class Client:
+        def __init__(self):
+            self.documents, self.reads = documents, Counter()
+        def read(self, row):
+            self.reads[(row["type"], row["path_id"])] += 1
+            return deepcopy(self.documents[row["path_id"]])
+    return str(root), asset, record, rows, Client()
+
+
+def test_gi_rig_proof_uses_colocated_meshes_and_skips_other_bundles(tmp_path):
+    root, asset, record, rows, client = gimi_fixture(tmp_path)
+    chosen, rig, previous, captured, _fingerprints = gi_pipeline.prove_rig(
+        client, root, record, None, lambda *_: None, threading.Event(), rows)
+    assert client.reads == Counter({("Avatar", 1): 1, ("Mesh", 2): 1})
+    assert chosen["source"] == zzz_index.identity(rows[0])
+    assert chosen["meshes"] == [zzz_index.identity(rows[1])]
+    assert list(chosen["matched"]) == [0]
+    assert len(captured[0]["blends"]) == 3
+    assert previous is None
+    assert rig["bones"][0]["name"] == "mesh-space"
+    assert len(rig["bones"]) == len(client.documents[1]["bones"]) + 1
+    assert rig["skin_bindings"][0]["encoding"] == "gimi_f32_u32_4"
+
+
+def test_gi_rig_proof_rejects_wrong_weights_and_reports_label(tmp_path):
+    root, asset, record, rows, client = gimi_fixture(tmp_path)
+    client.documents[2]["weights"] = [[.5, .5, 0, 0]] * 3
+    with pytest.raises(ValueError, match="No Genshin Impact mesh could be verified"):
+        gi_pipeline.prove_rig(client, root, record, None, lambda *_: None, threading.Event(), rows)
+
+
+def test_gi_equivalent_avatar_copies_ignore_humanoid_data(tmp_path):
+    root, asset, record, rows, client = gimi_fixture(tmp_path)
+    copy = gi_row("Avatar_Type01_Name01_ModelAvatar", "Avatar", 5, block=GI_OTHER_BLOCK)
+    copy_mesh = gi_row("Body", "Mesh", 6, block=GI_OTHER_BLOCK, shape=[[3, 3]])
+    rows += [copy, copy_mesh]
+    # Only the Humanoid payload differs; skeleton and palette identity are equal.
+    client.documents[5] = {**deepcopy(client.documents[1]), "human": {"synthetic": False}}
+    client.documents[6] = deepcopy(client.documents[2])
+    chosen, *_ = gi_pipeline.prove_rig(client, root, record, None, lambda *_: None, threading.Event(), rows)
+    assert chosen["avatar_sources"] == {zzz_index.identity(rows[0]), zzz_index.identity(copy)}
+    # Equivalent copies are proven once; the other copy's native mesh is not read.
+    assert client.reads[("Mesh", 2)] + client.reads[("Mesh", 6)] == 1
+
+
+def test_gi_placement_tolerates_bind_noise_that_zzz_rejects(tmp_path):
+    root, asset, record, rows, client = gimi_fixture(tmp_path)
+    noisy = np.asarray(client.documents[2]["bind_poses"][1]).reshape(4, 4)
+    noisy[0, 3] += 5e-4  # Sub-millimetre inverse-bind noise on one joint.
+    client.documents[2]["bind_poses"][1] = noisy.ravel().tolist()
+    avatar = client.documents[1]
+    assert zzz_native.mesh_placement(client.documents[2], avatar) is None
+    assert zzz_native.mesh_placement(client.documents[2], avatar, gi_pipeline.PLACEMENT_TOLERANCE) is not None
+    chosen, *_ = gi_pipeline.prove_rig(client, root, record, None, lambda *_: None, threading.Event(), rows)
+    assert list(chosen["matched"]) == [0]
+    noisy[0, 3] += 5e-3  # A real placement disagreement still fails closed.
+    client.documents[2]["bind_poses"][1] = noisy.ravel().tolist()
+    with pytest.raises(ValueError, match="No Genshin Impact mesh could be verified"):
+        gi_pipeline.prove_rig(client, root, record, None, lambda *_: None, threading.Event(), rows)
+
+
+def test_gi_unproven_name_match_falls_back_to_geometry_but_not_on_cancel(tmp_path):
+    from app.assets.game_extract.runtime import ExtractionCancelled
+
+    root, asset, record, rows, client = gimi_fixture(tmp_path)
+    # A different character whose name contains the query, with its own unrelated mesh.
+    rows += [gi_row("Avatar_Type01_Name01Shadow_ModelAvatar", "Avatar", 7, block=GI_OTHER_BLOCK),
+             gi_row("Body", "Mesh", 8, block=GI_OTHER_BLOCK, shape=[[3, 3]])]
+    client.documents[7] = deepcopy(client.documents[1])
+    client.documents[8] = {**deepcopy(client.documents[2]), "weights": [[.5, .5, 0, 0]] * 3}
+    chosen, *_ = gi_pipeline.prove_rig(client, root, record, "Shadow", lambda *_: None, threading.Event(), rows)
+    assert chosen["source"] == zzz_index.identity(rows[0])
+    assert client.reads[("Avatar", 7)] >= 1  # The name attempt read the wrong character first.
+    cancel = threading.Event()
+    cancel.set()
+    with pytest.raises(ExtractionCancelled):
+        gi_pipeline.prove_rig(client, root, record, "Shadow", lambda *_: None, cancel, rows)
+
+
+FAMILY = "Avatar_Type01_Name01"
+HAIR, ACCESSORY = 100, 101
+
+
+def clip(name, start, stop, bindings, values):
+    """Helper-shaped clip metadata; ``values`` are ACL frames in binding order."""
+    rows = [dict(path=path, attribute=attribute, type=kind, custom=custom, pointer=0) for kind, custom, path, attribute in bindings]
+    return dict(name=name, start=start, stop=stop, times=[start, stop], acl_count=len(values[0]), streamed_count=0, streamed=[],
+                dense=dict(count=0), constant=[], mirror=False, bindings=rows, values=values)
+
+
+def animated_fixture(tmp_path):
+    from tests.support.humanoid_data import humanoid
+
+    root, asset, record, rows, client = gimi_fixture(tmp_path)
+    human = humanoid()
+    count = len(human["pose"])
+    human["skeleton_index"] = list(range(count))
+    bones = [dict(path="" if node == 0 else f"Root/Node{node:02d}", hash=0 if node == 0 else 1000 + node, parent=parent,
+                  translation=pose["translation"], rotation=pose["rotation"], scale=[1, 1, 1])
+             for node, (parent, pose) in enumerate(zip(human["skeleton"]["parent"], human["pose"]))]
+    # The mesh's second palette joint, animated only by the streamer layer.
+    bones.append(dict(path="Root/Joint01", hash=HAIR, parent=0, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 2, 1]))
+    bones.append(dict(path="Root/Joint02", hash=ACCESSORY, parent=0, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
+    client.documents[1] = dict(name=FAMILY + "_ModelAvatar", human=human, bones=bones)
+    hips = 1000 + human["bone_index"][0]
+    root_curves = [("Animator", 8, 0, attribute) for attribute in range(14)]
+    identity_root = [0, 0, 0, 0, 0, 0, 1, 0, .9, 0, 0, 0, 0, 1]
+    body_bindings = root_curves + [("Transform", 0, hips, 2), ("Transform", 0, 999, 1), ("Animator", 8, 0, 150), ("Animator", 5, 0, 0)]
+    body_frame = identity_root + [0, 0, 0, 1, 0, 0, 0, 0, 0]
+    client.documents[20] = clip("Body01", 0.0, 1.0, body_bindings, [body_frame, body_frame])
+    # The same body with a hand IK goal ten metres away cannot be a correct Humanoid conversion.
+    goal_bindings = body_bindings + [("Animator", 8, 0, 28 + axis) for axis in range(3)]
+    client.documents[23] = clip("Body02", 0.0, 1.0, goal_bindings, [body_frame + [10, 0, 0], body_frame + [10, 0, 0]])
+    client.documents[24] = clip("Empty01", 0.0, 1.0, [], [[], []])
+    streamer_bindings = [("Transform", 0, HAIR, 1), ("Transform", 0, hips, 1), ("Transform", 0, ACCESSORY, 1), ("Animator", 8, 0, 0)]
+    client.documents[21] = clip("Layer01", 0.0, 2.0, streamer_bindings,
+                                [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [2, 0, 0, 5, 5, 5, 3, 3, 3, 0]])
+
+    def leaf(path_id, cab="CAB-02"):
+        return dict(cab=cab.lower(), path_id=path_id, node_index=0, threshold=None)
+
+    def motion(*leaves):
+        return dict(blend_type=0, leaves=list(leaves))
+
+    def state(name, motions, mirror=False):
+        return dict(name=name, speed=1.0, mirror=mirror, mirror_param=0, ik_on_feet=False, motions=motions)
+
+    client.documents[30] = dict(name=FAMILY, layers=[
+        dict(name="Base Layer", state_machine=0, motion_set=0, blend_mode=0, weight=0.0, synced_affects_timing=False, skeleton_mask=[]),
+        dict(name="StreamerSyncLayer", state_machine=0, motion_set=1, blend_mode=0, weight=1.0, synced_affects_timing=False,
+             skeleton_mask=[dict(path_hash=HAIR, weight=1.0), dict(path_hash=hips, weight=1.0)])],
+        states=[state("Tree", [motion(leaf(20), leaf(23)), motion(leaf(21), leaf(21))]),
+                state("Idle", [motion(leaf(20)), motion(leaf(21))]),
+                state("Mirrored", [motion(leaf(20)), motion(leaf(21))], mirror=True),
+                state("Uneven", [motion(leaf(20), leaf(23)), motion(leaf(21))]),
+                state("Missing", [motion(leaf(20, "CAB-99")), motion(leaf(21))]),
+                state("Empty", [None, motion(leaf(21))]),
+                state("Silent", [motion(leaf(24)), motion(leaf(21))])])
+    rows += [gi_row(FAMILY, "AnimatorController", 30),
+             *({**gi_row(name, "AnimationClip", path_id), "cab": "CAB-02"}
+               for name, path_id in (("Body01", 20), ("Layer01", 21), ("Body02", 23), ("Empty01", 24)))]
+    client.work = tmp_path / "work"
+    client.work.mkdir()
+    read = client.read
+
+    def read_with_samples(row):
+        document = read(row)
+        if row["type"] == "AnimationClip":
+            values = np.asarray(document.pop("values"), dtype="<f4")
+            document["file"] = "samples-%d.bin" % row["path_id"]
+            (client.work / document["file"]).write_bytes(values.tobytes())
+        return document
+    client.read = read_with_samples
+    return root, asset, record, rows, client
+
+
+def validate_rig_document(file):
+    from app.assets.rig import validate_rig
+
+    return validate_rig(json.loads(file.read_text()))
+
+
+def test_gi_build_layers_controller_states_and_keeps_clip_identity(tmp_path):
+    from app.assets.animations import read_clip
+
+    root, asset, record, rows, client = animated_fixture(tmp_path)
+    output = tmp_path / "output"
+    report, _ = gi_pipeline.build(client, root, record, output, None, lambda *_: None, threading.Event(), rows)
+    assert report["game"] == "gi" and report["imported"] == 1
+    # A plain state's name wins over a blend-tree leaf that shares the same clips.
+    assert [item["state"] for item in report["animations"]] == ["Idle"]
+    reasons = {item["state"]: item["reason"] for item in report["skipped_details"]}
+    assert set(reasons) == {"Tree 2", "Mirrored", "Uneven", "Missing", "Empty", "Silent"}
+    assert "no animation curves" in reasons["Silent"]
+    assert "IK goals" in reasons["Tree 2"] and "mirrored" in reasons["Mirrored"]
+    assert "differ" in reasons["Uneven"] and "pointer" in reasons["Missing"] and "no body motion" in reasons["Empty"]
+    rig = validate_rig_document(output / "Rig.json")
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    entry = manifest["clips"][0]
+    metadata, data = read_clip(str(output / "Animation"), entry, rig)
+    layers = metadata["layers"]
+    assert layers["omitted"] == dict(non_transform=1, translation_dof=1, humanoid_owned=2, unbound=1, masked=1)
+    assert layers["body_duration"] == 1.0 and layers["streamer_duration"] == 2.0
+    frames = np.frombuffer(data, dtype="<f4").reshape(metadata["frame_count"], len(rig["bones"]), 10)
+    names = [bone["name"] for bone in rig["bones"]]
+    hair, accessory = names.index("Root/Joint01"), names.index("Root/Joint02")
+    # The 2 s streamer follows the 1 s body's normalized time.
+    middle = metadata["frame_count"] // 2
+    assert np.allclose(frames[[0, middle, -1], hair, 0], [0, 1, 2], atol=1e-5)
+    assert np.allclose(frames[:, accessory, :3], 0)
+    # The Humanoid owns the hips: neither layer's Transform curve reaches them.
+    hips = names.index("Root/Node01")
+    assert not np.allclose(frames[-1, hips, :3], 5)
+    assert np.allclose(np.linalg.norm(frames[:, hips, 3:7], axis=1), 1, atol=1e-5)
+    # Reimporting over the installed library keeps the same clip identity.
+    shutil.copytree(output, asset, dirs_exist_ok=True)
+    again, _ = gi_pipeline.build(client, root, record, tmp_path / "again", None, lambda *_: None, threading.Event(), rows)
+    assert [item["id"] for item in again["animations"]] == [entry["id"]]
+
+
+def _remove_controller(rows, client):
+    rows[:] = [row for row in rows if row["type"] != "AnimatorController"]
+
+
+def _duplicate_controller(rows, client):
+    controller = next(row for row in rows if row["type"] == "AnimatorController")
+    rows.append({**controller, "block": GI_OTHER_BLOCK})
+
+
+def _break_humanoid_map(rows, client):
+    human = client.documents[1]["human"]
+    human["skeleton_index"] = [0, *reversed(human["skeleton_index"][1:])]
+
+
+@pytest.mark.parametrize("change, match", [
+    (_remove_controller, "controller is missing or ambiguous"),
+    (_duplicate_controller, "controller is missing or ambiguous"),
+    (_break_humanoid_map, "does not match the Avatar hierarchy"),
+])
+def test_gi_build_requires_one_controller_and_a_consistent_humanoid(tmp_path, change, match):
+    root, asset, record, rows, client = animated_fixture(tmp_path)
+    change(rows, client)
+    with pytest.raises(ValueError, match=match):
+        gi_pipeline.build(client, root, record, tmp_path / "output", None, lambda *_: None, threading.Event(), rows)
+
+
+def test_gi_streamer_layer_follows_its_own_motion_set_after_an_additive_layer(tmp_path):
+    root, asset, record, rows, client = animated_fixture(tmp_path)
+    controller = client.documents[30]
+    base, streamer = controller["layers"]
+    additive = dict(name="AdjustLayer", state_machine=0, motion_set=1, blend_mode=1, weight=1.0,
+                    synced_affects_timing=False, skeleton_mask=[])
+    controller["layers"] = [base, additive, {**streamer, "motion_set": 2}]
+    for state in controller["states"]:
+        # Motion set 1 now belongs to the additive layer, which is not applied.
+        state["motions"] = [state["motions"][0], None, *state["motions"][1:]]
+    report, _ = gi_pipeline.build(client, root, record, tmp_path / "output", None, lambda *_: None, threading.Event(), rows)
+    assert report["streamer_layer"] == "StreamerSyncLayer" and report["unapplied_layers"] == ["AdjustLayer"]
+    assert [item["layers"]["streamer_name"] for item in report["animations"]] == ["Layer01"]

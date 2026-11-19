@@ -45,7 +45,9 @@ internal static class GiExport
     {
         var constant = avatar.m_Avatar;
         var skeleton = constant.m_AvatarSkeleton;
-        var poses = constant.m_AvatarSkeletonPose.m_X;
+        // Genshin meshes are bound in the model's default pose; the skeleton pose is the
+        // Humanoid-normalized one, so only the default pose proves mesh inverse binds.
+        var poses = constant.m_DefaultPose?.m_X ?? throw new InvalidDataException();
         int count = skeleton.m_Node.Count;
         if (count < 1 || count > 4096 || skeleton.m_ID.Length != count || poses.Length != count
             || skeleton.m_ID.Distinct().Count() != count)

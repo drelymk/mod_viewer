@@ -786,7 +786,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 texture_candidates=texture_candidates, metadata_path=item.metadata_path,
                 metadata_entry=item.entry_index, texture_range=ordinal,
                 skinning=(capture_dump_skinning(root, item.vb_file, vertex_dump.layout, used_vertices, _ib_file)
-                          if asset_type == "ZZMI" else None)))
+                          if asset_type in ("ZZMI", "GIMI") else None)))
     if not parts:
         raise AssetLoadError("Asset contains no complete renderable parts.")
     return AssetAdapterResult(tuple(parts), tuple(warnings))

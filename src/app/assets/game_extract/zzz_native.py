@@ -13,9 +13,12 @@ from core.geometry.migoto_dump import parse_vertex_dump
 from .native import read_limited
 from .pipeline import rest_worlds
 
+_LABELS = {"ZZMI": "ZZZ", "GIMI": "Genshin Impact"}
 
-def capture(root, record):
-    result = load_hash_asset("ZZMI", root, record)
+
+def capture(root, record, asset_type="ZZMI"):
+    label = _LABELS[asset_type]
+    result = load_hash_asset(asset_type, root, record)
     asset = Path(paths.safe_asset_dir(root, record["path"]) or "")
     components, files, dumps = [], {}, {}
     for part in result.parts:
@@ -26,7 +29,7 @@ def capture(root, record):
         ib = paths.safe_asset_path(root, manifest.index_file)
         metadata = paths.safe_asset_path(root, part.metadata_path)
         if not all((vb, ib, metadata)):
-            raise ValueError("The captured ZZZ geometry is unavailable.")
+            raise ValueError(f"The captured {label} geometry is unavailable.")
         for file in (vb, ib, metadata):
             if file not in files:
                 files[file] = hashlib.sha256(read_limited(file, 512 * 1024 * 1024, "Captured geometry")).hexdigest()
@@ -49,7 +52,7 @@ def capture(root, record):
             uv=np.frombuffer(part.uvs, dtype="<f4").reshape(-1, 2) if part.uvs else None,
             indices=np.frombuffer(part.indices, dtype="<u4").reshape(-1, 3), blends=blends))
     if not components:
-        raise ValueError("ZZZ rig extraction requires captured vertex weights and index dumps.")
+        raise ValueError(f"{label} rig extraction requires captured vertex weights and index dumps.")
     return components, files
 
 
@@ -73,7 +76,7 @@ def avatar_bones(avatar):
     return bones
 
 
-def mesh_placement(mesh, avatar):
+def mesh_placement(mesh, avatar, tolerance=2e-4):
     """Require every used inverse bind to prove one common mesh-to-Avatar placement."""
     bones = avatar_bones(avatar)
     worlds = rest_worlds(bones, affine=True)
@@ -91,7 +94,7 @@ def mesh_placement(mesh, avatar):
     # ReadMatrix and the native indexer preserve ZZZ's serialized row-major
     # float order despite Matrix4x4's column-major field names.
     matrices = [worlds[mapping[bone]] @ np.asarray(poses[bone]).reshape(4, 4) for bone in used]
-    if not all(np.allclose(matrix, matrices[0], rtol=0, atol=2e-4) for matrix in matrices):
+    if not all(np.allclose(matrix, matrices[0], rtol=0, atol=tolerance) for matrix in matrices):
         return None
     return mapping, matrices[0]
 

@@ -54,7 +54,9 @@ Scans list meshes (with section shapes), Avatars, animation clips and
 AnimatorControllers with complete locators. Reads export:
 
 - meshes whose skin covers every vertex (packed or partial skins are rejected);
-- the Avatar skeleton with `m_TOS` paths, plus its Humanoid definition (human
+- the Avatar skeleton with `m_TOS` paths and the model's default pose, which is
+  the pose Genshin meshes are bound in (the Avatar skeleton pose is Humanoid
+  normalized and does not prove inverse binds), plus its Humanoid definition (human
   skeleton, ZYRoll axes and limits, bone/hand indices, masses, scale, twist
   settings, human-to-Avatar node map and root). Other axes types are rejected;
 - clips decoded by the rebuilt database ACL decoder, in the ZZZ clip shape plus
