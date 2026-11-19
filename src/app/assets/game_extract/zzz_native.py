@@ -20,9 +20,9 @@ def capture(root, record, asset_type="ZZMI"):
     label = _LABELS[asset_type]
     result = load_hash_asset(asset_type, root, record)
     asset = Path(paths.safe_asset_dir(root, record["path"]) or "")
-    components, files, dumps = [], {}, {}
+    components, rigid, files, dumps = [], [], {}, {}
     for part in result.parts:
-        manifest = part.skinning
+        manifest = part.skinning or part.rigid_attachment
         if manifest is None:
             continue
         vb = paths.safe_asset_path(root, manifest.file)
@@ -36,24 +36,29 @@ def capture(root, record, asset_type="ZZMI"):
         if vb not in dumps:
             dumps[vb] = parse_vertex_dump(vb, include_skinning=True)
         dump = dumps[vb]
-        if not dump.blend_data:
-            continue
-        blends = [struct.unpack_from("<4f4I", dump.blend_data, vertex * 32) for vertex in manifest.vertices]
-        components.append(dict(geometry_hash=part.geometry_hash, component_ordinal=part.component_ordinal,
+        component = dict(geometry_hash=part.geometry_hash, component_ordinal=part.component_ordinal,
             first_index=part.first_index, index_count=part.index_count,
             vertex_sha256=files[vb], index_sha256=files[ib], metadata_sha256=files[metadata],
             vertex_file=Path(vb).relative_to(asset).as_posix(), index_file=Path(ib).relative_to(asset).as_posix(),
             metadata_file=Path(metadata).relative_to(asset).as_posix(), metadata_entry=part.metadata_entry,
-            blend_sha256=hashlib.sha256(dump.blend_data).hexdigest(),
             source_vertex_count=dump.layout.vertex_count,
             source_vertices=manifest.vertices,
             positions=np.frombuffer(part.positions, dtype="<f4").reshape(-1, 3),
             normals=np.frombuffer(part.normals, dtype="<f4").reshape(-1, 3) if part.normals else None,
             uv=np.frombuffer(part.uvs, dtype="<f4").reshape(-1, 2) if part.uvs else None,
-            indices=np.frombuffer(part.indices, dtype="<u4").reshape(-1, 3), blends=blends))
+            indices=np.frombuffer(part.indices, dtype="<u4").reshape(-1, 3))
+        if part.skinning is None:
+            # Weightless captures (GIMI head-attached faces) are proven separately
+            # as whole-mesh single-bone attachments; they never carry a Blend palette.
+            rigid.append({**component, "rigid": True})
+            continue
+        if not dump.blend_data:
+            continue
+        blends = [struct.unpack_from("<4f4I", dump.blend_data, vertex * 32) for vertex in manifest.vertices]
+        components.append({**component, "blend_sha256": hashlib.sha256(dump.blend_data).hexdigest(), "blends": blends})
     if not components:
         raise ValueError(f"{label} rig extraction requires captured vertex weights and index dumps.")
-    return components, files
+    return components + rigid, files
 
 
 def avatar_bones(avatar):
@@ -144,6 +149,75 @@ def match_component_candidates(part, mesh):
         if palette:
             matches.append((palette, signs, mapping))
     return matches
+
+
+def _single_bone(mesh):
+    """The one native palette slot carrying every vertex's full weight, or None."""
+    bones = set()
+    weights, indices = mesh.get("weights") or [], mesh.get("bone_indices") or []
+    if len(weights) != len(mesh["vertices"]) // 3 or len(indices) != len(weights):
+        return None
+    for row, ids in zip(weights, indices):
+        used = {int(bone) for weight, bone in zip(row, ids) if weight > 0}
+        if len(used) != 1 or abs(sum(weight for weight in row if weight > 0) - 1) > 2e-5:
+            return None
+        bones |= used
+        if len(bones) > 1:
+            return None
+    bone = next(iter(bones), None)
+    return bone if bone is not None and 0 <= bone < len(mesh.get("bone_hashes") or []) else None
+
+
+def match_rigid_candidates(part, mesh):
+    """Prove a weightless capture as a rigid attachment of a single-bone native mesh.
+
+    Every native vertex carries its full weight on one bone, so any drawn subset
+    binds identically: the captured triangle multiset must be contained in one
+    native section, with each vertex uniquely matched by position and UV.
+    """
+    bone = _single_bone(mesh)
+    native = np.asarray(mesh["vertices"], dtype=float).reshape(-1, 3)
+    uv = np.asarray(mesh["uv"], dtype=float)
+    if (bone is None or not 0 < len(native) <= 250000 or not np.isfinite(native).all()
+            or uv.ndim != 1 or uv.size not in (len(native) * 2, len(native) * 3, len(native) * 4)):
+        return []
+    uv = uv.reshape(len(native), -1)[:, :2].copy()
+    uv[:, 1] = 1 - uv[:, 1]
+    indices = np.asarray(mesh["indices"], dtype=int).reshape(-1, 3)
+    if (part["uv"] is None or not np.isfinite(uv).all() or len(indices) > 500000
+            or np.min(indices) < 0 or np.max(indices) >= len(native)):
+        return []
+    matches = []
+    for signs in ((1, 1, 1), (-1, 1, 1), (1, -1, 1), (1, 1, -1)):
+        positions = native * signs
+        original = np.asarray(part["source_vertices"], dtype=int)
+        mapping = None
+        if (len(original) == len(part["positions"]) and len(original) and np.max(original) < len(native)
+                and np.allclose(part["positions"], positions[original], rtol=0, atol=1e-4)
+                and np.allclose(part["uv"], uv[original], rtol=0, atol=1e-4)):
+            mapping = dict(enumerate(int(vertex) for vertex in original))
+        if mapping is None or not _contained_triangles(part, mesh, indices, mapping):
+            mapping = _triangle_mapping(part, positions, uv, indices)
+        if mapping is None or not _contained_triangles(part, mesh, indices, mapping):
+            continue
+        matches.append(({"0": bone}, signs, mapping))
+    return matches
+
+
+def _contained_triangles(part, mesh, indices, mapping):
+    """Captured triangles, with repeats, form a sub-multiset of one native section."""
+    if len(mapping) != len(part["positions"]):
+        return False
+    captured = Counter(tuple(sorted(mapping[int(vertex)] for vertex in row)) for row in part["indices"])
+    for section in mesh.get("sections", [dict(first=0, count=len(indices) * 3)]):
+        first, count = section["first"], section["count"]
+        if (type(first) is not int or type(count) is not int or first < 0 or first % 3 or count % 3
+                or count < len(part["indices"]) * 3 or first + count > len(indices) * 3):
+            continue
+        native = Counter(tuple(sorted(row)) for row in indices[first // 3:(first + count) // 3])
+        if all(native[triangle] >= number for triangle, number in captured.items()):
+            return True
+    return False
 
 
 def _same_triangles(part, mesh, indices, mapping):

@@ -106,6 +106,10 @@ layout is not supported). Indexing reads every block once (a few minutes); a
 Extraction finds the character's Avatar from the meshes in the same bundle, proves
 every captured component against native triangles, UVs, float weights and inverse
 binds, and writes a version 2 rig referenced to the model's default pose.
+Face parts captured without weights are proven as rigid attachments of a native
+mesh skinned entirely to one bone (normally the head), so they follow it during
+playback of the Asset; `RigExtraction.json` counts them as `rigid_attachments`.
+A mod's own weightless draws are not bound this way.
 
 Body animation comes from Humanoid muscle curves, usually shared by a body type,
 and is converted in place. Each controller state becomes one clip that adds the

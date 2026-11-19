@@ -188,7 +188,11 @@ export function createWeightModelSession({
       (mesh) => eligibleSkinningMesh(mesh) || (mesh.userData?.assetFill && mesh.userData.animationSkinningToken),
     );
     const pendingFill = meshes.filter(
-      (mesh) => mesh.userData.assetFill && !states.get(mesh)?.loaded && !states.get(mesh)?.error,
+      (mesh) =>
+        mesh.userData.assetFill &&
+        !states.get(mesh)?.loaded &&
+        !states.get(mesh)?.error &&
+        !states.get(mesh)?.attachmentUnproven,
     );
     // Loaded editable weights stay installed; a later Asset Fill only adds its own meshes.
     const fillOnly = modelWeightState.loaded;
@@ -252,6 +256,12 @@ export function createWeightModelSession({
           if (!knownMeshes.has(mesh)) continue;
           const state = stateFor(mesh);
           const entry = preview?.meshes?.[mesh.userData.semanticKey];
+          if (!entry && mesh.userData.rigAttachmentAvailable && !mesh.userData.skinningAvailable) {
+            // An unproven weightless part simply has no weights; it is not a load error.
+            state.loaded = false;
+            state.attachmentUnproven = true;
+            continue;
+          }
           if (!entry || entry.status !== 'ok') {
             state.error = entry?.error || 'No usable skin weights were returned.';
             state.loaded = false;

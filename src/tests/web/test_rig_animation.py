@@ -163,6 +163,63 @@ def test_auto_weight_rig_load_order_and_viewport_playback_lifecycle(viewer, kind
     assert errors == []
 
 
+def test_asset_playback_keeps_proven_rigid_attachments_and_skips_unproven_ones(viewer):
+    payload, weights = weighted_payload()
+    extra = model_payload(3)
+    for key in ('mesh-01', 'mesh-02'):
+        mesh = extra['meshes'][key]
+        for field in ('pos', 'uv', 'idx'):
+            data = extra['_fixture_blob'][mesh[field]['offset']:mesh[field]['offset'] + mesh[field]['length']]
+            mesh[field] = {'offset': len(payload['_fixture_blob']), 'length': len(data)}
+            payload['_fixture_blob'] += data
+        # Weightless Asset parts: only a returned rigid entry may bind them.
+        payload['meshes'][key] = {**mesh, 'rig_attachment_available': True}
+    payload['metadata'].update(source_kind='asset', asset=dict(rig_session='session01', path='Asset01'))
+    bones = [dict(name='Root', parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1]),
+             dict(name='Joint01', parent=0, translation=[1, 0, 0], rotation=[0, 0, 0, 1])]
+    weights['game_rigs'] = {'rig01': dict(id='rig01', version=2, bones=bones, animation_session='session01',
+        animations=[dict(id='clip01', name='clip01', duration=1)])}
+    weights['meshes']['mesh-00'].update(game_rig_id='rig01', game_bone_map={'0': 0, '1': 1})
+    offset = len(weights['_fixture_blob'])
+    weights['_fixture_blob'] += struct.pack('<3I3f', 0, 0, 0, 1, 1, 1)
+    weights['meshes']['mesh-01'] = {
+        'status': 'ok', 'vertex_count': 3, 'influence_count': 1, 'bone_ids': [0], 'encoding': 'rigid_u32_1',
+        'weight_stats': {'0': {'bone_id': 0, 'affected_vertex_count': 3, 'total_weight': 3}},
+        'source': {'key': 'part-01.txt|rigid', 'file': 'part-01.txt', 'bone_id_offset': 0},
+        'data': {'indices': {'offset': offset, 'length': 12, 'type': 'u32'},
+                 'weights': {'offset': offset + 12, 'length': 12, 'type': 'f32'}},
+        'game_rig_id': 'rig01', 'game_bone_map': {'0': 1}}
+    page = viewer({'model01': payload, 'fixture-weights': weights}, preferences={'autoLoadWeightRig': True})
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.evaluate('''() => {
+      window.pywebview.api.get_asset_skinning_preview=window.pywebview.api.get_model_skinning_preview;
+      const values=new Float32Array([0,0,0,0,0,0,1, 1,0,0,0,0,0,1, 0,0,0,0,0,0,1, 1,0,0,0,0,0,1]);
+      const url=URL.createObjectURL(new Blob([values]));
+      window.pywebview.api.get_asset_animation=async ()=>({status:'ok',clip:{skeleton_id:'rig01',frame_count:2,
+        bone_count:2,duration:1,data:{url,length:values.byteLength}}});
+    }''')
+    assert page.evaluate("window.modViewer.switchAsset('model01',{asset:true})")
+    wait_loaded(page, 3)
+    page.evaluate('''async () => {
+      window.__rigidFeature=await import('./js/weight-rig/weight-rig-feature.js');
+    }''')
+    page.wait_for_function('window.__rigidFeature.getLoadedWeightRigFeature()?.getRigAnimationState().playing')
+    page.evaluate('window.__rigidRig=window.__rigidFeature.getLoadedWeightRigFeature()')
+    report = page.evaluate('''async () => {
+      const {weightRigSkinningRuntime:skin}=await import('./js/weight-rig/weight-rig-core.js');
+      const meshes=window.modViewer.activeMeshes;
+      return {visible:meshes.map(mesh=>mesh.visible),
+        loaded:meshes.map(mesh=>!!skin.getSkinningState(mesh)?.loaded),
+        errors:meshes.map(mesh=>skin.getSkinningState(mesh)?.error || null),
+        weightError:window.__rigidRig.getModelWeightState().error || null};
+    }''')
+    # The proven rigid part plays with the skinned part; the unproven one is filtered, not an error.
+    assert report == {'visible': [True, True, False], 'loaded': [True, True, False],
+                      'errors': [None, None, None], 'weightError': None}, report
+    assert errors == []
+
+
 def test_affine_clip_preserves_reference_scale_and_normal_inverse_transpose(module_page):
     result = module_page.evaluate('''async () => {
       const T = await import('three');

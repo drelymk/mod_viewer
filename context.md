@@ -1115,7 +1115,9 @@ of documentation, comments and tests; use portable fixtures instead.
   dense, streamed Hermite and constant tracks into endpoint-inclusive TQS samples;
   unknown transform paths reject a clip and omitted non-transform channels remain
   explicit in metadata/reports. Prove whole native submesh triangle multisets,
-  including repeated triangles, in both correspondence paths. Bound intermediate
+  including repeated triangles, in both correspondence paths (GIMI single-bone
+  rigid attachments, whose palette cannot depend on the drawn subset, prove a
+  sub-multiset instead). Bound intermediate
   Float64 curve sampling before reading/allocating it, independently of clip size.
   Facial curves require captured-geometry correspondence, native shape hashes,
   and a renderer path under the proven Animator Avatar. Resolve explicit mesh
@@ -1149,7 +1151,17 @@ of documentation, comments and tests; use portable fixtures instead.
   name match falls back to geometry and never swallows cancellation. Meshes are
   bound in the Avatar's default pose, which is the exported rig reference; the
   Humanoid-normalized skeleton pose never proves inverse binds. GI placement
-  tolerates 1e-3 inverse-bind noise; ZZZ keeps 2e-4.
+  tolerates 1e-3 inverse-bind noise; ZZZ keeps 2e-4. GI submeshes share
+  overlapping vertex ranges, so index shapes narrow GI meshes by index count
+  only; ZZZ keeps exact vertex/index shapes.
+  Weightless GIMI captures (head-attached face parts) are rigid attachments: the
+  native mesh must carry every vertex's full weight on one bone, the captured
+  triangles must form a sub-multiset of one native section with unique
+  position/UV vertex matches, and the match must share the placement a skinned
+  palette proved. The Rig.json palette is marked `rigid` and maps synthetic slot
+  0 to that joint; it adds no skin binding. Asset Weight/Rig publishes the
+  synthetic `rigid_u32_1` stream only for a part whose own captured fingerprints
+  admit that rigid palette; unproven parts publish nothing and are not errors.
   Playable body motion exists only as Humanoid muscle curves. Convert it with the
   Mecanim solver (ZYRoll axes and limits, segment-midpoint centre of mass, up-exact
   body orientation) in place relative to Motion, and reject a clip whose hands are

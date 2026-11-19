@@ -498,3 +498,47 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
         assert resolve("aaaaaaaa", 1, (0, 1, 2), merged_layout=(("44444444", 0, 4),))["bone_map"] == own["bone_map"]
     model["components"].append(component("aaaaaaaa", 2, 0, {"0": 9}))
     assert resolve("aaaaaaaa", 1, (0,)) is None
+
+
+def test_rigid_attachment_palette_admits_only_the_assets_own_synthetic_stream(tmp_path, monkeypatch):
+    from app.assets import rig
+
+    (tmp_path / "hash.json").write_text("{}")
+    rigid = dict(geometry_hash="cccccccc", component_ordinal=0, first_index=0, index_count=6, metadata_file="hash.json",
+                 metadata_entry=0, bone_map={"0": 1}, rigid=True, vertex_sha256="a" * 64, index_sha256="b" * 64)
+    skinned = {**rigid, "geometry_hash": "dddddddd", "metadata_entry": 1}
+    del skinned["rigid"]
+    model = {"id": "rig", "version": 2, "bones": [], "skin_bindings": [], "components": [rigid, skinned]}
+    monkeypatch.setattr(rig, "_admitted_rig", lambda *_: (str(tmp_path), model))
+    monkeypatch.setattr(rig, "_zzz_metadata", lambda *_: {})
+
+    def resolve(geometry_hash, encoding, asset_type="GIMI", captured=True):
+        binding = SimpleNamespace(asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
+                                  geometry_hash=geometry_hash, first_index=0, index_count=6, component_ordinal=0)
+        source = SkinningSource("part.txt", *((4, 1) if encoding == "rigid_u32_1" else (32, 4)), encoding)
+        return resolve_game_rig(binding, source, (0,), set(), {}, captured_palette=captured)
+
+    resolved = resolve("cccccccc", "rigid_u32_1")
+    assert resolved["bone_map"] == {"0": 1} and resolved["morph_binding"] is None
+    # The synthetic stream never binds a skinned palette, a mod draw or another game;
+    # captured Blend weights never bind a rigid palette.
+    assert resolve("dddddddd", "rigid_u32_1") is None
+    assert resolve("cccccccc", "rigid_u32_1", captured=False) is None
+    assert resolve("cccccccc", "rigid_u32_1", asset_type="ZZMI") is None
+    assert resolve("cccccccc", "gimi_f32_u32_4") is None
+    assert resolve("dddddddd", "gimi_f32_u32_4")["bone_map"] == {"0": 1}
+
+
+@pytest.mark.parametrize("change", [{"rigid": False}, {"rigid": True, "bone_map": {"0": 1, "1": 0}},
+                                    {"rigid": True, "bone_map": {"1": 1}}])
+def test_rig_rejects_invalid_rigid_attachment_palettes(change):
+    bones = [{"name": "Root", "parent": -1, "translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+             {"name": "Joint01", "parent": 0, "translation": [0, 1, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}]
+    component = dict(geometry_hash="cccccccc", component_ordinal=0, first_index=0, index_count=6,
+                     bone_map={"0": 1}, vertex_sha256="a" * 64, index_sha256="b" * 64)
+    raw = dict(format="mod-viewer-rig", version=2, coordinate_space="asset", bones=bones, skin_bindings=[],
+               components=[{**component, "rigid": True}])
+    assert validate_rig(raw)["components"][0]["rigid"] is True
+    raw["components"] = [{**component, **change}]
+    with pytest.raises(ValueError):
+        validate_rig(raw)

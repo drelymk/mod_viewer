@@ -22,11 +22,38 @@ class CapturedDumpSkinning:
     index_file: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class CapturedRigidAttachment:
+    """A weightless captured part that an extracted rig may prove as single-bone."""
+    file: str
+    vertices: tuple
+    index_file: str
+
+
 def capture_dump_skinning(root, file, layout, vertices, index_file=None):
     relative = paths.relative_asset_path(root, file)
     declared = any(item.name == "BLENDINDICES" and item.index == 0 for item in layout.semantics)
     index_relative = paths.relative_asset_path(root, index_file) if index_file else ""
     return CapturedDumpSkinning(relative, tuple(vertices), index_relative or "") if relative and declared else None
+
+
+def capture_rigid_attachment(root, file, layout, vertices, index_file):
+    relative = paths.relative_asset_path(root, file)
+    index_relative = paths.relative_asset_path(root, index_file) if index_file else ""
+    if not relative or not index_relative or any(item.name in ("BLENDINDICES", "BLENDWEIGHT", "BLENDWEIGHTS")
+                                                 for item in layout.semantics):
+        return None
+    return CapturedRigidAttachment(relative, tuple(vertices), index_relative)
+
+
+def rigid_attachment_skinning(manifest):
+    """Synthetic one-bone stream: every vertex fully on palette slot 0.
+
+    It is only advertised after an exact Rig.json rigid palette admits the part.
+    """
+    source = SkinningSource(manifest.file, 4, 1, "rigid_u32_1")
+    count = len(manifest.vertices)
+    return source, decode_skinning(source, bytes(4 * count), range(count))
 
 
 def capture_skinning(root, file, layout, vertices):

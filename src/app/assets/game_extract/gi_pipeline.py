@@ -21,8 +21,10 @@ def colocated(avatar_row, _family, mesh_row):
 
 
 def _verify(client, captured, index, query, cancel):
+    # Genshin submeshes share overlapping vertex ranges, so SubMesh.vertexCount is
+    # not the captured component's vertex count; only index counts narrow meshes.
     return zzz_pipeline.verify_candidates(client, captured, index, query, cancel, mesh_hint=colocated, label=LABEL,
-                                          placement_tolerance=PLACEMENT_TOLERANCE)
+                                          placement_tolerance=PLACEMENT_TOLERANCE, shape_key=zzz_pipeline.index_shape)
 
 
 def prove_rig(client, root, record, query, progress, cancel, index):
@@ -121,6 +123,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="gi", skeleton_id=rig["id"], skeleton=chosen["source"],
                   meshes=chosen["meshes"], proven_components=len(chosen["matched"]),
+                  rigid_attachments=sum(1 for palette in chosen["matched"].values() if palette.get("rigid")),
                   unmatched_components=len(captured) - len(chosen["matched"]), bones=len(rig["bones"]),
                   controller=gi_index.identity(controller_row), states=len(controller.get("states") or []),
                   streamer_layer=streamer_layer.get("name") if streamer_layer else None,

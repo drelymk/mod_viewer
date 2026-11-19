@@ -694,7 +694,8 @@ function notifyModelWeightChanged() {
 
 function eligibleSkinningMesh(mesh) {
   return (
-    mesh?.userData?.skinningAvailable === true &&
+    (mesh?.userData?.skinningAvailable === true ||
+      (!!assetRigContext && mesh?.userData?.rigAttachmentAvailable === true)) &&
     mesh.userData?.assetFill !== true &&
     (!!mesh.userData?.modPath || !!assetRigContext) &&
     !!mesh.userData?.semanticKey

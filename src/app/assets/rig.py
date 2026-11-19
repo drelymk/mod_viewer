@@ -171,6 +171,10 @@ def validate_rig(raw):
         identities.add(identity)
         mapping = component.get("bone_map")
         mapping = _bone_mapping(mapping, len(bones), sparse=raw["version"] == 2)
+        # A rigid attachment binds its synthetic single-slot stream to one joint.
+        if "rigid" in component and (component["rigid"] is not True or raw["version"] != 2
+                                     or not isinstance(mapping, dict) or list(mapping) != ["0"]):
+            raise ValueError("Invalid rigid attachment palette.")
         for field in ("vertex_sha256", "index_sha256"):
             if not isinstance(component.get(field), str) or not _SHA256.fullmatch(component[field]):
                 raise ValueError("Invalid rig geometry fingerprint.")
@@ -586,7 +590,8 @@ def _zzz_stream_palettes(rig, directory, hashes, cache):
     if not hashes:
         return palettes
     for palette in rig["components"]:
-        if not palette.get("metadata_file") or "metadata_entry" not in palette:
+        # Rigid attachments have no native Blend stream for a mod to share.
+        if not palette.get("metadata_file") or "metadata_entry" not in palette or palette.get("rigid"):
             continue
         stream = _zzz_metadata(directory, palette, cache) or {}
         if set(hashes) <= {stream.get("blend_vb"), stream.get("position_vb")}:
@@ -608,8 +613,10 @@ def _zzz_stream_bone_map(palettes, offset=0, count=None):
 
 def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, captured, merged_layout,
                      positions, signature, topology):
-    if (source.encoding != "gimi_f32_u32_4" or source.blend_remap or source.vertex_vg_file
-            or source.bone_id_offset):
+    # The synthetic rigid stream exists only for an Asset's own weightless capture.
+    rigid = source.encoding == "rigid_u32_1"
+    if ((source.encoding != "gimi_f32_u32_4" and not (rigid and captured and binding.asset_type == "GIMI"))
+            or source.blend_remap or source.vertex_vg_file or source.bone_id_offset):
         return None
     try:
         admitted = _admitted_rig(binding, enabled_roots, cache)
@@ -624,7 +631,7 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
                    if (p["geometry_hash"], p["first_index"]) == (binding.geometry_hash, binding.first_index)
                    and (binding.index_count is None or p["index_count"] == binding.index_count)
                    and (binding.component_ordinal is None or p["component_ordinal"] == binding.component_ordinal)]
-        if len(matches) != 1:
+        if len(matches) != 1 or matches[0].get("rigid", False) is not rigid:
             return None
         palette = matches[0]
         metadata = paths.safe_asset_path(binding.root, binding.metadata)
@@ -657,8 +664,9 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
         mapping = _game_bone_mapping(mapping, bone_ids)
         if mapping is None:
             return None
-        if not own_geometry:
-            # The bound component's morph reference describes different geometry.
+        if not own_geometry or rigid:
+            # The bound component's morph reference describes different geometry;
+            # a rigid attachment never carries native morphs.
             return dict(id=rig["id"], version=2, bones=rig["bones"], bone_map=mapping,
                         humanoid_controls=rig.get("humanoid_controls"), morph_binding=None)
         morph_binding = {key: palette[key] for key in ("vertex_sha256", "index_sha256")}

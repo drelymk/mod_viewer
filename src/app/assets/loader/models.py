@@ -46,6 +46,7 @@ class AssetMeshPart:
     metadata_entry: int | None = None
     texture_range: int = 0
     skinning: object | None = None
+    rigid_attachment: object | None = None
 
     @property
     def asset_source(self):
@@ -124,7 +125,9 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
             (base_component, part.geometry_hash), base_component)
         entry = {
             "skinning_available": part.skinning is not None and not asset_fill,
-            "animation_skinning_available": part.skinning is not None and asset_fill,
+            "animation_skinning_available": (part.skinning is not None or part.rigid_attachment is not None) and asset_fill,
+            # Weightless parts join Weight/Rig only if an extracted rig proves them rigid.
+            "rig_attachment_available": part.rigid_attachment is not None,
             "pos": geometry.add(part.positions),
             "idx": geometry.add(part.indices),
             "uv": geometry.add(part.uvs) if part.uvs else None,

@@ -13,7 +13,7 @@ from . import zzz_animation, zzz_index, zzz_morphs
 from .native import humanoid_controls
 from .pipeline import clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
 from .runtime import ExtractionCancelled, check_cancelled
-from .zzz_native import avatar_bones, capture, match_component_candidates, mesh_placement
+from .zzz_native import avatar_bones, capture, match_component_candidates, match_rigid_candidates, mesh_placement
 
 
 def _search_name(value):
@@ -84,19 +84,31 @@ def _rig(avatar, basis, palettes):
     return validate_rig(raw)
 
 
+def exact_shape(shape):
+    """ZZZ submesh vertex counts equal the captured component's referenced vertices."""
+    return tuple(shape)
+
+
+def index_shape(shape):
+    """Overlapping submesh vertex ranges leave only the index count comparable."""
+    return None, shape[1]
+
+
 def verify_candidates(client, captured, rows, query, cancel, *,
                       mesh_hint=lambda avatar_row, family, mesh_row: _mesh_family_hint(family, mesh_row["name"]), label="ZZZ",
-                      placement_tolerance=2e-4):
+                      placement_tolerance=2e-4, shape_key=exact_shape):
+    skinned = [part for part in captured if not part.get("rigid")]
+    rigid_counts = [part["index_count"] for part in captured if part.get("rigid")]
+    # Shapes only narrow candidates; every adopted part still needs proof.
+    wanted = {shape_key((len(part["positions"]), part["index_count"])) for part in skinned}
     avatars = [row for row in rows if row["type"] == "Avatar" and _family(row["name"])]
     named = [row for row in avatars if _search_name(query) in _search_name(row["name"])] if query else []
     if not named:
-        # Shape fallback only narrows candidates; every adopted part still needs proof.
-        wanted = {(len(part["positions"]), part["index_count"]) for part in captured}
-        meshes = [row for row in rows if row["type"] == "Mesh" and any(tuple(s) in wanted for s in row.get("shape") or [])]
+        meshes = [row for row in rows if row["type"] == "Mesh" and any(shape_key(s) in wanted for s in row.get("shape") or [])]
         scores = {}
         for avatar in avatars:
             family = _family(avatar["name"])
-            shapes = {tuple(shape) for mesh in meshes if mesh_hint(avatar, family, mesh) for shape in mesh.get("shape") or []}
+            shapes = {shape_key(shape) for mesh in meshes if mesh_hint(avatar, family, mesh) for shape in mesh.get("shape") or []}
             scores[family] = sum(count for vertices, count in wanted & shapes)
         best = max(scores.values(), default=0)
         named = [avatar for avatar in avatars if best and scores[_family(avatar["name"])] == best]
@@ -104,13 +116,17 @@ def verify_candidates(client, captured, rows, query, cancel, *,
         raise ValueError(f"Enter the character's game name to narrow the {label} Avatar search.")
     candidates = []
     seen_avatars = {}
-    wanted = {(len(part["positions"]), part["index_count"]) for part in captured}
+
+    def shape_wanted(shape):
+        # A rigid attachment may draw only part of its native section.
+        return shape_key(shape) in wanted or any(shape[1] >= count for count in rigid_counts)
+
     for avatar_row in sorted(named, key=zzz_index.identity):
         check_cancelled(cancel)
         family = _family(avatar_row["name"])
         mesh_rows = [row for row in rows if row["type"] == "Mesh" and mesh_hint(avatar_row, family, row)
                      and not re.search(r"_LOD[1-9]", row["name"], re.I)
-                     and (row.get("shape") is None or any(tuple(shape) in wanted for shape in row["shape"]))]
+                     and (row.get("shape") is None or any(shape_wanted(shape) for shape in row["shape"]))]
         if not mesh_rows:
             continue
         if len(mesh_rows) > 128:
@@ -135,9 +151,13 @@ def verify_candidates(client, captured, rows, query, cancel, *,
                 continue
             bone_map, placement = placed
             for number, part in enumerate(captured):
-                if not any(section["count"] == part["index_count"] for section in mesh["sections"]):
+                if part.get("rigid"):
+                    found = match_rigid_candidates(part, mesh)
+                elif any(section["count"] == part["index_count"] for section in mesh["sections"]):
+                    found = match_component_candidates(part, mesh)
+                else:
                     continue
-                for palette, signs, vertices in match_component_candidates(part, mesh):
+                for palette, signs, vertices in found:
                     conversion = np.diag([*signs, 1]) @ np.linalg.inv(placement)
                     group = next((item for item in placements if np.allclose(item["basis"], conversion, rtol=0, atol=2e-4)), None)
                     if group is None:
@@ -153,7 +173,8 @@ def verify_candidates(client, captured, rows, query, cancel, *,
                     group["native"].setdefault(number, []).append(dict(row=mesh_row, mesh=mesh, signs=signs, vertices=vertices))
         for group in placements:
             matches = {number: value for number, value in group["matches"].items() if number not in group["ambiguous"]}
-            if matches:
+            # Rigid attachments follow a placement that a skinned palette has proven.
+            if any(not value.get("rigid") for value in matches.values()):
                 rig = _rig(avatar, group["basis"], [matches[i] for i in sorted(matches)])
                 score = sum(captured[i]["index_count"] for i in matches)
                 candidates.append(dict(rig=rig, avatar=avatar, family=family, score=score, matched=matches,
@@ -206,6 +227,8 @@ def adopt_rig(asset, chosen, captured, label="ZZZ"):
     # to reuse the proven palette. Preserve compatible explicitly authored profiles.
     profiles = {}
     for number, palette in chosen["matched"].items():
+        if palette.get("rigid"):
+            continue  # A rigid attachment has no Blend stream for mods to reuse.
         digest = captured[number]["blend_sha256"]
         mapping = profiles.setdefault(digest, {})
         for key, bone in palette["bone_map"].items():

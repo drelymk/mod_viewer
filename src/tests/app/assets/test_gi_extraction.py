@@ -290,6 +290,113 @@ def test_gi_unproven_name_match_falls_back_to_geometry_but_not_on_cancel(tmp_pat
         gi_pipeline.prove_rig(client, root, record, "Shadow", lambda *_: None, cancel, rows)
 
 
+def test_gi_shape_prefilter_compares_index_counts_of_overlapping_sections(tmp_path):
+    from app.assets.game_extract import zzz_pipeline
+
+    root, asset, record, rows, client = gimi_fixture(tmp_path)
+    # Overlapping submesh vertex ranges report more vertices than the component references.
+    for row in rows:
+        if row["type"] == "Mesh":
+            row["shape"] = [[9, 3]]
+    chosen, *_ = gi_pipeline.prove_rig(client, root, record, None, lambda *_: None, threading.Event(), rows)
+    assert list(chosen["matched"]) == [0]
+    captured, _files = zzz_native.capture(root, record, asset_type="GIMI")
+    with pytest.raises(ValueError, match="Enter the character's game name"):
+        zzz_pipeline.verify_candidates(client, captured, rows, None, threading.Event(),
+                                       mesh_hint=gi_pipeline.colocated, shape_key=zzz_pipeline.exact_shape)
+
+
+def add_rigid_component(root, asset, rows, client):
+    """A weightless captured part drawing one of a native single-bone mesh's two triangles."""
+    vertices = [[2.1, .3, .5], [2.6, .4, .9], [2.3, 1.1, .6], [2.8, 1.3, .2]]
+    uv = [[.6, .1], [.7, .2], [.8, .3], [.9, .4]]
+    vb = asset / "part-vb0=33333333.txt"
+    lines = ["stride: 20", "vertex count: 4",
+             "element[0]: POSITION0, format: R32G32B32_FLOAT",
+             "element[1]: TEXCOORD0, format: R32G32_FLOAT"]
+    for number, (position, texcoord) in enumerate(zip(vertices, uv)):
+        for name, values in (("POSITION", position), ("TEXCOORD", texcoord)):
+            lines.append(f"vb0[{number}]+000 {name}: " + ", ".join(map(str, values)))
+    vb.write_text("\n".join(lines) + "\n")
+    ib = asset / "part-ib=44444444.txt"
+    ib.write_text("first index: 0\nindex count: 3\ntopology: trianglelist\n1 3 2\n")
+    entries = json.loads((asset / "hash.json").read_text())
+    entries.append(dict(component_name="Part02", position_vb="33333333", ib="44444444", object_indexes=[0],
+                        object_indexes_count=[3], object_classifications=["A"], vb_file=vb.name, ib_files=[ib.name]))
+    (asset / "hash.json").write_text(json.dumps(entries))
+    mesh = dict(name="Part02", vertices=np.array(vertices).ravel().tolist(), uv=np.array(uv).ravel().tolist(),
+                indices=[0, 1, 2, 1, 2, 3], weights=[[1, 0, 0, 0]] * 4, bone_indices=[[1, 0, 0, 0]] * 4,
+                bone_hashes=[0, 100], bind_poses=deepcopy(client.documents[2]["bind_poses"]),
+                sections=[dict(first=0, count=6, vertex_first=0, vertex_count=4)])
+    rows.append(gi_row("Part02", "Mesh", 9, shape=[[4, 6]]))
+    client.documents[9] = mesh
+    return index.build_index("GIMI", str(root))["assets"][0]
+
+
+def test_gi_weightless_part_is_proven_as_a_rigid_single_bone_attachment(tmp_path):
+    root, asset, record, rows, client = gimi_fixture(tmp_path)
+    record = add_rigid_component(root, asset, rows, client)
+    chosen, rig, _previous, captured, _fingerprints = gi_pipeline.prove_rig(
+        client, root, record, None, lambda *_: None, threading.Event(), rows)
+    assert [part.get("rigid", False) for part in captured] == [False, True]
+    assert sorted(chosen["matched"]) == [0, 1]
+    rigid = next(component for component in rig["components"] if component.get("rigid"))
+    assert rigid["geometry_hash"] == "44444444"
+    assert rigid["bone_map"] == {"0": 2}  # Joint01 after the mesh-space root.
+    # Only the skinned part's captured Blend stream is reusable by mods.
+    assert len(rig["skin_bindings"]) == 1
+
+
+def test_gi_rigid_attachment_joins_asset_weights_only_with_its_proven_rig(tmp_path, monkeypatch):
+    from app.assets.game_extract.pipeline import write_document
+    from app.bridge.asset_preview import AssetPreview
+
+    root, asset, record, rows, client = gimi_fixture(tmp_path)
+    record = add_rigid_component(root, asset, rows, client)
+    _chosen, rig, *_ = gi_pipeline.prove_rig(client, root, record, None, lambda *_: None, threading.Event(), rows)
+    preview = AssetPreview(object())
+    monkeypatch.setattr(preview, "_asset_selection", lambda _: (str(asset), dict(type="GIMI", path=root), {}, record))
+
+    def weights():
+        payload = preview.load_asset(str(asset))
+        flags = {mesh["component"]: (mesh["skinning_available"], mesh["rig_attachment_available"])
+                 for mesh in payload["meshes"].values()}
+        assert flags == {"Body": (True, False), "Part02": (False, True)}
+        result = preview.get_skinning_preview(payload["metadata"]["asset"]["rig_session"])
+        assert result["status"] == "ok"
+        return {payload["meshes"][key]["component"]: entry for key, entry in result["meshes"].items()}, result
+
+    try:
+        # Without a proven rig the weightless part publishes no synthetic weights.
+        unproven, _result = weights()
+        assert set(unproven) == {"Body"}
+        write_document(asset / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
+        proven, result = weights()
+        assert set(proven) == {"Body", "Part02"}
+        part = proven["Part02"]
+        assert part["encoding"] == "rigid_u32_1" and part["bone_ids"] == [0] and part["vertex_count"] == 3
+        assert part["game_bone_map"] == {"0": 2} and "game_morph_binding" not in part
+        assert part["game_rig_id"] == proven["Body"]["game_rig_id"] in result["game_rigs"]
+    finally:
+        preview.clear_preview()
+
+
+@pytest.mark.parametrize("change", ["second_bone", "partial_weight", "foreign_triangle"])
+def test_gi_rigid_attachment_proof_fails_closed(tmp_path, change):
+    root, asset, record, rows, client = gimi_fixture(tmp_path)
+    record = add_rigid_component(root, asset, rows, client)
+    mesh = client.documents[9]
+    if change == "second_bone":
+        mesh["bone_indices"][0] = [0, 0, 0, 0]
+    elif change == "partial_weight":
+        mesh["weights"] = [[.9, 0, 0, 0]] * 4
+    else:
+        mesh["indices"] = [0, 1, 2, 0, 2, 3]
+    chosen, rig, *_ = gi_pipeline.prove_rig(client, root, record, None, lambda *_: None, threading.Event(), rows)
+    assert list(chosen["matched"]) == [0]
+    assert not any(component.get("rigid") for component in rig["components"])
+
+
 FAMILY = "Avatar_Type01_Name01"
 HAIR, ACCESSORY = 100, 101
 
