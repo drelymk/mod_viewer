@@ -450,7 +450,9 @@ def test_zzz_merged_ids_map_through_each_captured_native_blend_stream(monkeypatc
     assert rig._zzz_merged_bone_map(model, "", own, layout, {}) is None
 
 
-def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_override(tmp_path, monkeypatch):
+@pytest.mark.parametrize("asset_type, native", [("ZZMI", "11111111"), ("GIMI", "33333333")])
+def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_override(tmp_path, monkeypatch, asset_type, native):
+    # ZZZ proves the stream by its position input; GIMI by its skinning pass's Blend input.
     from app.assets import rig
 
     streams = {0: {"blend_vb": "33333333", "position_vb": "11111111"},
@@ -470,22 +472,29 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
     monkeypatch.setattr(rig, "_zzz_morph_reference", lambda *_: object())
     monkeypatch.setattr(rig, "_mod_morph_vertices", lambda *_args, **_kwargs: [0])
 
-    def resolve(geometry_hash, ordinal, ids, hashes=("11111111",)):
-        binding = SimpleNamespace(asset_type="ZZMI", root=str(tmp_path), metadata="hash.json",
-                                  geometry_hash=geometry_hash, first_index=ordinal * 3, index_count=3,
+    def resolve(geometry_hash, ordinal, ids, hashes=(native,), merged_layout=(), count=3):
+        binding = SimpleNamespace(asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
+                                  geometry_hash=geometry_hash, first_index=ordinal * 3, index_count=count,
                                   component_ordinal=ordinal)
         source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4", native_palette_hashes=hashes)
-        return resolve_game_rig(binding, source, ids, set(), {})
+        return resolve_game_rig(binding, source, ids, set(), {}, merged_layout=merged_layout)
 
     # Each captured component holds only the slice of the stream palette it
     # used; a component of that stream skins with the whole captured palette.
     own = resolve("aaaaaaaa", 1, (0, 1, 2))
     assert own["bone_map"] == {"0": 5, "1": 6, "2": 7} and own["morph_binding"]["vertices"] == [0]
+    # An exact range known only by its first index (no metadata count) finds the same
+    # unique component; a contradicting count does not.
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), count=None)["bone_map"] == own["bone_map"]
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), count=4) is None
     # Another component's override drawing that stream uses the stream palette,
     # but its own morph reference describes different geometry.
     drawn_elsewhere = resolve("bbbbbbbb", 0, (0, 2))
     assert drawn_elsewhere["bone_map"] == {"0": 5, "1": 6, "2": 7} and drawn_elsewhere["morph_binding"] is None
     assert resolve("aaaaaaaa", 1, (3,)) is None
-    assert resolve("aaaaaaaa", 1, (0,), ("11111111", "22222222")) is None
+    assert resolve("aaaaaaaa", 1, (0,), (native, "22222222")) is None
+    if asset_type == "GIMI":
+        # Merged skeleton layouts are a ZZZ program; GIMI keeps the native stream palette.
+        assert resolve("aaaaaaaa", 1, (0, 1, 2), merged_layout=(("44444444", 0, 4),))["bone_map"] == own["bone_map"]
     model["components"].append(component("aaaaaaaa", 2, 0, {"0": 9}))
     assert resolve("aaaaaaaa", 1, (0,)) is None

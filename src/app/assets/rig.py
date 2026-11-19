@@ -410,9 +410,11 @@ def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
     Unsupported skin namespaces, changed reference geometry and incomplete
     palettes keep the ordinary inferred-rig path. Authored weights are untouched.
     """
-    if binding is not None and binding.asset_type == "ZZMI":
+    if binding is not None and binding.asset_type in ("ZZMI", "GIMI"):
+        # GIMI shares the hash-Asset palette proof; only ZZZ has a merged skeleton layout.
         return _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, blend_sha256, captured_palette,
-                                merged_layout, positions, morph_signature, morph_topology)
+                                merged_layout if binding.asset_type == "ZZMI" else (), positions, morph_signature,
+                                morph_topology)
     if (binding is None or binding.asset_type != "WWMI"
             or source.encoding not in ("wwmi_u8_4", "wwmi_u8_8")
             or (source.vertex_vg_file and not source.blend_remap)):
@@ -616,9 +618,11 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
         directory, rig = admitted
         if rig["version"] != 2:
             return None
+        # Hash Assets may identify an exact range by its first index alone (GIMI
+        # metadata has no counts); the captured component still has to be unique.
         matches = [p for p in rig["components"]
-                   if (p["geometry_hash"], p["first_index"], p["index_count"])
-                   == (binding.geometry_hash, binding.first_index, binding.index_count)
+                   if (p["geometry_hash"], p["first_index"]) == (binding.geometry_hash, binding.first_index)
+                   and (binding.index_count is None or p["index_count"] == binding.index_count)
                    and (binding.component_ordinal is None or p["component_ordinal"] == binding.component_ordinal)]
         if len(matches) != 1:
             return None
