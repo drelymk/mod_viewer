@@ -16,20 +16,26 @@ internal static class Program
             foreach (var name in new[] { "DecompressTracksZZZ", "GetLastDecompressError", "Dispose" })
                 _ = NativeLibrary.GetExport(decoder, name);
             NativeLibrary.Free(decoder);
+            var database = NativeLibrary.Load(Path.Combine(AppContext.BaseDirectory, "AnimeStudio.ACL.DB.dll"));
+            foreach (var name in new[] { "DecompressTracks", "Dispose" })
+                _ = NativeLibrary.GetExport(database, name);
+            NativeLibrary.Free(database);
             var oodle = NativeLibrary.Load(Path.Combine(AppContext.BaseDirectory, "oodle-data-shared.dll"));
             _ = NativeLibrary.GetExport(oodle, "OodleLZ_Decompress");
             NativeLibrary.Free(oodle);
             _ = GameManager.GetGame(GameType.ZZZ);
+            _ = GameManager.GetGame(GameType.GI);
             AvatarPaths.SelfTest();
-            Console.WriteLine("ZZZ extraction ABI checks passed.");
+            Console.WriteLine("ZZZ and GI extraction ABI checks passed.");
             return 0;
         }
-        if (args is not ["--zzz", var root, "--work", var work]) return 2;
+        if (args is not [("--zzz" or "--gi") and var kind, var root, "--work", var work]) return 2;
         root = Path.GetFullPath(root);
         work = Path.GetFullPath(work);
         Console.SetOut(TextWriter.Null);
         Console.SetError(TextWriter.Null);
-        var game = GameManager.GetGame(GameType.ZZZ);
+        var game = GameManager.GetGame(kind == "--gi" ? GameType.GI : GameType.ZZZ);
+        var label = game.Type == GameType.GI ? "Genshin Impact" : "ZZZ";
         var blendShapeClamp = new Lazy<bool?>(() => BlendShapePolicy.Read(root, game));
         string? line;
         while ((line = await Console.In.ReadLineAsync()) is not null)
@@ -40,7 +46,7 @@ internal static class Program
             if (id < 1) return 2;
             object response;
             try { response = Execute(root, work, game, request, blendShapeClamp); }
-            catch (Exception error) { response = new { error = "ZZZ data could not be read.", category = error.GetType().Name }; }
+            catch (Exception error) { response = new { error = label + " data could not be read.", category = error.GetType().Name }; }
             var target = Path.Combine(work, $"command-{id}.json");
             await File.WriteAllTextAsync(target + ".tmp", JsonConvert.SerializeObject(response));
             File.Move(target + ".tmp", target);
@@ -48,12 +54,18 @@ internal static class Program
         return 0;
     }
 
-    private static string Block(string root, string relative)
+    private static readonly string[] ZzzBlocks = ["ZenlessZoneZero_Data/StreamingAssets/Blocks/", "ZenlessZoneZero_Data/Persistent/Blocks/"];
+    // Genshin keeps one directory level below each tree (blocks/NN/name.blk).
+    private static readonly string[] GiBlocks =
+        ["GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/", "GenshinImpact_Data/Persistent/AssetBundles/blocks/"];
+
+    private static string Block(string root, string relative, bool gi)
     {
         if (Path.IsPathRooted(relative) || relative.Split('/', '\\').Any(p => p is ".." or ".")) throw new InvalidDataException();
         var path = Path.GetFullPath(Path.Combine(root, relative));
-        var allowed = new[] { "ZenlessZoneZero_Data/StreamingAssets/Blocks/", "ZenlessZoneZero_Data/Persistent/Blocks/" };
-        if (!allowed.Any(prefix => relative.Replace('\\', '/').StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        var normalized = relative.Replace('\\', '/');
+        var prefix = (gi ? GiBlocks : ZzzBlocks).FirstOrDefault(p => normalized.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+        if (prefix is null || (gi && normalized[prefix.Length..].Count(c => c == '/') != 1)
             || Path.GetExtension(path) != ".blk" || !File.Exists(path)) throw new InvalidDataException();
         ValidateFile(root, path);
         return path;
@@ -86,7 +98,8 @@ internal static class Program
             };
         }
         if (operation is not ("scan" or "read")) throw new InvalidDataException();
-        var block = Block(root, (string?)request["block"] ?? "");
+        bool gi = game.Type == GameType.GI;
+        var block = Block(root, (string?)request["block"] ?? "", gi);
         var manager = new AssetsManager { Game = game, Silent = true, SkipProcess = true, ResolveDependencies = false };
         var rows = new List<object>();
         object? exported = null;
@@ -105,7 +118,8 @@ internal static class Program
                     foreach (var info in file.m_Objects)
                     {
                         var type = (ClassIDType)info.classID;
-                        if (type is not (ClassIDType.Mesh or ClassIDType.Avatar or ClassIDType.AnimationClip or ClassIDType.SkinnedMeshRenderer)) continue;
+                        if (type is not (ClassIDType.Mesh or ClassIDType.Avatar or ClassIDType.AnimationClip)
+                            && type != (gi ? ClassIDType.AnimatorController : ClassIDType.SkinnedMeshRenderer)) continue;
                         if (operation == "read" && (file.fileName != (string?)request["cab"]
                             || ordinal != (int?)request["file_ordinal"] || info.m_PathID != (long?)request["path_id"])) continue;
                         var reader = new ObjectReader(file.reader, file, info, game);
@@ -148,11 +162,15 @@ internal static class Program
                         else
                         {
                             if (exported is not null) throw new InvalidDataException();
-                            exported = type switch
+                            exported = (gi, type) switch
                             {
-                                ClassIDType.Mesh => ExportMesh(new Mesh(reader)),
-                                ClassIDType.Avatar => ReadAvatar(reader),
-                                ClassIDType.AnimationClip => ExportClip(new AnimationClip(reader), work, (int)request["id"]!, blendShapeClamp.Value),
+                                (false, ClassIDType.Mesh) => ExportMesh(new Mesh(reader)),
+                                (false, ClassIDType.Avatar) => ReadAvatar(reader),
+                                (false, ClassIDType.AnimationClip) => ExportClip(new AnimationClip(reader), work, (int)request["id"]!, blendShapeClamp.Value),
+                                (true, ClassIDType.Mesh) => GiExport.ExportMesh(new Mesh(reader)),
+                                (true, ClassIDType.Avatar) => GiExport.ReadAvatar(new Avatar(reader)),
+                                (true, ClassIDType.AnimationClip) => GiExport.ExportClip(new AnimationClip(reader), work, (int)request["id"]!),
+                                (true, ClassIDType.AnimatorController) => GiExport.ReadController(new AnimatorController(reader), file),
                                 _ => throw new InvalidDataException()
                             };
                         }
@@ -170,7 +188,7 @@ internal static class Program
         return exported ?? throw new InvalidDataException();
     }
 
-    private static object ExportMesh(Mesh mesh) => new
+    internal static object ExportMesh(Mesh mesh) => new
     {
         name = mesh.m_Name,
         blend_shapes = MorphSources.Shapes(mesh),

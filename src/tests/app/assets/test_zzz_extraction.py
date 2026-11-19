@@ -853,8 +853,8 @@ def test_zzz_runtime_manifest_integrity_containment_and_cancellation(tmp_path):
 
     bundle = tmp_path / "runtime"
     bundle.mkdir()
-    names = ("ModViewer.ZzzExtract.exe", "UnityReader.dll", "AnimeStudio.ACL.ZZZV2.dll", "oodle-data-shared.dll",
-             "ModViewer.ZzzExtract.deps.json", "ModViewer.ZzzExtract.runtimeconfig.json")
+    names = ("ModViewer.ZzzExtract.exe", "UnityReader.dll", "AnimeStudio.ACL.ZZZV2.dll", "AnimeStudio.ACL.DB.dll",
+             "oodle-data-shared.dll", "ModViewer.ZzzExtract.deps.json", "ModViewer.ZzzExtract.runtimeconfig.json")
     files = {}
     for name in names:
         (bundle / name).write_bytes(b"synthetic runtime")

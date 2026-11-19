@@ -27,7 +27,7 @@ def published(tmp_path):
             ["ModViewer.GameExtract.exe", "CUE4Parse.dll", "CUE4Parse-Conversion.dll", "CUE4Parse-Natives.dll",
              "oodle-data-shared.dll", "zlib-ng2.dll", "keys.json", "ModViewer.GameExtract.deps.json", "ModViewer.GameExtract.runtimeconfig.json"]),
         "zzz-extract": (zzz_runtime.VERSION, zzz_runtime.PARSER_COMMIT,
-            ["ModViewer.ZzzExtract.exe", "UnityReader.dll", "AnimeStudio.ACL.ZZZV2.dll", "oodle-data-shared.dll",
+            ["ModViewer.ZzzExtract.exe", "UnityReader.dll", "AnimeStudio.ACL.ZZZV2.dll", "AnimeStudio.ACL.DB.dll", "oodle-data-shared.dll",
              "ModViewer.ZzzExtract.deps.json", "ModViewer.ZzzExtract.runtimeconfig.json"]),
     }
     for kind, (version, parser, names) in kinds.items():

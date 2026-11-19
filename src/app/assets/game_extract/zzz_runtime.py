@@ -8,7 +8,7 @@ from . import runtime
 from .bundle import runtime_directory
 
 PARSER_COMMIT = "76234e9f6f5a839504f41f9612719529fe2309a5"
-VERSION = "zzz-3-" + PARSER_COMMIT[:12]
+VERSION = "zzz-4-" + PARSER_COMMIT[:12]
 # Runtime clip decoding can change without changing cached discovery metadata.
 INDEX_VERSION = "zzz-2-" + PARSER_COMMIT[:12]
 BLOCK_DIRS = ("ZenlessZoneZero_Data/StreamingAssets/Blocks", "ZenlessZoneZero_Data/Persistent/Blocks")
@@ -52,7 +52,7 @@ def ensure_runtime(cancel, bundle=None):
         if not isinstance(record, dict):
             raise ValueError("Unsupported ZZZ extraction runtime manifest.")
         files = record.get("files")
-        required = {"ModViewer.ZzzExtract.exe", "UnityReader.dll", "AnimeStudio.ACL.ZZZV2.dll", "oodle-data-shared.dll",
+        required = {"ModViewer.ZzzExtract.exe", "UnityReader.dll", "AnimeStudio.ACL.ZZZV2.dll", "AnimeStudio.ACL.DB.dll", "oodle-data-shared.dll",
                     "ModViewer.ZzzExtract.deps.json", "ModViewer.ZzzExtract.runtimeconfig.json"}
         if (record.get("version") != VERSION or record.get("parser") != PARSER_COMMIT
                 or not isinstance(files, dict) or not required.issubset(files) or len(files) > 2000):

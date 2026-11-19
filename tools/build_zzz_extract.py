@@ -21,7 +21,7 @@ from build_game_extract import (
 
 
 COMMIT = "76234e9f6f5a839504f41f9612719529fe2309a5"
-VERSION = "zzz-3-" + COMMIT[:12]
+VERSION = "zzz-4-" + COMMIT[:12]
 PINS["animestudio"] = (
     f"https://codeload.github.com/Escartem/AnimeStudio/zip/{COMMIT}",
     "46c186a273af125bf9ab9a005997809d9ebf6678f3a4f6aa917f989323039023",
@@ -201,6 +201,7 @@ def build(dotnet, update_locks=False, verify_format=False):
                 "AvatarPaths.cs",
                 "MorphSources.cs",
                 "BlendShapePolicy.cs",
+                "GiExport.cs",
             ],
             cwd=project,
             env=environment,
@@ -255,13 +256,41 @@ def build(dotnet, update_locks=False, verify_format=False):
         ],
         cwd=native,
     )
+    # Genshin database ACL decoder: the same pinned source, unmodified. GCC rejects an
+    # uninstantiated template body that MSVC accepts; the flag does not change codegen.
+    database = upstream / "AnimeStudio.ACL/AnimeStudio.ACL.DB"
+    run(
+        [
+            "g++",
+            "-std=c++20",
+            "-O2",
+            "-shared",
+            "-msse4.1",
+            "-I.",
+            "-DNDEBUG",
+            "-D_AS_DLL",
+            "-DACLDB_EXPORTS",
+            "-Wno-template-body",
+            "dllmain.cpp",
+            "-o",
+            output / "AnimeStudio.ACL.DB.dll",
+            "-static",
+            "-static-libgcc",
+            "-static-libstdc++",
+        ],
+        cwd=database,
+    )
     (output / "licenses").mkdir(exist_ok=True)
     shutil.copyfile(upstream / "LICENSE", output / "licenses/AnimeStudio-LICENSE")
+    shutil.copyfile(
+        upstream / "AnimeStudio.ACL/LICENSE.txt",
+        output / "licenses/AnimeStudio.ACL-LICENSE.txt",
+    )
     shutil.copyfile(
         ROOT / "docs/THIRD_PARTY_NOTICES.md", output / "licenses/THIRD_PARTY_NOTICES.md"
     )
     # The decoder embeds its own ACL/RTM license headers; retain those sources' notices.
-    for file in native.rglob("LICENSE*"):
+    for file in (*native.rglob("LICENSE*"), *database.rglob("LICENSE*")):
         shutil.copyfile(
             file, output / "licenses" / (file.parent.name + "-" + file.name)
         )
