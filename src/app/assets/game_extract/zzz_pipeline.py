@@ -13,7 +13,7 @@ from . import zzz_animation, zzz_index, zzz_morphs
 from .native import humanoid_controls
 from .pipeline import clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
 from .runtime import ExtractionCancelled, check_cancelled
-from .zzz_native import avatar_bones, capture, match_component_candidates, match_rigid_candidates, mesh_placement
+from .zzz_native import avatar_bones, capture, match_attachment_candidates, match_component_candidates, mesh_placement
 
 
 def _search_name(value):
@@ -97,8 +97,8 @@ def index_shape(shape):
 def verify_candidates(client, captured, rows, query, cancel, *,
                       mesh_hint=lambda avatar_row, family, mesh_row: _mesh_family_hint(family, mesh_row["name"]), label="ZZZ",
                       placement_tolerance=2e-4, shape_key=exact_shape):
-    skinned = [part for part in captured if not part.get("rigid")]
-    rigid_counts = [part["index_count"] for part in captured if part.get("rigid")]
+    skinned = [part for part in captured if not part.get("weightless")]
+    weightless_counts = [part["index_count"] for part in captured if part.get("weightless")]
     # Shapes only narrow candidates; every adopted part still needs proof.
     wanted = {shape_key((len(part["positions"]), part["index_count"])) for part in skinned}
     avatars = [row for row in rows if row["type"] == "Avatar" and _family(row["name"])]
@@ -118,8 +118,8 @@ def verify_candidates(client, captured, rows, query, cancel, *,
     seen_avatars = {}
 
     def shape_wanted(shape):
-        # A rigid attachment may draw only part of its native section.
-        return shape_key(shape) in wanted or any(shape[1] >= count for count in rigid_counts)
+        # A weightless attachment may draw only part of its native section.
+        return shape_key(shape) in wanted or any(shape[1] >= count for count in weightless_counts)
 
     for avatar_row in sorted(named, key=zzz_index.identity):
         check_cancelled(cancel)
@@ -151,21 +151,24 @@ def verify_candidates(client, captured, rows, query, cancel, *,
                 continue
             bone_map, placement = placed
             for number, part in enumerate(captured):
-                if part.get("rigid"):
-                    found = match_rigid_candidates(part, mesh)
+                if part.get("weightless"):
+                    found = match_attachment_candidates(part, mesh)
                 elif any(section["count"] == part["index_count"] for section in mesh["sections"]):
                     found = match_component_candidates(part, mesh)
                 else:
                     continue
-                for palette, signs, vertices in found:
+                for palette, signs, vertices, *attachment in found:
                     conversion = np.diag([*signs, 1]) @ np.linalg.inv(placement)
                     group = next((item for item in placements if np.allclose(item["basis"], conversion, rtol=0, atol=2e-4)), None)
                     if group is None:
                         group = dict(basis=conversion, matches={}, ambiguous=set(), sources=set(), native={})
                         placements.append(group)
                     result = {key: value for key, value in part.items() if key not in
-                              ("positions", "normals", "uv", "indices", "blends", "source_vertices", "source_vertex_count", "blend_sha256")}
+                              ("positions", "normals", "uv", "indices", "blends", "source_vertices", "source_vertex_count",
+                               "blend_sha256", "weightless")}
                     result["bone_map"] = {key: bone_map[value] + 1 for key, value in palette.items()}
+                    if attachment:
+                        result["attachment"] = attachment[0]
                     if number in group["matches"] and group["matches"][number] != result:
                         group["ambiguous"].add(number)
                     group["matches"][number] = result
@@ -173,8 +176,8 @@ def verify_candidates(client, captured, rows, query, cancel, *,
                     group["native"].setdefault(number, []).append(dict(row=mesh_row, mesh=mesh, signs=signs, vertices=vertices))
         for group in placements:
             matches = {number: value for number, value in group["matches"].items() if number not in group["ambiguous"]}
-            # Rigid attachments follow a placement that a skinned palette has proven.
-            if any(not value.get("rigid") for value in matches.values()):
+            # Weightless attachments follow a placement that a skinned palette has proven.
+            if any("attachment" not in value for value in matches.values()):
                 rig = _rig(avatar, group["basis"], [matches[i] for i in sorted(matches)])
                 score = sum(captured[i]["index_count"] for i in matches)
                 candidates.append(dict(rig=rig, avatar=avatar, family=family, score=score, matched=matches,
@@ -227,8 +230,8 @@ def adopt_rig(asset, chosen, captured, label="ZZZ"):
     # to reuse the proven palette. Preserve compatible explicitly authored profiles.
     profiles = {}
     for number, palette in chosen["matched"].items():
-        if palette.get("rigid"):
-            continue  # A rigid attachment has no Blend stream for mods to reuse.
+        if "attachment" in palette:
+            continue  # A weightless attachment has no Blend stream for mods to reuse.
         digest = captured[number]["blend_sha256"]
         mapping = profiles.setdefault(digest, {})
         for key, bone in palette["bone_map"].items():

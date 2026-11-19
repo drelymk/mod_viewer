@@ -17,6 +17,8 @@ from .metadata import entries as metadata_entries
 
 
 RIG_FILENAME = "Rig.json"
+# Proven native weights of a weightless GIMI capture use their own bone-ID namespace.
+ATTACHMENT_NAMESPACE = "gimi_attachment"
 _MAX_BYTES = 2 * 1024 * 1024
 _MAX_BONES = 4096
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -74,6 +76,29 @@ def _bone_mapping(value, count, *, sparse=False, maximum=4096, unique=True):
     if any(type(v) is not int or not 0 <= v < count for v in values) or (unique and len(set(values)) != len(values)):
         raise ValueError("Invalid rig bone mapping.")
     return dict(value) if isinstance(value, dict) else list(value)
+
+
+def _validate_attachment(value, mapping, version):
+    """Native weights of a weightless capture: four fully weighted influences per vertex."""
+    if (version != 2 or not isinstance(mapping, dict) or not isinstance(value, dict)
+            or set(value) != {"weights", "slots", "expression"}):
+        raise ValueError("Invalid attachment palette.")
+    weights, slots, expression = value["weights"], value["slots"], value["expression"]
+    if (not isinstance(weights, list) or not isinstance(slots, list) or len(weights) != len(slots)
+            or not 4 <= len(weights) <= 4 * 250000 or len(weights) % 4
+            or any(type(w) not in (int, float) or not 0 <= w <= 1 for w in weights)
+            or any(type(s) is not int or s < 0 for s in slots)):
+        raise ValueError("Invalid attachment weights.")
+    for start in range(0, len(weights), 4):
+        row = weights[start:start + 4]
+        if abs(sum(row) - 1) > 1e-3 or any(w > 0 and str(s) not in mapping
+                                           for w, s in zip(row, slots[start:start + 4])):
+            raise ValueError("Invalid attachment weights.")
+    if (not isinstance(expression, dict) or len(expression) > 256 or any(
+            not isinstance(key, str) or not key.isdigit() or not int(key) < 2 ** 32
+            or type(weight) not in (int, float) or not math.isfinite(weight) or abs(weight) > 2
+            for key, weight in expression.items())):
+        raise ValueError("Invalid attachment expression.")
 
 
 def _merged_palette(raw, palettes):
@@ -171,10 +196,8 @@ def validate_rig(raw):
         identities.add(identity)
         mapping = component.get("bone_map")
         mapping = _bone_mapping(mapping, len(bones), sparse=raw["version"] == 2)
-        # A rigid attachment binds its synthetic single-slot stream to one joint.
-        if "rigid" in component and (component["rigid"] is not True or raw["version"] != 2
-                                     or not isinstance(mapping, dict) or list(mapping) != ["0"]):
-            raise ValueError("Invalid rigid attachment palette.")
+        if "attachment" in component:
+            _validate_attachment(component["attachment"], mapping, raw["version"])
         for field in ("vertex_sha256", "index_sha256"):
             if not isinstance(component.get(field), str) or not _SHA256.fullmatch(component[field]):
                 raise ValueError("Invalid rig geometry fingerprint.")
@@ -590,8 +613,8 @@ def _zzz_stream_palettes(rig, directory, hashes, cache):
     if not hashes:
         return palettes
     for palette in rig["components"]:
-        # Rigid attachments have no native Blend stream for a mod to share.
-        if not palette.get("metadata_file") or "metadata_entry" not in palette or palette.get("rigid"):
+        # Weightless attachments have no native Blend stream for a mod to share.
+        if not palette.get("metadata_file") or "metadata_entry" not in palette or "attachment" in palette:
             continue
         stream = _zzz_metadata(directory, palette, cache) or {}
         if set(hashes) <= {stream.get("blend_vb"), stream.get("position_vb")}:
@@ -611,36 +634,57 @@ def _zzz_stream_bone_map(palettes, offset=0, count=None):
     return mapping
 
 
+def _hash_asset_palette(binding, enabled_roots, cache):
+    """The unique verified version-2 palette of an exact hash-Asset binding, or None.
+
+    Returns (directory, rig, palette, metadata component).
+    """
+    admitted = _admitted_rig(binding, enabled_roots, cache)
+    if not admitted:
+        return None
+    directory, rig = admitted
+    if rig["version"] != 2:
+        return None
+    # Hash Assets may identify an exact range by its first index alone (GIMI
+    # metadata has no counts); the captured component still has to be unique.
+    matches = [p for p in rig["components"]
+               if (p["geometry_hash"], p["first_index"]) == (binding.geometry_hash, binding.first_index)
+               and (binding.index_count is None or p["index_count"] == binding.index_count)
+               and (binding.component_ordinal is None or p["component_ordinal"] == binding.component_ordinal)]
+    if len(matches) != 1:
+        return None
+    palette = matches[0]
+    metadata = paths.safe_asset_path(binding.root, binding.metadata)
+    expected = paths.safe_asset_path(directory, palette.get("metadata_file", ""))
+    if not metadata or not expected or os.path.normcase(metadata) != os.path.normcase(expected):
+        return None
+    component = _zzz_metadata(directory, palette, cache)
+    return None if component is None else (directory, rig, palette, component)
+
+
+def game_attachment(binding, enabled_roots, cache):
+    """Proven native weights for an Asset's own weightless GIMI capture, or None."""
+    if binding is None or binding.asset_type != "GIMI":
+        return None
+    try:
+        found = _hash_asset_palette(binding, enabled_roots, cache)
+        return found[2]["attachment"] if found is not None and "attachment" in found[2] else None
+    except (OSError, ValueError, TypeError, KeyError, IndexError, RecursionError):
+        return None
+
+
 def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, captured, merged_layout,
                      positions, signature, topology):
-    # The synthetic rigid stream exists only for an Asset's own weightless capture.
-    rigid = source.encoding == "rigid_u32_1"
-    if ((source.encoding != "gimi_f32_u32_4" and not (rigid and captured and binding.asset_type == "GIMI"))
+    # Attachment weights exist only for an Asset's own weightless GIMI capture.
+    attachment = source.bone_id_namespace == ATTACHMENT_NAMESPACE
+    if (source.encoding != "gimi_f32_u32_4" or (attachment and not (captured and binding.asset_type == "GIMI"))
             or source.blend_remap or source.vertex_vg_file or source.bone_id_offset):
         return None
     try:
-        admitted = _admitted_rig(binding, enabled_roots, cache)
-        if not admitted:
+        found = _hash_asset_palette(binding, enabled_roots, cache)
+        if found is None or ("attachment" in found[2]) != attachment:
             return None
-        directory, rig = admitted
-        if rig["version"] != 2:
-            return None
-        # Hash Assets may identify an exact range by its first index alone (GIMI
-        # metadata has no counts); the captured component still has to be unique.
-        matches = [p for p in rig["components"]
-                   if (p["geometry_hash"], p["first_index"]) == (binding.geometry_hash, binding.first_index)
-                   and (binding.index_count is None or p["index_count"] == binding.index_count)
-                   and (binding.component_ordinal is None or p["component_ordinal"] == binding.component_ordinal)]
-        if len(matches) != 1 or matches[0].get("rigid", False) is not rigid:
-            return None
-        palette = matches[0]
-        metadata = paths.safe_asset_path(binding.root, binding.metadata)
-        expected = paths.safe_asset_path(directory, palette["metadata_file"])
-        if not metadata or not expected or os.path.normcase(metadata) != os.path.normcase(expected):
-            return None
-        component = _zzz_metadata(directory, palette, cache)
-        if component is None:
-            return None
+        directory, rig, palette, component = found
         mapping = palette["bone_map"]
         own_geometry = True
         # Captured palettes are proven during extraction. Edited mod streams
@@ -664,9 +708,8 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
         mapping = _game_bone_mapping(mapping, bone_ids)
         if mapping is None:
             return None
-        if not own_geometry or rigid:
-            # The bound component's morph reference describes different geometry;
-            # a rigid attachment never carries native morphs.
+        if not own_geometry:
+            # The bound component's morph reference describes different geometry.
             return dict(id=rig["id"], version=2, bones=rig["bones"], bone_map=mapping,
                         humanoid_controls=rig.get("humanoid_controls"), morph_binding=None)
         morph_binding = {key: palette[key] for key in ("vertex_sha256", "index_sha256")}

@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from app.assets.animations import read_clip
-from . import gi_animation, gi_index, zzz_native, zzz_pipeline
+from . import gi_animation, gi_index, zzz_morphs, zzz_native, zzz_pipeline
 from .mecanim import HumanSolver
 from .pipeline import clip_id, preserve_library, reusable_clip_key, write_document
 from .runtime import ExtractionCancelled, check_cancelled
@@ -45,6 +45,17 @@ def prove_rig(client, root, record, query, progress, cancel, index):
     return chosen, rig, previous, captured, fingerprints
 
 
+def _facial(chosen, captured, index):
+    """Renderer-proven facial targets, or (None, reason); facial curves never block body motion."""
+    expressions = {number: palette["attachment"]["expression"]
+                   for number, palette in chosen["matched"].items() if "attachment" in palette}
+    try:
+        facial = zzz_morphs.prepare(chosen, captured, index, expressions)
+    except ValueError as error:
+        return None, str(error)
+    return (facial, None) if facial["bindings"] and facial["components"] else (None, None)
+
+
 def _clear_samples(work):
     # Sample buffers belong to one state; bounded jobs must not keep accumulating them.
     for file in work.glob("samples-*.bin"):
@@ -69,6 +80,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     _base, streamer_layer = gi_animation.layers(controller)
     mask = gi_animation.streamer_mask(streamer_layer)
     pairs, skipped = gi_animation.state_pairs(controller, index)
+    facial, facial_error = _facial(chosen, captured, index)
     imported, provenance, seen = 0, [], set()
     for number, pair in enumerate(pairs):
         progress("convert", number, len(pairs))
@@ -79,8 +91,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             streamer = client.read(pair["streamer"]) if pair["streamer"] else None
             if streamer is not None and not gi_animation.has_curves(streamer):
                 streamer = None  # An empty streamer clip leaves the body motion unchanged.
-            binary, frames, duration, omitted, goals = gi_animation.convert_state(
-                body, streamer, client.work, rig, avatar, solver, mask)
+            binary, frames, duration, omitted, goals, morph = gi_animation.convert_state(
+                body, streamer, client.work, rig, avatar, solver, mask, facial)
         except ExtractionCancelled:
             raise
         except (ValueError, KeyError, TypeError) as error:
@@ -102,11 +114,19 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                       body_duration=duration, streamer_source=gi_index.identity(pair["streamer"]) if streamer else None,
                       streamer_name=pair["streamer"]["name"] if streamer else None,
                       streamer_duration=streamer["stop"] - streamer["start"] if streamer else None,
-                      mask_bones=len(mask), omitted=omitted, humanoid_goal_error=goals)
+                      mask_bones=len(mask), omitted=omitted, humanoid_goal_error=goals,
+                      facial_targets=len(morph["names"]) if morph else 0)
         metadata = dict(format="mod-viewer-animation", version=2, coordinate_space="asset", layout="frame-major-tqs-f32le",
                         skeleton_id=rig["id"], frame_count=frames, bone_count=len(rig["bones"]), duration=duration,
                         data_file=key + ".bin", sha256=digest, source=source,
                         omitted_non_transform_channels=omitted["non_transform"] + omitted["translation_dof"], layers=layers)
+        if morph:
+            metadata["morphs"] = zzz_morphs.export_glb(facial, morph, frames, duration, library)
+            # The captured weight of each target, so a procedural blink can crossfade from it.
+            metadata["morphs"]["rest_weights"] = {
+                name: round(facial["offsets"][name], 6) for name in morph["names"]
+                if abs(facial["offsets"].get(name, 0.0)) > 1e-3}
+            metadata["blend_shape_clamp"] = morph["clamp"]
         (library / (key + ".bin")).write_bytes(binary)
         write_document(library / (key + ".json"), metadata, 1024 * 1024)
         entry = dict(id=key, name=pair["state"][:128], file=key + ".json", duration=duration)
@@ -123,13 +143,14 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="gi", skeleton_id=rig["id"], skeleton=chosen["source"],
                   meshes=chosen["meshes"], proven_components=len(chosen["matched"]),
-                  rigid_attachments=sum(1 for palette in chosen["matched"].values() if palette.get("rigid")),
+                  attachments=sum(1 for palette in chosen["matched"].values() if "attachment" in palette),
                   unmatched_components=len(captured) - len(chosen["matched"]), bones=len(rig["bones"]),
                   controller=gi_index.identity(controller_row), states=len(controller.get("states") or []),
                   streamer_layer=streamer_layer.get("name") if streamer_layer else None,
                   unapplied_layers=[layer.get("name") for layer in gi_animation.synced_layers(controller)
                                     if layer is not streamer_layer],
                   clips=len(entries), imported=imported, secondary=0, skipped=len(skipped), skipped_details=skipped,
+                  facial_targets=len(facial["bindings"]) if facial else 0, facial_error=facial_error,
                   animations=provenance)
     write_document(output / "RigExtraction.json", report, 4 * 1024 * 1024)
     return report, fingerprints

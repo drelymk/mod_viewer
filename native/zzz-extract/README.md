@@ -50,8 +50,10 @@ the same pinned reader and protocol. Block paths must name a file one directory
 below `GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/` or
 `GenshinImpact_Data/Persistent/AssetBundles/blocks/`; choosing between a
 `Persistent` copy and its `StreamingAssets` original is the Python adapter's job.
-Scans list meshes (with section shapes), Avatars, animation clips and
-AnimatorControllers with complete locators. Reads export:
+Scans list meshes (with section shapes), Avatars, animation clips,
+AnimatorControllers and SkinnedMeshRenderer routes with complete locators. The
+GI index keeps only a renderer's path and explicit mesh/Avatar pointers (external
+pointers spell CAB names in lower case); null-mesh renderers stay unrouted. Reads export:
 
 - meshes whose skin covers every vertex (packed or partial skins are rejected);
 - the Avatar skeleton with `m_TOS` paths and the model's default pose, which is
@@ -60,8 +62,9 @@ AnimatorControllers with complete locators. Reads export:
   skeleton, ZYRoll axes and limits, bone/hand indices, masses, scale, twist
   settings, human-to-Avatar node map and root). Other axes types are rejected;
 - clips decoded by the rebuilt database ACL decoder, in the ZZZ clip shape plus
-  the muscle clip's mirror flag. The decoder reports failure only through empty
-  or inconsistent output, so frame/curve counts and finite values are checked;
+  the muscle clip's mirror flag and the blend-shape clamp policy. The decoder
+  reports failure only through empty or inconsistent output, so frame/curve
+  counts and finite values are checked;
 - controller layers (names, motion sets, blend modes, weights, skeleton masks)
   and Base Layer states with each motion set's blend-tree leaves as
   `(cab, path_id)` clip pointers. Pairing and conversion happen in Python.
@@ -91,8 +94,9 @@ skinning, and restores the original geometry when playback ends. Unsupported
 in-between targets remain omitted. Curve sampling has an independent memory budget.
 On the first clip read, the helper reads only the contained game's PlayerSettings
 blend-shape clamp policy from `globalgamemanagers`. Extraction records and honors
-that policy instead of assuming signed or clamped playback. Unknown policy is not
-guessed. Clip-only runtime revisions keep the separate metadata-index version,
+that policy instead of assuming signed or clamped playback. Engines before Unity
+2018.3 (Genshin's 2017.4) have no such setting and always clamp, which the
+serialized engine version establishes. Unknown policy is not guessed. Clip-only runtime revisions keep the separate metadata-index version,
 so this conversion correction does not require rebuilding a ready format-3 index.
 Unchanged mod Blend streams may use an exact verified fingerprint. Other weight
 layouts keep the existing inferred rig until independently proven.

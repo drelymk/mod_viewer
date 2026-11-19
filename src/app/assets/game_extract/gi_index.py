@@ -12,7 +12,30 @@ from .zzz_index import identity
 
 MAX_BYTES = 256 * 1024 * 1024
 FORMAT = 1
-TYPES = ("Mesh", "Avatar", "AnimationClip", "AnimatorController")
+TYPES = ("Mesh", "Avatar", "AnimationClip", "AnimatorController", "SkinnedMeshRenderer")
+
+
+def _pointer(value):
+    return (isinstance(value, dict) and isinstance(value.get("cab"), str) and len(value["cab"]) <= 256
+            and type(value.get("path_id")) is int
+            and all(type(value[key]) is int and value[key] >= 0 for key in ("offset", "file_ordinal") if key in value))
+
+
+def _renderer(value):
+    """Facial routes keep only the renderer path and explicit mesh/Avatar pointers."""
+    return (isinstance(value, dict) and set(value) == {"path", "mesh", "avatar", "blend_shape_count"}
+            and isinstance(value["path"], str) and len(value["path"]) <= 4096
+            and _pointer(value["mesh"]) and _pointer(value["avatar"])
+            and type(value["blend_shape_count"]) is int and 0 <= value["blend_shape_count"] <= 256)
+
+
+def _route(row):
+    # Null-mesh renderers need full bone-path proof, which GI does not index; they stay unrouted.
+    renderer = row.get("renderer")
+    if not isinstance(renderer, dict) or not isinstance(renderer.get("mesh"), dict) or not renderer["mesh"].get("path_id"):
+        return None
+    route = {key: renderer.get(key) for key in ("path", "mesh", "avatar", "blend_shape_count")}
+    return {**row, "renderer": route} if _renderer(route) else None
 
 
 def fingerprint(folder):
@@ -45,6 +68,9 @@ def valid_rows(rows):
         if row["type"] == "Mesh" and (not isinstance(shape, list) or len(shape) > 4096 or any(
                 not isinstance(item, list) or len(item) != 2 or any(type(number) is not int or not 0 <= number <= 1500000 for number in item)
                 for item in shape)):
+            return False
+        if (row["type"] == "SkinnedMeshRenderer") != ("renderer" in row) or (
+                "renderer" in row and not _renderer(row["renderer"])):
             return False
         key = identity(row)
         if key in seen:
@@ -89,7 +115,12 @@ def scan(client, folder, progress, cancel):
     for number in range(0, len(files), 16):
         progress("index", number, len(files))
         check_cancelled(cancel)
-        rows.extend(client.scan_many(files[number:number + 16]))
+        for row in client.scan_many(files[number:number + 16]):
+            if row.get("type") == "SkinnedMeshRenderer":
+                row = _route(row)
+                if row is None:
+                    continue
+            rows.append(row)
     progress("index", len(files), len(files))
     if not valid_rows(rows):
         raise ValueError("The Genshin Impact metadata index is incomplete or ambiguous.")

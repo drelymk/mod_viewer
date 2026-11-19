@@ -1,7 +1,9 @@
 // Procedural blink for clips that carry no facial curves of their own.
 //
 // The backend names the library's eye-closing shapes; weight 1 is their full
-// closure. The schedule depends only on playback time, so it is deterministic.
+// closure. Optional per-shape scales crossfade from a captured pose (Genshin
+// eyes swap their default shape for the closed one). The schedule depends only
+// on playback time, so it is deterministic.
 
 const SLOT = 3.2;
 const FIRST_BLINK = 0.6;
@@ -35,10 +37,13 @@ export function idleBlinkWeight(time) {
 
 /** Prepare a backend `idle_morphs` descriptor once its shared target buffer is loaded. */
 export function createIdleBlink(descriptor, buffer) {
+  const scales = Array.isArray(descriptor.scales) ? Float32Array.from(descriptor.scales) : null;
+  if (scales && (scales.length !== descriptor.names.length || !scales.every(Number.isFinite))) return null;
   return {
     names: descriptor.names,
     components: descriptor.components,
     buffer,
+    scales,
     weights: new Float32Array(descriptor.names.length),
   };
 }
@@ -46,6 +51,8 @@ export function createIdleBlink(descriptor, buffer) {
 /** Write the blink weight into every eye-closing shape; paused playback keeps eyes open. */
 export function sampleIdleBlink(idle, time, playing) {
   if (!idle) return null;
-  idle.weights.fill(playing ? idleBlinkWeight(time) : 0);
+  const weight = playing ? idleBlinkWeight(time) : 0;
+  if (!idle.scales) idle.weights.fill(weight);
+  else idle.scales.forEach((scale, index) => (idle.weights[index] = weight * scale));
   return idle;
 }

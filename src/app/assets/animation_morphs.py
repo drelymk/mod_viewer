@@ -54,6 +54,51 @@ def blink_targets(components):
     return sides if len(sides) >= 2 else []
 
 
+# Genshin's closed-eye pose is the Eye_WinkB pair on one renderer; game clips blink with it.
+_GENSHIN_BLINK = re.compile(r"([0-9a-f]{8}):[0-9a-f]{8}:Eye_WinkB_([LR])")
+
+
+def idle_blink(morphs):
+    """Shapes and per-shape scales for a procedural blink, or None.
+
+    Without ``rest_weights`` this is ``blink_targets`` at scale 1. Genshin clips
+    record the weight each target already shows in the captured geometry; there
+    the blink crossfades that renderer's channels from their captured weights to
+    the closed-eye pose: the WinkB pair to 1, every other captured channel to 0.
+    """
+    components = morphs.get("components") if isinstance(morphs, dict) else None
+    rest = morphs.get("rest_weights") if isinstance(morphs, dict) else None
+    if rest is None:
+        names = blink_targets(components)
+        return (names, None) if names else None
+    if (not isinstance(rest, dict) or len(rest) > 256 or any(
+            not isinstance(name, str) or type(weight) not in (int, float) or not math.isfinite(weight) or abs(weight) > 2
+            for name, weight in rest.items())):
+        raise ValueError("Invalid captured morph weights.")
+    available = []
+    for component in components if isinstance(components, list) else []:
+        for target in (component.get("targets") if isinstance(component, dict) else None) or []:
+            name = target.get("name") if isinstance(target, dict) else None
+            if isinstance(name, str) and name not in available:
+                available.append(name)
+    closers = {}
+    for name in available:
+        match = _GENSHIN_BLINK.fullmatch(name)
+        if match:
+            closers.setdefault(match.group(1), {})[match.group(2)] = name
+    pairs = [sides for sides in closers.values() if set(sides) == {"L", "R"}]
+    if len(pairs) != 1:
+        return None  # Never one eye, and never guess between renderers.
+    renderer = next(iter(pairs[0].values()))[:9]
+    names = [pairs[0]["L"], pairs[0]["R"]]
+    scales = [1 - rest.get(name, 0) for name in names]
+    for name in available:
+        if name.startswith(renderer) and name not in names and abs(rest.get(name, 0)) > 1e-3:
+            names.append(name)
+            scales.append(-rest[name])
+    return names, scales
+
+
 def _glb_targets(data, raw):
     """Read only the embedded runtime view; never resolve GLB URI resources."""
     if len(data) < 28 or struct.unpack_from("<3I", data) != (0x46546C67, 2, len(data)):

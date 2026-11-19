@@ -1,6 +1,8 @@
 """Prove Unity meshes against captured ZZZ triangles, UVs and float skin weights."""
 
 import hashlib
+import itertools
+import math
 from collections import Counter
 from pathlib import Path
 import struct
@@ -20,9 +22,9 @@ def capture(root, record, asset_type="ZZMI"):
     label = _LABELS[asset_type]
     result = load_hash_asset(asset_type, root, record)
     asset = Path(paths.safe_asset_dir(root, record["path"]) or "")
-    components, rigid, files, dumps = [], [], {}, {}
+    components, weightless, files, dumps = [], [], {}, {}
     for part in result.parts:
-        manifest = part.skinning or part.rigid_attachment
+        manifest = part.skinning or part.attachment
         if manifest is None:
             continue
         vb = paths.safe_asset_path(root, manifest.file)
@@ -48,9 +50,9 @@ def capture(root, record, asset_type="ZZMI"):
             uv=np.frombuffer(part.uvs, dtype="<f4").reshape(-1, 2) if part.uvs else None,
             indices=np.frombuffer(part.indices, dtype="<u4").reshape(-1, 3))
         if part.skinning is None:
-            # Weightless captures (GIMI head-attached faces) are proven separately
-            # as whole-mesh single-bone attachments; they never carry a Blend palette.
-            rigid.append({**component, "rigid": True})
+            # Weightless captures (GIMI faces) are proven separately as attachments
+            # that take a native mesh's own weights; they never carry a Blend palette.
+            weightless.append({**component, "weightless": True})
             continue
         if not dump.blend_data:
             continue
@@ -58,7 +60,7 @@ def capture(root, record, asset_type="ZZMI"):
         components.append({**component, "blend_sha256": hashlib.sha256(dump.blend_data).hexdigest(), "blends": blends})
     if not components:
         raise ValueError(f"{label} rig extraction requires captured vertex weights and index dumps.")
-    return components + rigid, files
+    return components + weightless, files
 
 
 def avatar_bones(avatar):
@@ -151,56 +153,173 @@ def match_component_candidates(part, mesh):
     return matches
 
 
-def _single_bone(mesh):
-    """The one native palette slot carrying every vertex's full weight, or None."""
-    bones = set()
-    weights, indices = mesh.get("weights") or [], mesh.get("bone_indices") or []
-    if len(weights) != len(mesh["vertices"]) // 3 or len(indices) != len(weights):
+ATTACHMENT_TOLERANCE = 1e-4
+# Captured expressions are clamped game weights; allow only least-squares noise outside 0..1.
+EXPRESSION_SLACK = 0.05
+
+
+def _native_influences(mesh, count):
+    """Native (weights, slots) arrays, each vertex fully weighted, or None."""
+    weights = np.asarray(mesh.get("weights") or [], dtype=float)
+    slots = np.asarray(mesh.get("bone_indices") or [], dtype=float)
+    bones = len(mesh.get("bone_hashes") or [])
+    if (weights.shape != (count, 4) or slots.shape != (count, 4) or not np.isfinite(weights).all()
+            or np.any(weights < 0) or np.any(slots != np.floor(slots)) or np.any(slots < 0)
+            or np.any(slots[weights > 0] >= bones) or np.any(np.abs(weights.sum(axis=1) - 1) > 1e-3)):
         return None
-    for row, ids in zip(weights, indices):
-        used = {int(bone) for weight, bone in zip(row, ids) if weight > 0}
-        if len(used) != 1 or abs(sum(weight for weight in row if weight > 0) - 1) > 2e-5:
-            return None
-        bones |= used
-        if len(bones) > 1:
-            return None
-    bone = next(iter(bones), None)
-    return bone if bone is not None and 0 <= bone < len(mesh.get("bone_hashes") or []) else None
+    return weights, slots.astype(int)
 
 
-def match_rigid_candidates(part, mesh):
-    """Prove a weightless capture as a rigid attachment of a single-bone native mesh.
+def _shape_deltas(mesh, count):
+    """Single-frame native blend shapes as (hashes, full-weight deltas[K, N, 3])."""
+    raw = mesh.get("blend_shapes") or {}
+    channels, frames, weights, vertices = (raw.get(key) or [] for key in ("channels", "frames", "weights", "vertices"))
+    hashes, deltas = [], []
+    for channel in channels[:256]:
+        first, frame_count = channel.get("first"), channel.get("count")
+        if (frame_count != 1 or type(first) is not int or not 0 <= first < min(len(frames), len(weights))
+                or type(channel.get("hash")) is not int or channel["hash"] in hashes):
+            continue
+        frame, full = frames[first], weights[first]
+        begin, size = frame.get("first"), frame.get("count")
+        if (type(full) not in (int, float) or not math.isfinite(full) or full <= 0
+                or type(begin) is not int or type(size) is not int or begin < 0 or size < 0 or begin + size > len(vertices)):
+            continue
+        delta = np.zeros((count, 3))
+        for row in vertices[begin:begin + size]:
+            index = row.get("index")
+            if type(index) is not int or not 0 <= index < count:
+                break
+            delta[index] = row["position"]
+        else:
+            if np.isfinite(delta).all():
+                hashes.append(channel["hash"])
+                deltas.append(delta)
+    return hashes, (np.stack(deltas) if deltas else np.zeros((0, count, 3)))
 
-    Every native vertex carries its full weight on one bone, so any drawn subset
-    binds identically: the captured triangle multiset must be contained in one
-    native section, with each vertex uniquely matched by position and UV.
+
+def _uv_cells(uv):
+    cells = {}
+    for index, key in enumerate(map(tuple, np.floor(uv / ATTACHMENT_TOLERANCE).astype(np.int64))):
+        cells.setdefault(key, []).append(index)
+    return cells
+
+
+def _uv_candidates(cells, uv, texcoord):
+    key = np.floor(np.asarray(texcoord) / ATTACHMENT_TOLERANCE).astype(np.int64)
+    found = [index for du in (-1, 0, 1) for dv in (-1, 0, 1)
+             for index in cells.get((int(key[0] + du), int(key[1] + dv)), ())]
+    return [index for index in found if np.all(np.abs(uv[index] - texcoord) <= ATTACHMENT_TOLERANCE)]
+
+
+def _explained_mapping(part, positions, uv, deltas, indices):
+    """Map each captured vertex to its unique native vertex at native rest plus one shared expression.
+
+    Every captured vertex must have a same-UV native vertex whose rest position,
+    displaced by the solved blend-shape weights, matches within tolerance, and no
+    other same-UV vertex may. Returns (mapping, weights) or None.
     """
-    bone = _single_bone(mesh)
+    cells = _uv_cells(uv)
+    candidates = [_uv_candidates(cells, uv, texcoord) for texcoord in part["uv"]]
+    if any(not items for items in candidates) or len(candidates) > 250000:
+        return None
+    captured = np.asarray(part["positions"], dtype=float)
+    weights = np.zeros(len(deltas))
+    chosen = None
+    for _round in range(4):
+        posed = positions + np.tensordot(weights, deltas, axes=1) if len(deltas) else positions
+        chosen = np.array([min(items, key=lambda index: np.linalg.norm(posed[index] - point))
+                           for items, point in zip(candidates, captured)])
+        if not len(deltas):
+            break
+        system = deltas[:, chosen, :].reshape(len(deltas), -1).T
+        solved, *_ = np.linalg.lstsq(system, (captured - positions[chosen]).ravel(), rcond=None)
+        if np.allclose(solved, weights, rtol=0, atol=1e-7):
+            break
+        weights = solved
+    if np.any(weights < -EXPRESSION_SLACK) or np.any(weights > 1 + EXPRESSION_SLACK):
+        return None
+    posed = positions + np.tensordot(weights, deltas, axes=1) if len(deltas) else positions
+    options = [{index for index in items if np.all(np.abs(posed[index] - point) <= ATTACHMENT_TOLERANCE)}
+               for items, point in zip(candidates, captured)]
+    mapping = _triangle_assignment(part["indices"], options, indices)
+    return None if mapping is None else (mapping, weights)
+
+
+def _triangle_assignment(captured, options, indices):
+    """Resolve each captured vertex's explained candidates through shared native triangles.
+
+    Seam duplicates share position and UV; only their triangles tell them apart.
+    Every captured triangle must keep a native triangle consistent with its
+    vertices' options, and every vertex must end with exactly one distinct native vertex.
+    """
+    if any(not option for option in options):
+        return None
+    by_vertex = {}
+    for number, row in enumerate(indices):
+        for vertex in set(row.tolist()):
+            by_vertex.setdefault(vertex, []).append(number)
+    rows = [tuple(int(v) for v in row) for row in captured]
+    for _pass in range(8):
+        changed = False
+        for row in rows:
+            if len(set(row)) != 3:
+                return None
+            found = [set(), set(), set()]
+            for number in {t for v in options[row[0]] for t in by_vertex.get(v, ())}:
+                for order in itertools.permutations(indices[number].tolist()):
+                    if all(order[k] in options[row[k]] for k in range(3)):
+                        for k in range(3):
+                            found[k].add(order[k])
+            for k, vertex in enumerate(row):
+                narrowed = options[vertex] & found[k]
+                if not narrowed:
+                    return None
+                if narrowed != options[vertex]:
+                    options[vertex], changed = narrowed, True
+        if not changed:
+            break
+    if any(len(option) != 1 for option in options):
+        return None
+    mapping = {compact: next(iter(option)) for compact, option in enumerate(options)}
+    return mapping if len(set(mapping.values())) == len(mapping) else None
+
+
+def match_attachment_candidates(part, mesh):
+    """Prove a weightless capture against a native skinned mesh and adopt its own weights.
+
+    The capture may show the mesh in an expression: its positions must equal the
+    native rest pose plus one solved blend-shape combination, every vertex matched
+    uniquely by UV and explained position, and its triangles must form a
+    sub-multiset of one native section. The drawn subset then binds through the
+    native per-vertex influences. Returns (palette, signs, mapping, attachment).
+    """
     native = np.asarray(mesh["vertices"], dtype=float).reshape(-1, 3)
     uv = np.asarray(mesh["uv"], dtype=float)
-    if (bone is None or not 0 < len(native) <= 250000 or not np.isfinite(native).all()
+    if (not 0 < len(native) <= 250000 or not np.isfinite(native).all()
             or uv.ndim != 1 or uv.size not in (len(native) * 2, len(native) * 3, len(native) * 4)):
         return []
+    influences = _native_influences(mesh, len(native))
     uv = uv.reshape(len(native), -1)[:, :2].copy()
     uv[:, 1] = 1 - uv[:, 1]
     indices = np.asarray(mesh["indices"], dtype=int).reshape(-1, 3)
-    if (part["uv"] is None or not np.isfinite(uv).all() or len(indices) > 500000
-            or np.min(indices) < 0 or np.max(indices) >= len(native)):
+    if (influences is None or part["uv"] is None or not np.isfinite(uv).all() or len(indices) > 500000
+            or not len(indices) or np.min(indices) < 0 or np.max(indices) >= len(native)):
         return []
+    hashes, deltas = _shape_deltas(mesh, len(native))
     matches = []
     for signs in ((1, 1, 1), (-1, 1, 1), (1, -1, 1), (1, 1, -1)):
-        positions = native * signs
-        original = np.asarray(part["source_vertices"], dtype=int)
-        mapping = None
-        if (len(original) == len(part["positions"]) and len(original) and np.max(original) < len(native)
-                and np.allclose(part["positions"], positions[original], rtol=0, atol=1e-4)
-                and np.allclose(part["uv"], uv[original], rtol=0, atol=1e-4)):
-            mapping = dict(enumerate(int(vertex) for vertex in original))
-        if mapping is None or not _contained_triangles(part, mesh, indices, mapping):
-            mapping = _triangle_mapping(part, positions, uv, indices)
-        if mapping is None or not _contained_triangles(part, mesh, indices, mapping):
+        found = _explained_mapping(part, native * signs, uv, deltas * signs, indices)
+        if found is None or not _contained_triangles(part, mesh, indices, found[0]):
             continue
-        matches.append(({"0": bone}, signs, mapping))
+        mapping, expression = found
+        order = [mapping[compact] for compact in range(len(mapping))]
+        weights, slots = influences[0][order], influences[1][order]
+        slots[weights <= 0] = 0
+        used = sorted({int(slot) for slot in slots[weights > 0]})
+        attachment = dict(weights=weights.ravel().tolist(), slots=slots.ravel().tolist(),
+                          expression={str(key): float(value) for key, value in zip(hashes, expression)})
+        matches.append(({str(slot): slot for slot in used}, signs, mapping, attachment))
     return matches
 
 

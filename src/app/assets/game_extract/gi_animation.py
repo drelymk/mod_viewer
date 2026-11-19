@@ -160,10 +160,40 @@ def _write(output, written, bone, attribute, channel):
     output[:, bone, offset:offset + channel.shape[1]] = channel
 
 
-def convert_state(body, streamer, work, rig, avatar, solver, mask):
+def _morph_column(binding, channel, facial):
+    """A routed facial curve as (target name, normalized weights), else None."""
+    target = facial["bindings"].get((binding["path"], binding["attribute"])) if facial else None
+    if target is None or binding["type"] != "SkinnedMeshRenderer" or binding["custom"] != 20 or binding["pointer"]:
+        return None
+    name, full_weight = target
+    return name, channel[:, 0] / full_weight
+
+
+def _morphs(columns, clips, facial):
+    """Clamp per the game's policy, then remove the expression the capture already shows."""
+    if not columns:
+        return None
+    policies = {clip.get("blend_shape_clamp") for clip in clips}
+    if len(policies) != 1 or type(next(iter(policies))) is not bool:
+        raise ValueError("The native blend-shape weight policy is unavailable.")
+    clamp = next(iter(policies))
+    names = list(columns)
+    weights = np.column_stack([columns[name] for name in names])
+    if not np.isfinite(weights).all() or np.any(np.abs(weights) > 1e6):
+        raise ValueError("The native clip has invalid morph weights.")
+    if clamp:
+        np.clip(weights, 0, 1, out=weights)
+    # Captured geometry already shows each channel's default weight; only animated
+    # channels change, so they move by their difference from that weight.
+    weights = weights - np.asarray([facial["offsets"].get(name, 0.0) for name in names])
+    return dict(names=names, weights=weights.astype("<f4"), clamp=clamp)
+
+
+def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
     """Convert one state's body (and optional streamer) clips to version-2 TQS data.
 
-    Returns ``(binary, frames, duration, omitted, goal_errors)``.
+    ``facial`` (from ``zzz_morphs.prepare``) routes blend-shape curves to proven
+    captured targets. Returns ``(binary, frames, duration, omitted, goal_errors, morph)``.
     """
     start, stop = _timing(body)
     duration = stop - start
@@ -185,8 +215,16 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask):
     poses = np.array([[*b["translation"], *b["rotation"], *b["scale"]] for b in rig["bones"]], dtype=float)
     output = np.broadcast_to(poses, (frames, *poses.shape)).copy()
     omitted = dict(non_transform=0, translation_dof=0, humanoid_owned=0, unbound=0, masked=0)
-    written, channels = set(), {}
+    written, channels, morph_columns, morph_sources = set(), {}, {}, []
     for binding, channel in _bindings(body, sample_channels(body, work, targets, reserved, QUATERNION_TOLERANCE)):
+        morph = _morph_column(binding, channel, facial)
+        if morph is not None:
+            if morph[0] in morph_columns:
+                raise ValueError("The native clip has duplicate morph tracks.")
+            morph_columns[morph[0]] = morph[1]
+            if body not in morph_sources:
+                morph_sources.append(body)
+            continue
         if binding["type"] == "Animator" and binding["custom"] == 8 and not binding["pointer"]:
             attribute = binding["attribute"]
             if not 0 <= attribute < LAST:
@@ -221,8 +259,18 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask):
         s_start, s_stop = _timing(streamer)
         # Synced layers follow the base state's normalized time.
         layer_targets = s_start + (targets - start) / duration * (s_stop - s_start)
-        layer_written = set()
+        layer_written, layer_morphs = set(), set()
         for binding, channel in _bindings(streamer, sample_channels(streamer, work, layer_targets, reserved, QUATERNION_TOLERANCE)):
+            morph = _morph_column(binding, channel, facial)
+            if morph is not None:
+                # The synced override layer replaces the body's value for curves it animates.
+                if morph[0] in layer_morphs:
+                    raise ValueError("The native streamer clip has duplicate morph tracks.")
+                layer_morphs.add(morph[0])
+                morph_columns[morph[0]] = morph[1]
+                if streamer not in morph_sources:
+                    morph_sources.append(streamer)
+                continue
             if binding["type"] != "Transform":
                 continue  # Streamer root motion and scalar curves are not part of the body pose.
             if binding["pointer"] or binding["attribute"] not in (1, 2, 3):
@@ -239,12 +287,15 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask):
     if not np.isfinite(output).all() or np.any(np.abs(output) > 1e6):
         raise ValueError("The native animation transform table is invalid.")
     binary = output.astype("<f4").tobytes()
+    morph = _morphs(morph_columns, morph_sources, facial)
+    if morph is not None:
+        binary += morph["weights"].tobytes()
     if len(binary) > 128 * 1024 * 1024:
         raise ValueError("Native animation exceeds playback limits.")
     goal_errors = None
     if errors:
         goal_errors = dict(hand=hand_error, foot=max((float(errors[name].max()) for name in ("LeftFoot", "RightFoot") if name in errors), default=None))
-    return binary, frames, duration, omitted, goal_errors
+    return binary, frames, duration, omitted, goal_errors, morph
 
 
 def streamer_mask(layer):

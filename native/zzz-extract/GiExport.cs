@@ -126,7 +126,7 @@ internal static class GiExport
         };
     }
 
-    internal static object ExportClip(AnimationClip animation, string work, int id)
+    internal static object ExportClip(AnimationClip animation, string work, int id, bool? blendShapeClamp)
     {
         var clip = animation.m_MuscleClip.m_Clip;
         if (clip.m_ACLClip is not GIACLClip acl) throw new InvalidDataException();
@@ -141,6 +141,7 @@ internal static class GiExport
             stop = animation.m_MuscleClip.m_StopTime,
             sample_rate = animation.m_SampleRate,
             mirror = animation.m_MuscleClip.m_Mirror,
+            blend_shape_clamp = blendShapeClamp,
             file,
             times,
             acl_count = acl.IsSet ? acl.CurveCount : 0,

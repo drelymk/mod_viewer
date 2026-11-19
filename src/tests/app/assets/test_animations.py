@@ -457,6 +457,37 @@ def test_blink_targets_prefer_whole_face_shape_and_never_wink(names, expected):
     assert blink_targets(None) == [] and blink_targets([dict(targets=None), "x"]) == []
 
 
+EYE, MOUTH = "0000000a:", "0000000b:"
+
+
+@pytest.mark.parametrize("names, rest, expected", [
+    # The captured default eye pose crossfades into the closed WinkB pair.
+    ([EYE + "00000001:Eye_Default", EYE + "00000002:Eye_WinkB_L", EYE + "00000003:Eye_WinkB_R",
+      EYE + "00000004:Eye_WinkA_L", MOUTH + "00000005:Mouth_Default"],
+     {EYE + "00000001:Eye_Default": 1.0, MOUTH + "00000005:Mouth_Default": 1.0},
+     ([EYE + "00000002:Eye_WinkB_L", EYE + "00000003:Eye_WinkB_R", EYE + "00000001:Eye_Default"], [1, 1, -1])),
+    # Eyes captured open: the closed pair alone, less any closure already shown.
+    ([EYE + "00000002:Eye_WinkB_L", EYE + "00000003:Eye_WinkB_R"], {EYE + "00000002:Eye_WinkB_L": .25},
+     ([EYE + "00000002:Eye_WinkB_L", EYE + "00000003:Eye_WinkB_R"], [.75, 1])),
+    # Never one eye, never a pair split across renderers, never a generic name.
+    ([EYE + "00000002:Eye_WinkB_L"], {}, None),
+    ([EYE + "00000002:Eye_WinkB_L", MOUTH + "00000003:Eye_WinkB_R"], {}, None),
+    ([EYE + "00000002:E_Close"], {}, None),
+    # Without captured weights the library keeps the plain named-shape rule.
+    (["E_Close", "Smile"], None, (["E_Close"], None)),
+])
+def test_idle_blink_crossfades_genshin_eyes_from_their_captured_pose(names, rest, expected):
+    from app.assets.animation_morphs import idle_blink
+
+    morphs = dict(components=[dict(targets=[dict(name=name) for name in names])])
+    if rest is not None:
+        morphs["rest_weights"] = rest
+    result = idle_blink(morphs)
+    assert result == (None if expected is None else (expected[0], pytest.approx(expected[1]) if expected[1] else None))
+    with pytest.raises(ValueError, match="captured morph weights"):
+        idle_blink({**morphs, "rest_weights": {"name": float("nan")}})
+
+
 def test_clips_without_facial_curves_share_the_library_blink_targets(tmp_path, monkeypatch):
     rig, source = sample()
     frames, bone_data = converter()(source, rig, 1)
@@ -489,7 +520,7 @@ def test_clips_without_facial_curves_share_the_library_blink_targets(tmp_path, m
     token = sessions.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animation_session"]
 
     plain = sessions.load(token, "plain")["clip"]
-    assert "morphs" not in plain
+    assert "morphs" not in plain and "scales" not in plain["idle_morphs"]
     assert plain["idle_morphs"]["names"] == ["E_Close"] and plain["idle_morphs"]["components"] == components
     assert plain["idle_morphs"]["data"] == {"url": "/geometry/2", "length": len(target_data)}
     assert published == [bone_data, target_data]
@@ -505,3 +536,12 @@ def test_clips_without_facial_curves_share_the_library_blink_targets(tmp_path, m
     other = AnimationSessions()
     token = other.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animation_session"]
     assert "idle_morphs" not in other.load(token, "plain")["clip"]
+
+    # Genshin libraries record captured weights; the blink then carries per-shape scales.
+    targets[0]["name"], targets[1]["name"] = EYE + "00000002:Eye_WinkB_L", EYE + "00000003:Eye_WinkB_R"
+    (directory / "Facial.json").write_text(json.dumps({**json.loads((directory / "Facial.json").read_text()), "morphs": {
+        **morphs, "names": [targets[0]["name"]], "components": components, "rest_weights": {}}}))
+    genshin = AnimationSessions()
+    token = genshin.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animation_session"]
+    idle = genshin.load(token, "plain")["clip"]["idle_morphs"]
+    assert idle["names"] == [targets[0]["name"], targets[1]["name"]] and idle["scales"] == [1, 1]

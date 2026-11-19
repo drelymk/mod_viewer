@@ -30,6 +30,13 @@ def rows_for(block):
         dict(name="Clip01", type="AnimationClip", block=block, cab="CAB-01", offset=8, file_ordinal=0, path_id=number * 10 + 2),
         dict(name="Mesh01", type="Mesh", block=block, cab="CAB-01", offset=16, file_ordinal=0, path_id=number * 10 + 3, shape=[[3, 3]]),
         dict(name="Avatar01", type="Avatar", block=block, cab="CAB-01", offset=24, file_ordinal=0, path_id=number * 10 + 4),
+        # Facial routes keep only path and pointers; null-mesh renderers are not indexed.
+        dict(name="", type="SkinnedMeshRenderer", block=block, cab="CAB-01", offset=32, file_ordinal=0, path_id=number * 10 + 5,
+             renderer=dict(path="Part01", mesh=dict(cab="cab-01", path_id=number * 10 + 3),
+                           avatar=dict(cab="cab-01", path_id=number * 10 + 4), bone_paths=["Root"], blend_shape_count=2)),
+        dict(name="", type="SkinnedMeshRenderer", block=block, cab="CAB-01", offset=32, file_ordinal=0, path_id=number * 10 + 6,
+             renderer=dict(path="Part02", mesh=dict(cab="cab-01", path_id=0),
+                           avatar=dict(cab="cab-01", path_id=number * 10 + 4), bone_paths=["Root"], blend_shape_count=0)),
     ]
 
 
@@ -106,6 +113,9 @@ def test_gi_index_lifecycle_identity_and_staleness(tmp_path, monkeypatch):
     rows, count = gi_index.build(client, folder, lambda *_: None, cancel)
     assert count == 1 and gi_index.status(folder)["state"] == "ready"
     assert {row["type"] for row in rows} == set(gi_index.TYPES)
+    (renderer,) = [row["renderer"] for row in rows if row["type"] == "SkinnedMeshRenderer"]
+    assert renderer == dict(path="Part01", mesh=dict(cab="cab-01", path_id=13), avatar=dict(cab="cab-01", path_id=14),
+                            blend_shape_count=2)
     with patch.object(client, "scan_many", side_effect=AssertionError("A ready index must be reused.")):
         assert gi_index.ensure(client, folder, lambda *_: None, cancel) == rows
     # A schema upgrade needs one completed rebuild; the replacement client reuses that result.
@@ -124,7 +134,7 @@ def test_gi_index_lifecycle_identity_and_staleness(tmp_path, monkeypatch):
         gi_index.build(Client(folder, lambda row: {**row, "offset": -1} if row["type"] == "Mesh" else row), folder, lambda *_: None, cancel)
     assert file.read_bytes() == before
     with pytest.raises(ValueError, match="incomplete or ambiguous"):
-        gi_index.build(Client(folder, lambda row: {**row, "type": "SkinnedMeshRenderer"} if row["type"] == "Mesh" else row), folder, lambda *_: None, cancel)
+        gi_index.build(Client(folder, lambda row: {**row, "type": "Light"} if row["type"] == "Mesh" else row), folder, lambda *_: None, cancel)
     assert file.read_bytes() == before
     # Changing a block, then adding a Persistent override of it, each makes the cache stale.
     block.write_bytes(b"updated block")
@@ -306,15 +316,22 @@ def test_gi_shape_prefilter_compares_index_counts_of_overlapping_sections(tmp_pa
                                        mesh_hint=gi_pipeline.colocated, shape_key=zzz_pipeline.exact_shape)
 
 
-def add_rigid_component(root, asset, rows, client):
-    """A weightless captured part drawing one of a native single-bone mesh's two triangles."""
-    vertices = [[2.1, .3, .5], [2.6, .4, .9], [2.3, 1.1, .6], [2.8, 1.3, .2]]
+SHAPE_HASH = 7
+
+
+def add_attachment_component(root, asset, rows, client):
+    """A weightless capture of one of a native two-bone mesh's triangles, shown with a blend shape at full weight."""
+    vertices = np.array([[2.1, .3, .5], [2.6, .4, .9], [2.3, 1.1, .6], [2.8, 1.3, .2]])
+    shape = {1: [0, .01, 0], 3: [0, .02, .01]}
+    captured = vertices.copy()
+    for index_, delta in shape.items():
+        captured[index_] += delta
     uv = [[.6, .1], [.7, .2], [.8, .3], [.9, .4]]
     vb = asset / "part-vb0=33333333.txt"
     lines = ["stride: 20", "vertex count: 4",
              "element[0]: POSITION0, format: R32G32B32_FLOAT",
              "element[1]: TEXCOORD0, format: R32G32_FLOAT"]
-    for number, (position, texcoord) in enumerate(zip(vertices, uv)):
+    for number, (position, texcoord) in enumerate(zip(captured.tolist(), uv)):
         for name, values in (("POSITION", position), ("TEXCOORD", texcoord)):
             lines.append(f"vb0[{number}]+000 {name}: " + ", ".join(map(str, values)))
     vb.write_text("\n".join(lines) + "\n")
@@ -324,35 +341,44 @@ def add_rigid_component(root, asset, rows, client):
     entries.append(dict(component_name="Part02", position_vb="33333333", ib="44444444", object_indexes=[0],
                         object_indexes_count=[3], object_classifications=["A"], vb_file=vb.name, ib_files=[ib.name]))
     (asset / "hash.json").write_text(json.dumps(entries))
-    mesh = dict(name="Part02", vertices=np.array(vertices).ravel().tolist(), uv=np.array(uv).ravel().tolist(),
-                indices=[0, 1, 2, 1, 2, 3], weights=[[1, 0, 0, 0]] * 4, bone_indices=[[1, 0, 0, 0]] * 4,
-                bone_hashes=[0, 100], bind_poses=deepcopy(client.documents[2]["bind_poses"]),
+    shapes = dict(channels=[dict(name="Shape01", hash=SHAPE_HASH, first=0, count=1)], weights=[100.0],
+                  frames=[dict(first=0, count=2, normals=False)],
+                  vertices=[dict(index=index_, position=delta, normal=[0, 0, 0]) for index_, delta in shape.items()])
+    mesh = dict(name="Part02", vertices=vertices.ravel().tolist(), uv=np.array(uv).ravel().tolist(),
+                indices=[0, 1, 2, 1, 2, 3], weights=[[.75, .25, 0, 0]] * 4, bone_indices=[[1, 0, 0, 0]] * 4,
+                bone_hashes=[0, 100], bind_poses=deepcopy(client.documents[2]["bind_poses"]), blend_shapes=shapes,
                 sections=[dict(first=0, count=6, vertex_first=0, vertex_count=4)])
     rows.append(gi_row("Part02", "Mesh", 9, shape=[[4, 6]]))
     client.documents[9] = mesh
     return index.build_index("GIMI", str(root))["assets"][0]
 
 
-def test_gi_weightless_part_is_proven_as_a_rigid_single_bone_attachment(tmp_path):
+def test_gi_weightless_part_adopts_native_weights_and_its_captured_expression(tmp_path):
     root, asset, record, rows, client = gimi_fixture(tmp_path)
-    record = add_rigid_component(root, asset, rows, client)
+    record = add_attachment_component(root, asset, rows, client)
     chosen, rig, _previous, captured, _fingerprints = gi_pipeline.prove_rig(
         client, root, record, None, lambda *_: None, threading.Event(), rows)
-    assert [part.get("rigid", False) for part in captured] == [False, True]
+    assert [part.get("weightless", False) for part in captured] == [False, True]
     assert sorted(chosen["matched"]) == [0, 1]
-    rigid = next(component for component in rig["components"] if component.get("rigid"))
-    assert rigid["geometry_hash"] == "44444444"
-    assert rigid["bone_map"] == {"0": 2}  # Joint01 after the mesh-space root.
+    attached = next(component for component in rig["components"] if "attachment" in component)
+    assert attached["geometry_hash"] == "44444444"
+    # Native slots map to the root and Joint01 after the mesh-space root.
+    assert attached["bone_map"] == {"0": 1, "1": 2}
+    attachment = attached["attachment"]
+    assert attachment["weights"] == pytest.approx([.75, .25, 0, 0] * 3)
+    assert attachment["slots"] == [1, 0, 0, 0] * 3
+    # The capture shows the native shape at full weight.
+    assert attachment["expression"] == {str(SHAPE_HASH): pytest.approx(1, abs=1e-4)}
     # Only the skinned part's captured Blend stream is reusable by mods.
     assert len(rig["skin_bindings"]) == 1
 
 
-def test_gi_rigid_attachment_joins_asset_weights_only_with_its_proven_rig(tmp_path, monkeypatch):
+def test_gi_attachment_joins_asset_weights_only_with_its_proven_rig(tmp_path, monkeypatch):
     from app.assets.game_extract.pipeline import write_document
     from app.bridge.asset_preview import AssetPreview
 
     root, asset, record, rows, client = gimi_fixture(tmp_path)
-    record = add_rigid_component(root, asset, rows, client)
+    record = add_attachment_component(root, asset, rows, client)
     _chosen, rig, *_ = gi_pipeline.prove_rig(client, root, record, None, lambda *_: None, threading.Event(), rows)
     preview = AssetPreview(object())
     monkeypatch.setattr(preview, "_asset_selection", lambda _: (str(asset), dict(type="GIMI", path=root), {}, record))
@@ -367,34 +393,38 @@ def test_gi_rigid_attachment_joins_asset_weights_only_with_its_proven_rig(tmp_pa
         return {payload["meshes"][key]["component"]: entry for key, entry in result["meshes"].items()}, result
 
     try:
-        # Without a proven rig the weightless part publishes no synthetic weights.
+        # Without a proven rig the weightless part publishes no weights.
         unproven, _result = weights()
         assert set(unproven) == {"Body"}
         write_document(asset / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
         proven, result = weights()
         assert set(proven) == {"Body", "Part02"}
         part = proven["Part02"]
-        assert part["encoding"] == "rigid_u32_1" and part["bone_ids"] == [0] and part["vertex_count"] == 3
-        assert part["game_bone_map"] == {"0": 2} and "game_morph_binding" not in part
+        assert part["encoding"] == "gimi_f32_u32_4" and part["bone_ids"] == [0, 1] and part["vertex_count"] == 3
+        assert part["game_bone_map"] == {"0": 1, "1": 2}
+        assert part["game_morph_binding"]["vertices"] == [1, 3, 2]
         assert part["game_rig_id"] == proven["Body"]["game_rig_id"] in result["game_rigs"]
     finally:
         preview.clear_preview()
 
 
-@pytest.mark.parametrize("change", ["second_bone", "partial_weight", "foreign_triangle"])
-def test_gi_rigid_attachment_proof_fails_closed(tmp_path, change):
+@pytest.mark.parametrize("change", ["unexplained", "excess_expression", "partial_weight", "foreign_triangle"])
+def test_gi_attachment_proof_fails_closed(tmp_path, change):
     root, asset, record, rows, client = gimi_fixture(tmp_path)
-    record = add_rigid_component(root, asset, rows, client)
+    record = add_attachment_component(root, asset, rows, client)
     mesh = client.documents[9]
-    if change == "second_bone":
-        mesh["bone_indices"][0] = [0, 0, 0, 0]
+    if change == "unexplained":
+        mesh["vertices"][7] += .01  # Vertex 2 moves in no native shape.
+    elif change == "excess_expression":
+        for row in mesh["blend_shapes"]["vertices"]:
+            row["position"] = [value * .4 for value in row["position"]]  # Would need weight 2.5.
     elif change == "partial_weight":
-        mesh["weights"] = [[.9, 0, 0, 0]] * 4
+        mesh["weights"] = [[.6, .3, 0, 0]] * 4
     else:
         mesh["indices"] = [0, 1, 2, 0, 2, 3]
     chosen, rig, *_ = gi_pipeline.prove_rig(client, root, record, None, lambda *_: None, threading.Event(), rows)
     assert list(chosen["matched"]) == [0]
-    assert not any(component.get("rigid") for component in rig["components"])
+    assert not any("attachment" in component for component in rig["components"])
 
 
 FAMILY = "Avatar_Type01_Name01"
@@ -516,6 +546,69 @@ def test_gi_build_layers_controller_states_and_keeps_clip_identity(tmp_path):
     shutil.copytree(output, asset, dirs_exist_ok=True)
     again, _ = gi_pipeline.build(client, root, record, tmp_path / "again", None, lambda *_: None, threading.Event(), rows)
     assert [item["id"] for item in again["animations"]] == [entry["id"]]
+
+
+def add_facial_route(rows, client, values, clamp=True):
+    """Route the attachment's native mesh through a renderer and key its shape in the body clip."""
+    import zlib
+
+    path = zlib.crc32(b"Part02")
+    client.documents[1]["bones"].append(dict(path="Part02", hash=path, parent=0, translation=[0, 0, 0],
+                                             rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
+    # External pointers may spell the CAB in lower case.
+    rows.append({**gi_row("", "SkinnedMeshRenderer", 40, block=GI_OTHER_BLOCK), "renderer": dict(
+        path="Part02", mesh=dict(cab="cab-01", path_id=9), avatar=dict(cab="cab-01", path_id=1), blend_shape_count=1)})
+    body = client.documents[20]
+    body["bindings"].append(dict(path=path, attribute=SHAPE_HASH, type="SkinnedMeshRenderer", custom=20, pointer=0))
+    body["values"] = [frame + [value] for frame, value in zip(body["values"], values)]
+    body["acl_count"] += 1
+    body["blend_shape_clamp"] = clamp
+    return f"{path:08x}:{SHAPE_HASH:08x}:Shape01"
+
+
+def test_gi_facial_curves_play_relative_to_the_captured_expression(tmp_path):
+    from app.assets.animations import read_clip
+
+    root, asset, record, rows, client = animated_fixture(tmp_path)
+    record = add_attachment_component(root, asset, rows, client)
+    name = add_facial_route(rows, client, [150, 50])
+    output = tmp_path / "output"
+    report, _ = gi_pipeline.build(client, root, record, output, None, lambda *_: None, threading.Event(), rows)
+    assert report["attachments"] == 1 and report["facial_targets"] == 1 and report["facial_error"] is None
+    rig = validate_rig_document(output / "Rig.json")
+    entry = json.loads((output / "Animation/manifest.json").read_text())["clips"][0]
+    metadata, data = read_clip(str(output / "Animation"), entry, rig)
+    assert metadata["morphs"]["names"] == [name] and metadata["blend_shape_clamp"] is True
+    # The captured weight is recorded for the procedural blink's crossfade.
+    assert metadata["morphs"]["rest_weights"] == {name: pytest.approx(1, abs=1e-4)}
+    assert metadata["layers"]["facial_targets"] == 1
+    # The routed curve is not an omitted channel.
+    assert metadata["layers"]["omitted"]["non_transform"] == 1
+    frames = metadata["frame_count"]
+    weights = np.frombuffer(data, dtype="<f4")[frames * len(rig["bones"]) * 10:]
+    # 150% clamps to full weight; the capture already shows full weight, so the clip
+    # moves from no change to half of the shape removed.
+    assert weights[[0, -1]] == pytest.approx([0, -.5], abs=1e-3)
+    (component,) = metadata["morphs"]["components"]
+    assert (output / "Animation" / metadata["morphs"]["file"]).is_file()
+    assert component["vertex_sha256"] == next(c for c in rig["components"] if "attachment" in c)["vertex_sha256"]
+
+
+@pytest.mark.parametrize("policies, expected", [
+    ([True], [1, 0]), ([False], [2, 0]), ([None], None), ([True, False], None)])
+def test_gi_facial_weights_follow_one_known_game_policy(policies, expected):
+    from app.assets.game_extract import gi_animation
+
+    clips = [dict(blend_shape_clamp=policy) for policy in policies]
+    facial = dict(offsets={"target": .5})
+    if expected is None:
+        with pytest.raises(ValueError, match="weight policy"):
+            gi_animation._morphs({"target": np.array([2.0, 0.0])}, clips, facial)
+        return
+    morph = gi_animation._morphs({"target": np.array([2.0, 0.0])}, clips, facial)
+    # Clamping (or not) precedes removing the captured expression.
+    assert morph["weights"][:, 0] == pytest.approx(np.array(expected) - .5)
+    assert morph["clamp"] is policies[0]
 
 
 def _remove_controller(rows, client):

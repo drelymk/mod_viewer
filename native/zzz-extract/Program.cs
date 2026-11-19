@@ -118,8 +118,9 @@ internal static class Program
                     foreach (var info in file.m_Objects)
                     {
                         var type = (ClassIDType)info.classID;
-                        if (type is not (ClassIDType.Mesh or ClassIDType.Avatar or ClassIDType.AnimationClip)
-                            && type != (gi ? ClassIDType.AnimatorController : ClassIDType.SkinnedMeshRenderer)) continue;
+                        // Renderer routes prove facial curve targets in both games; only GI indexes controllers.
+                        if (type is not (ClassIDType.Mesh or ClassIDType.Avatar or ClassIDType.AnimationClip
+                            or ClassIDType.SkinnedMeshRenderer) && !(gi && type == ClassIDType.AnimatorController)) continue;
                         if (operation == "read" && (file.fileName != (string?)request["cab"]
                             || ordinal != (int?)request["file_ordinal"] || info.m_PathID != (long?)request["path_id"])) continue;
                         var reader = new ObjectReader(file.reader, file, info, game);
@@ -169,7 +170,7 @@ internal static class Program
                                 (false, ClassIDType.AnimationClip) => ExportClip(new AnimationClip(reader), work, (int)request["id"]!, blendShapeClamp.Value),
                                 (true, ClassIDType.Mesh) => GiExport.ExportMesh(new Mesh(reader)),
                                 (true, ClassIDType.Avatar) => GiExport.ReadAvatar(new Avatar(reader)),
-                                (true, ClassIDType.AnimationClip) => GiExport.ExportClip(new AnimationClip(reader), work, (int)request["id"]!),
+                                (true, ClassIDType.AnimationClip) => GiExport.ExportClip(new AnimationClip(reader), work, (int)request["id"]!, blendShapeClamp.Value),
                                 (true, ClassIDType.AnimatorController) => GiExport.ReadController(new AnimatorController(reader), file),
                                 _ => throw new InvalidDataException()
                             };

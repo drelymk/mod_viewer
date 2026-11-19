@@ -106,18 +106,24 @@ layout is not supported). Indexing reads every block once (a few minutes); a
 Extraction finds the character's Avatar from the meshes in the same bundle, proves
 every captured component against native triangles, UVs, float weights and inverse
 binds, and writes a version 2 rig referenced to the model's default pose.
-Face parts captured without weights are proven as rigid attachments of a native
-mesh skinned entirely to one bone (normally the head), so they follow it during
-playback of the Asset; `RigExtraction.json` counts them as `rigid_attachments`.
-A mod's own weightless draws are not bound this way.
+Face parts captured without weights are proven against their native mesh, even
+when the capture shows an expression, and take that mesh's own weights (the head
+and, for the mouth, the teeth bones), so they follow it during playback of the
+Asset; `RigExtraction.json` counts them as `attachments`. A mod's own weightless
+draws are not bound this way.
 
 Body animation comes from Humanoid muscle curves, usually shared by a body type,
 and is converted in place. Each controller state becomes one clip that adds the
 character's synced hair/cloth layer at the body's normalized time.
 `RigExtraction.json` lists each clip's body and layer sources, omitted channel
-counts and hand/foot IK-goal errors, plus skipped states with reasons. Mirrored
-states, additive adjustment layers, translation DoF, Humanoid twist distribution,
-IK passes and facial curves are not converted.
+counts and hand/foot IK-goal errors, plus skipped states with reasons. Facial
+blend-shape curves in a state's clips play on the proven face parts, relative to
+the expression the capture shows; most gameplay states carry none and play the
+same procedural idle blink as WuWa, closing the eyes with the game's `Eye_WinkB`
+pair. The controller's other face layers (eye, head control) are not applied. Mirrored
+states, additive adjustment layers, translation DoF, Humanoid twist distribution
+and IK passes are not converted. Rebuild the Genshin index after updating the
+viewer: facial routes need its renderer metadata.
 
 Stock GIMI mods reuse the rig when their skinning pass binds an unchanged Blend
 file at vb1; mods with other helpers, remapped Blend data or bone IDs outside the

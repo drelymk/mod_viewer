@@ -10,7 +10,7 @@ from threading import RLock
 
 from app.runtime import server
 from . import paths
-from .animation_morphs import blink_targets, morph_names, read_morphs
+from .animation_morphs import idle_blink, morph_names, read_morphs
 
 
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -89,20 +89,23 @@ def _idle_face(session):
             for entry in session["entries"].values():
                 try:
                     raw = _json(paths.safe_asset_path(session["directory"], entry["file"]))
-                    names = blink_targets(raw["morphs"]["components"])
-                    if names:
+                    blink = idle_blink(raw["morphs"])
+                    if blink:
                         morph_names(raw["morphs"])
-                        source = (entry, names)
+                        source = (entry, blink)
                         break
                 except (OSError, ValueError, TypeError, KeyError):
                     continue
             session["idle_source"] = source
         if not source:
             return None
-        entry, names = source
+        entry, (names, scales) = source
         morphs = _json(paths.safe_asset_path(session["directory"], entry["file"]))["morphs"]
         data = read_morphs(session["directory"], morphs, full_validation=False)
-        return dict(names=names, components=morphs["components"]), data
+        descriptor = dict(names=names, components=morphs["components"])
+        if scales is not None:
+            descriptor["scales"] = scales
+        return descriptor, data
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
         return None
 

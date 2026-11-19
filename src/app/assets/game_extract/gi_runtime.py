@@ -7,7 +7,8 @@ from . import zzz_runtime
 DATA = "GenshinImpact_Data"
 BLOCK_DIRS = (DATA + "/StreamingAssets/AssetBundles/blocks", DATA + "/Persistent/AssetBundles/blocks")
 # Discovery metadata has its own version; clip-only helper changes keep a ready index.
-INDEX_VERSION = "gi-1-" + zzz_runtime.PARSER_COMMIT[:12]
+# gi-2 adds SkinnedMeshRenderer routes for facial curves.
+INDEX_VERSION = "gi-2-" + zzz_runtime.PARSER_COMMIT[:12]
 ensure_runtime = zzz_runtime.ensure_runtime
 
 

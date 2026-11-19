@@ -520,7 +520,7 @@ export function buildMesh(name, data, materialProfile = null, options = {}) {
   mesh.userData.baseNormals = data.normal ? new Float32Array(geo.attributes.normal.array) : null;
   mesh.userData.hasAuthoredNormals = !!data.normal;
   mesh.userData.skinningAvailable = data.skinning_available === true;
-  // Weightless Asset parts join only when an extracted rig proves them rigid.
+  // Weightless Asset parts join only when an extracted rig proves their native weights.
   mesh.userData.rigAttachmentAvailable = data.rig_attachment_available === true;
   mesh.userData.shapeTargets = (data.shape_targets || []).map((target) => ({
     var: target.var,
