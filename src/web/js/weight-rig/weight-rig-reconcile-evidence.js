@@ -4,10 +4,6 @@ import { Quaternion, Vector3 } from 'three';
 
 export const EPSILON = 1e-8;
 
-export function clockNow() {
-  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
-}
-
 export function number(value, fallback = 0) {
   const result = Number(value);
   return Number.isFinite(result) ? result : fallback;

@@ -10,10 +10,6 @@ import { aggregateModelWeightBoneStats } from './weight-runtime.js';
 import { weightRigStatus } from './weight-rig-status.js';
 import { createWorkBudget } from './cooperative-scheduler.js';
 
-function clockNow() {
-  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
-}
-
 export function createWeightPickingSession({
   modelWeightState,
   states,
@@ -155,6 +151,7 @@ export function createWeightModelSession({
   syncPhysicsToSelection,
   serializeBoneSelection,
   eligibleSkinningMesh,
+  onWeightsLoadStarted = () => {},
   onWeightsInstalled = () => {},
   getAssetContext = () => null,
   notifyChanged,
@@ -198,9 +195,6 @@ export function createWeightModelSession({
     if (fillOnly && !pendingFill.length) return Promise.resolve(modelWeightSnapshot());
     if (modelWeightState.promise) return modelWeightState.promise;
     const generation = getGeneration();
-    const loadStartedAt = clockNow();
-    const performance = {};
-    modelWeightState.performance = performance;
     if (!meshes.length) {
       modelWeightState.loaded = true;
       modelWeightState.noWeights = true;
@@ -214,6 +208,7 @@ export function createWeightModelSession({
     modelWeightState.error = null;
     modelWeightState.noWeights = false;
     notifyChanged();
+    onWeightsLoadStarted();
     modelWeightState.promise = (async () => {
       const api = await bridgeReady();
       if (generation !== getGeneration()) return modelWeightSnapshot();
@@ -242,7 +237,6 @@ export function createWeightModelSession({
           editableMeshes.length ? requests[0][1]?.saved_bones : undefined,
         );
       }
-      const installStartedAt = clockNow();
       const installBudget = createWorkBudget();
       for (const [members, preview] of requests) {
         const bufferResponse = preview?.data?.url ? await fetch(preview.data.url, { cache: 'no-store' }) : null;
@@ -253,7 +247,6 @@ export function createWeightModelSession({
         if (buffer && buffer.byteLength !== Number(preview.data.length)) {
           throw new Error('Skin data download was incomplete.');
         }
-        performance.fetchMs = clockNow() - loadStartedAt;
         for (const mesh of members) {
           if (generation !== getGeneration()) return modelWeightSnapshot();
           if (!knownMeshes.has(mesh)) continue;
@@ -283,9 +276,6 @@ export function createWeightModelSession({
       onWeightsInstalled();
       modelWeightState.loaded = true;
       refreshModelWeightSummary({ refreshStats: true });
-      performance.basicInstallMs = clockNow() - installStartedAt;
-      performance.weightReadyMs = clockNow() - loadStartedAt;
-      Object.assign(performance, installBudget.getStats());
       // Apply saved IDs before making the newly loaded Weight controls
       // interactive. Derived masks remain part of feature activation.
       if (!modelWeightState.savedSelectionApplied) {
@@ -310,7 +300,6 @@ export function createWeightModelSession({
       })
       .finally(() => {
         if (generation === getGeneration()) {
-          performance.totalMs = clockNow() - loadStartedAt;
           modelWeightState.loading = false;
           modelWeightState.promise = null;
           notifyChanged();
@@ -343,15 +332,11 @@ export function createWeightModelSession({
         return restoreSavedSelection({ generation, isCurrent });
       });
     }
-    const startedAt = clockNow();
     const operation = { generation, promise: null };
     operation.promise = (async () => {
       const restored = await restoreSelectedWeightMasks(generation, isCurrent);
       if (!restored || !current()) return false;
       modelWeightState.savedSelectionMasksRestored = true;
-      if (modelWeightState.performance) {
-        modelWeightState.performance.selectedMaskRestoreMs = clockNow() - startedAt;
-      }
       return modelWeightSnapshot();
     })().finally(() => {
       if (selectionRestoreOperation === operation) selectionRestoreOperation = null;

@@ -43,6 +43,7 @@ import {
   RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
 import { createWorkBudget } from './cooperative-scheduler.js';
+import { prewarmSurfaceGraphWorkers } from './surface-graph-pool.js';
 import { characterAxesFromOrientation } from './humanoid-orientation.js';
 import { buildHumanoidRigBinding } from './humanoid-rig-binding.js';
 import {
@@ -99,10 +100,6 @@ function getAnimationBinding() {
 
 export function setWeightRigAssetContext(context) {
   assetRigContext = context || null;
-}
-
-function clockNow() {
-  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
 }
 
 function invalidateHumanoidDetection() {
@@ -210,6 +207,8 @@ weightModelSession = createWeightModelSession({
   serializeBoneSelection,
   eligibleSkinningMesh,
   getAssetContext: () => assetRigContext,
+  // Start the Rig's surface-graph workers while the backend decodes weights.
+  onWeightsLoadStarted: prewarmSurfaceGraphWorkers,
   onWeightsInstalled: () => {
     animationBindingGeneration = -1;
   },
@@ -848,36 +847,7 @@ function ensureSourceSkinningRigCooperatively(sourceKey, members, options) {
 }
 
 function buildAllSourceSkinningRigsCooperatively(options) {
-  const startedAt = clockNow();
-  return (rigSourceSession?.buildAllCooperative(options) || Promise.resolve([])).then((result) => {
-    if (!options?.isCurrent || options.isCurrent()) {
-      modelRigState.performance.sourceRigPreparationMs = clockNow() - startedAt;
-      const stats = (result || []).map((rig) => rig.__cooperativeStats || {});
-      const timings = (result || [])
-        .map((rig) => {
-          const timing = rig.__cooperativeTimings;
-          const stat = rig.__cooperativeStats || {};
-          return timing
-            ? {
-                ...timing,
-                largestChunkMs: Number(stat?.largestChunkMs) || 0,
-                yieldCount: Number(stat?.yieldCount) || 0,
-              }
-            : null;
-        })
-        .filter(Boolean);
-      modelRigState.performance.sourceRigLargestChunkMs = Math.max(
-        0,
-        ...stats.map((item) => Number(item.largestChunkMs) || 0),
-      );
-      modelRigState.performance.sourceRigYieldCount = stats.reduce(
-        (sum, item) => sum + (Number(item.yieldCount) || 0),
-        0,
-      );
-      modelRigState.performance.sourceRigDetails = timings;
-    }
-    return result;
-  });
+  return rigSourceSession?.buildAllCooperative(options) || Promise.resolve([]);
 }
 
 function modelJointIdForSourceBone(sourceKeyValue, boneId) {
@@ -888,8 +858,6 @@ async function buildModelSkinningRig(
   sourceRigs = [...sourceSkinningRigs.values()],
   { generation = null, isCurrent = () => true } = {},
 ) {
-  const startedAt = clockNow();
-  const performance = { ...(modelRigState.performance || {}) };
   const budget = createWorkBudget();
   const checkpoint = async () => {
     if (generation !== null && !isCurrent()) return false;
@@ -908,11 +876,9 @@ async function buildModelSkinningRig(
       {
         budget,
         isCurrent: () => generation === null || isCurrent(),
-        timings: performance,
       },
     ));
   if (!reconciliation) return null;
-  performance.reconciliationMs = clockNow() - startedAt;
   if (!(await checkpoint())) return null;
   const joints = reconciliation.joints || [];
   const rig = {
@@ -1007,7 +973,6 @@ async function buildModelSkinningRig(
   rigRuntime.structureRevision += 1;
   rig.structureRevision = rigRuntime.structureRevision;
   if (restoredRootSignatures.size) rig.structureRevision = ++rigRuntime.structureRevision;
-  modelRigState.performance = performance;
   modelRigState.explicitRootSignatures = restoredRootSignatures;
   rigPresetSession?.clearLastApplyResult?.();
   sourceRigs.forEach((sourceRig) => {
@@ -1025,10 +990,6 @@ async function buildModelSkinningRig(
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId =
     Number.isInteger(previousSelectedJointId) && joints[previousSelectedJointId] ? previousSelectedJointId : null;
-  performance.totalRigBuildMs = clockNow() - startedAt;
-  const modelStats = budget.getStats();
-  performance.modelRigLargestChunkMs = modelStats.largestChunkMs;
-  performance.modelRigYieldCount = modelStats.yieldCount;
   return rig;
 }
 

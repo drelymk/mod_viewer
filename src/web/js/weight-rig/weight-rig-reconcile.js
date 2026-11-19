@@ -5,7 +5,6 @@ import { createWorkBudget } from './cooperative-scheduler.js';
 import {
   EPSILON,
   number,
-  clockNow,
   collectSourceBoneEvidence,
   prepareSourceBoneEvidence,
   modelReferenceRadius,
@@ -39,7 +38,7 @@ function boneIdentityGroups(evidenceByKey, modelWide) {
 export async function buildModelRigCooperative(
   sourceRigs = [],
   options = {},
-  { budget = createWorkBudget(), isCurrent = () => true, timings = null } = {},
+  { budget = createWorkBudget(), isCurrent = () => true } = {},
 ) {
   const rigs = [...sourceRigs]
     .filter((rig) => rig?.sourceKey !== undefined)
@@ -67,7 +66,6 @@ export async function buildModelRigCooperative(
       number(options.modelReferenceRadius, modelReferenceRadius(evidenceByKey)),
     );
     await checkpoint();
-    const graphStartedAt = clockNow();
     const groups = boneIdentityGroups(evidenceByKey, modelWide);
     const model = buildModelJoints(groups, evidenceByKey, referenceRadius);
     await checkpoint();
@@ -96,7 +94,6 @@ export async function buildModelRigCooperative(
       },
     };
     await checkpoint();
-    if (timings) timings.graphBuildMs = clockNow() - graphStartedAt;
     return result;
   } catch (error) {
     if (error === stale) return null;

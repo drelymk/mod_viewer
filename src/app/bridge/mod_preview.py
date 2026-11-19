@@ -2,7 +2,6 @@
 
 import os
 import hashlib
-import time
 import traceback
 import threading
 
@@ -41,7 +40,6 @@ class ModPreview:
         self._active_mesh_keys = {}
         self._skinning_manifests = {}
         self._current_model_folder = None
-        self._last_skinning_diagnostics = {}
         self._last_weight_blob_bytes = 0
         self._model_generation = 0
         self._pending_skinning_geometry_urls = set()
@@ -127,7 +125,6 @@ class ModPreview:
             self._current_model_folder = None
             self._active_mesh_keys.clear()
             self._skinning_manifests.clear()
-            self._last_skinning_diagnostics.clear()
             self._last_weight_blob_bytes = 0
         for url in pending:
             server.release_geometry(url)
@@ -222,7 +219,6 @@ class ModPreview:
                 publication.discard()
                 self._active_mesh_keys.pop(folder_path, None)
                 self._skinning_manifests.pop(folder_path, None)
-                self._last_skinning_diagnostics.pop(folder_path, None)
                 return result
 
             saved_metadata = context.metadata
@@ -260,13 +256,11 @@ class ModPreview:
             publication.discard()
             self._active_mesh_keys.pop(folder_path, None)
             self._skinning_manifests.pop(folder_path, None)
-            self._last_skinning_diagnostics.pop(folder_path, None)
             return {"error": str(error)}
         except Exception:
             publication.discard()
             self._active_mesh_keys.pop(folder_path, None)
             self._skinning_manifests.pop(folder_path, None)
-            self._last_skinning_diagnostics.pop(folder_path, None)
             raise
 
     def get_present_state(self, folder_path):
@@ -387,18 +381,6 @@ class ModPreview:
         """Decode all active skin streams for the currently loaded model."""
         with self._model_state_lock:
             request_generation = self._model_generation
-        request_started = time.perf_counter()
-        timing = {
-            "resolve_draws_seconds": 0.0,
-            "prepare_draw_vertices_seconds": 0.0,
-            "decode_skinning_seconds": 0.0,
-            "build_blob_seconds": 0.0,
-            "resolve_draw_count": 0,
-            "prepare_draw_vertices_calls": 0,
-            "decoded_mesh_count": 0,
-            "compact_vertex_count": 0,
-            "weight_blob_bytes": 0,
-        }
         try:
             folder_path, _pending, context = \
                 self.authoritative_context(folder_path)
@@ -406,7 +388,6 @@ class ModPreview:
                 data=context.metadata)
             active_mesh_keys = self._active_mesh_keys.get(folder_path)
             manifest = self._skinning_manifests.get(folder_path)
-            mapping_source = "loaded_model_manifest" if manifest is not None else "unavailable"
             if manifest is None:
                 return {
                     "status": "error",
@@ -436,7 +417,7 @@ class ModPreview:
                 selected = selected_items[mesh_key]
                 try:
                     decoded = self._decode_skinning_manifest_entry(
-                        selected, context.mod_dir, buffers, timing,
+                        selected, context.mod_dir, buffers,
                         source=getattr(context, "source", None))
                     entry, blob = self._skin_entry(decoded, selected.skinning_source, offset)
                     skin_file = selected.skinning_source.file
@@ -484,8 +465,6 @@ class ModPreview:
                 meshes[mesh_key] = entry
                 pieces.append(blob)
                 offset += len(blob)
-                timing["decoded_mesh_count"] += 1
-                timing["compact_vertex_count"] += decoded.vertex_count
 
             if not pieces:
                 return {
@@ -495,13 +474,10 @@ class ModPreview:
                     "meshes": meshes,
                     "error": "No active mesh has usable skin weights.",
                 }
-            blob_started = time.perf_counter()
             blob = b"".join(pieces)
             url = self._publish_skinning_geometry(blob, request_generation)
             if url is None:
                 return self._stale_skinning_preview()
-            timing["build_blob_seconds"] = time.perf_counter() - blob_started
-            timing["weight_blob_bytes"] = len(blob)
             return {
                 "status": "ok" if all(
                     entry.get("status") == "ok" for entry in meshes.values())
@@ -514,13 +490,6 @@ class ModPreview:
             }
         except Exception:
             return self._semantic_read_error()
-        finally:
-            timing["total_seconds"] = time.perf_counter() - request_started
-            timing["mapping_source"] = mapping_source if "mapping_source" in locals() \
-                else "unavailable"
-            with self._model_state_lock:
-                if request_generation == self._model_generation:
-                    self._last_skinning_diagnostics[folder_path] = timing
 
     def get_memory_diagnostics(self):
         """Return lightweight process-local resource retention metrics."""
@@ -567,8 +536,7 @@ class ModPreview:
         return metadata.weight_selected_bones(data={"weight": {"selected_bones": result}})
 
     @staticmethod
-    def _decode_skinning_manifest_entry(entry, mod_dir, buffers, timing,
-                                        source=None):
+    def _decode_skinning_manifest_entry(entry, mod_dir, buffers, source=None):
         skin_source = entry.skinning_source
         resolve = source.resolve_resource if source is not None \
             else lambda value: safe_resource_path(mod_dir, value)
@@ -585,13 +553,10 @@ class ModPreview:
                 raise SkinningPreviewError(
                     "skinning_remap_unavailable",
                     "The WWMI VertexVG remap buffer could not be found.")
-        decode_started = time.perf_counter()
         decoded = decode_skinning(
             skin_source, buffers.raw(source_path), entry.used_vertices,
             buffers.raw(remap_path) if remap_path else None,
             **read_blend_remap_tables(skin_source, resolve, exists, buffers))
-        timing["decode_skinning_seconds"] += (
-            time.perf_counter() - decode_started)
         if decoded.vertex_count != entry.vertex_count:
             raise SkinningPreviewError(
                 "skinning_preview_failed",

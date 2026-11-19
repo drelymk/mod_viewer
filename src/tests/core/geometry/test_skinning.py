@@ -368,3 +368,50 @@ def test_skinning_remap_resolution_lifecycle():
     explicit = resolve({35: "ResourceRemap02"})
     assert explicit.vertex_vg_file == "remap-02.buf"
     assert skinning_source_descriptor(explicit)["bone_ids_model_wide"] is True
+
+
+def _synthetic_record(rng, encoding):
+    if encoding == "gimi_f32_u32_4":
+        weights = [rng.choice([0., -0., .25, .5, 1e-9, math.nan, -.1, math.inf, .3])
+                   for _ in range(4)]
+        return struct.pack("<4f4I", *weights, *(rng.choice([0, 1, 2, 7, 200]) for _ in range(4)))
+    if encoding in ("wwmi_u8_4", "wwmi_u8_8"):
+        width = 4 if encoding == "wwmi_u8_4" else 8
+        return (bytes(rng.randrange(6) for _ in range(width))
+                + bytes(rng.choice([0, 0, 17, 255]) for _ in range(width)))
+    if encoding == "wwmi_u16_8":
+        return (struct.pack("<8H", *(rng.randrange(600) for _ in range(8)))
+                + struct.pack("<8H", *(rng.choice([0, 1, 300, 65535]) for _ in range(8))))
+    return struct.pack("<I", rng.randrange(9))
+
+
+@pytest.mark.parametrize("encoding,stride,influences", [
+    ("gimi_f32_u32_4", 32, 4), ("wwmi_u8_4", 8, 4), ("wwmi_u8_8", 16, 8),
+    ("wwmi_u16_8", 32, 8), ("rigid_u32_1", 4, 1),
+])
+@pytest.mark.parametrize("namespace,offset", [("model", 0), ("model", 5), ("wwmi_merged", 9)])
+def test_batch_decode_matches_scalar_decoder(monkeypatch, encoding, stride, influences, namespace, offset):
+    import random
+    from core.geometry import skinning
+
+    rng = random.Random(f"{encoding}:{namespace}:{offset}")
+    records = 3000
+    raw = b"".join(_synthetic_record(rng, encoding) for _ in range(records)) + b"\x01\x02"
+    used = tuple(rng.choice([-1, records, records + 5]) if rng.random() < .02
+                 else rng.randrange(records) for _ in range(4000))
+    source = SkinningSource("blend.buf", stride, influences, encoding, offset,
+                            bone_id_namespace=namespace)
+
+    batch = decode_skinning(source, raw, used)
+    monkeypatch.setattr(skinning, "_MIN_BATCH_VERTICES", 10 ** 9)
+    scalar = decode_skinning(source, raw, used)
+
+    assert batch == scalar
+    assert list(batch.bone_stats) == list(scalar.bone_stats)
+
+
+def test_batch_decode_defers_unencodable_ids_to_scalar_errors():
+    source = SkinningSource("blend.buf", 4, 1, "rigid_u32_1", -10)
+
+    with pytest.raises(struct.error):
+        decode_skinning(source, struct.pack("<I", 3) * 3000, tuple(range(3000)))
