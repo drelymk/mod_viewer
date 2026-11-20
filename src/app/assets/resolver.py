@@ -35,6 +35,8 @@ class AssetComponentBinding:
     index_count: int | None = None
     metadata: str | None = None
     detail_metadata: str | None = None
+    # Set only by an Asset's own preview, to separate alternate passes that share an index range.
+    metadata_entry: int | None = None
 
     def to_dict(self):
         value = {"status": self.status}

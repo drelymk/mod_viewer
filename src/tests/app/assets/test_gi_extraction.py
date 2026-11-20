@@ -649,3 +649,40 @@ def test_gi_streamer_layer_follows_its_own_motion_set_after_an_additive_layer(tm
     report, _ = gi_pipeline.build(client, root, record, tmp_path / "output", None, lambda *_: None, threading.Event(), rows)
     assert report["streamer_layer"] == "StreamerSyncLayer" and report["unapplied_layers"] == ["AdjustLayer"]
     assert [item["layers"]["streamer_name"] for item in report["animations"]] == ["Layer01"]
+
+
+def _drift_fixture(drift, *, outliers=0, noise=0.0, swapped=0):
+    """Captured Blend rows of one part and the native mesh they should prove against."""
+    blends, weights, slots = [], [], []
+    for number in range(60):
+        if number < swapped:
+            # Near-equal neighbours trade order between the two streams.
+            native, bones, captured, ids = (.509, .491), (7, 6), (.505, .495), (1, 2)
+        elif number % 2:
+            native, bones, ids = (.6, .4), (6, 7), (1, 2)
+            captured = (native[0] + drift, native[1] - drift)
+        else:
+            native, bones, ids = (.7, .3), (5, 6), (0, 1)
+            captured = (native[0] + drift, native[1] - drift)
+        if number >= 60 - outliers:
+            captured = (native[0] + .3, native[1] - .3)
+        blends.append([*captured, noise, 0, *ids, 3, 0])
+        weights.append([*native, 0, 0])
+        slots.append([*bones, 0, 0])
+    return dict(blends=blends), dict(weights=weights, bone_indices=slots), {number: number for number in range(60)}
+
+
+@pytest.mark.parametrize("case, expected", [
+    ("exact", {"0": 5, "1": 6, "2": 7}), ("drifting", {"0": 5, "1": 6, "2": 7}),
+    ("runtime_noise", {"0": 5, "1": 6, "2": 7}), ("swapped_neighbours", {"0": 5, "1": 6, "2": 7}),
+    ("too_many_outliers", None), ("beyond_drift", None),
+])
+def test_gi_weight_drift_proves_palettes_only_by_clear_majorities(case, expected):
+    options = dict(exact=dict(drift=0), drifting=dict(drift=.008), runtime_noise=dict(drift=.004, noise=.001),
+                   swapped_neighbours=dict(drift=.004, swapped=4), too_many_outliers=dict(drift=.004, outliers=6),
+                   beyond_drift=dict(drift=.05))[case]
+    part, mesh, mapping = _drift_fixture(**options)
+    assert zzz_native._drifted_weight_palette(part, mesh, mapping, gi_pipeline.WEIGHT_DRIFT) == expected
+    # Exact proof stays the first choice and never accepts drifting weights on its own.
+    if case in ("drifting", "runtime_noise", "too_many_outliers", "beyond_drift"):
+        assert zzz_native._weight_palette(part, mesh, mapping) is None

@@ -209,7 +209,8 @@ class AssetPreview:
                 binding = AssetComponentBinding(status="exact", range_status="exact", asset_type=part.asset_type,
                     root=session["root"], asset=session["asset"], metadata=part.metadata_path,
                     geometry_hash=part.geometry_hash, component_ordinal=part.component_ordinal,
-                    first_index=part.first_index, index_count=part.index_count)
+                    first_index=part.first_index, index_count=part.index_count,
+                    metadata_entry=part.metadata_entry)
                 roots = {os.path.normcase(session["root"])}
                 if part.skinning:
                     source, decoded = decode_captured_skinning(session["root"], part.skinning)

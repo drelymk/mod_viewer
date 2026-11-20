@@ -46,6 +46,8 @@ class SkinningSource:
     blend_remap: WwmiBlendRemap | None = None
     # Native input identities from verified same-INI ZZZ binding programs.
     native_palette_hashes: tuple[str, ...] = ()
+    # Native position-buffer hashes of the same stream, a corroborating GIMI identity when the Blend hash is unknown.
+    native_position_hashes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

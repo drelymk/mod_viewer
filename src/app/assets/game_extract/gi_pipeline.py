@@ -11,8 +11,11 @@ from .runtime import ExtractionCancelled, check_cancelled
 
 LABEL = "Genshin Impact"
 # Long Genshin face chains carry float noise just above ZZZ's 2e-4 inverse-bind
-# agreement (about 0.25 mm); 1e-3 stays sub-millimetre and about 0.06 degrees.
-PLACEMENT_TOLERANCE = 1e-3
+# agreement (about 0.25 mm), and eye bones sit about 0.0015 off their mesh's common
+# bind placement; 2e-3 stays about 2 mm and 0.11 degrees.
+PLACEMENT_TOLERANCE = 2e-3
+# Some Genshin Blend streams drift from the native weights by up to this much per influence.
+WEIGHT_DRIFT = 0.02
 
 
 def colocated(avatar_row, _family, mesh_row):
@@ -24,7 +27,8 @@ def _verify(client, captured, index, query, cancel):
     # Genshin submeshes share overlapping vertex ranges, so SubMesh.vertexCount is
     # not the captured component's vertex count; only index counts narrow meshes.
     return zzz_pipeline.verify_candidates(client, captured, index, query, cancel, mesh_hint=colocated, label=LABEL,
-                                          placement_tolerance=PLACEMENT_TOLERANCE, shape_key=zzz_pipeline.index_shape)
+                                          placement_tolerance=PLACEMENT_TOLERANCE, shape_key=zzz_pipeline.index_shape,
+                                          weight_drift=WEIGHT_DRIFT)
 
 
 def prove_rig(client, root, record, query, progress, cancel, index):
