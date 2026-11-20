@@ -12,10 +12,21 @@ from ..geometry.skinning import normalize_skinning_source_file
 from .wwmi_skeleton import _commands
 from .zzz_skeleton import _TEXTURE_HELPERS, safe_call_sections
 
+class _Helpers(frozenset):
+    """Stock pixel helpers, including every entry point of the stock TexFx library.
+
+    TexFx only re-issues draws with other shader and render-target state; it never
+    binds vertex or index buffers. Like ORFix, it is trusted by its stock name.
+    """
+
+    def __contains__(self, name):
+        return super().__contains__(name) or name.startswith("commandlist\\texfx\\")
+
+
 # GIMI's stock pixel helpers, the counterparts of ZZMI's SetTextures: ORFix/NNFix
 # and GIMI texture binding only touch pixel-shader state.
-_HELPERS = {*_TEXTURE_HELPERS, r"commandlist\global\orfix\orfix", r"commandlist\global\orfix\nnfix",
-            r"commandlist\gimi\settextures"}
+_HELPERS = _Helpers({*_TEXTURE_HELPERS, r"commandlist\global\orfix\orfix", r"commandlist\global\orfix\nnfix",
+                     r"commandlist\gimi\settextures"})
 # Multi-variant mods take the vertex count from a variable; the pass is the same.
 _SKIN_DRAW = re.compile(r"draw = (?:\d+|\$[\w\\.]+) ?, ?0$")
 _BLEND_SLOT = 1
@@ -89,3 +100,25 @@ def stock_gimi_palette_sources(sections, resources, section_info):
                 continue
             hashes.setdefault(blend_file, set()).add(native_hash)
     return {file: tuple(sorted(values)) for file, values in hashes.items()}, safe_sections
+
+
+def stock_gimi_position_hashes(section_info, safe_sections, resolve_vertex_info):
+    """Native hashes of file-backed vb0 position streams bound by hash overrides without draws.
+
+    A mod's Blend hash can be unknown to an extracted Asset (it changes with a game
+    patch) while the position buffer, and so the model it skins, keeps its hash.
+    """
+    found = {}
+    for name, info in section_info.items():
+        if (name.casefold() not in safe_sections or not name.casefold().startswith("textureoverride")
+                or info["draws"] or info["drawindexed_auto"]):
+            continue
+        match = info.get("geometry_match_at_end")
+        if not match or not match.hash:
+            continue
+        for item in info.get("vertex_binding_history", ()):
+            if item["slot"] == 0 and item["resource"]:
+                file = normalize_skinning_source_file(resolve_vertex_info(item["resource"]).get("filename"))
+                if file:
+                    found.setdefault(file, set()).add(match.hash)
+    return {file: tuple(sorted(values)) for file, values in found.items()}

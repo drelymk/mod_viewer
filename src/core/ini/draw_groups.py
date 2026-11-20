@@ -21,7 +21,7 @@ from .draw_scan import _buffer_resource_at_draw, _scan_sections_for_draws
 from .sections import ResourceTable, first_source
 from .wwmi_skeleton import native_wwmi_component_palettes, stock_wwmi_merged_layouts
 from .zzz_merged_skeleton import zzz_merged_palettes
-from .gimi_skeleton import stock_gimi_palette_sources
+from .gimi_skeleton import stock_gimi_palette_sources, stock_gimi_position_hashes
 from .zzz_skeleton import stock_zzz_palette_sources
 from .texture_roles import (TextureOverrideIndex, _condition_group_is_consistent,
                             _condition_difference)
@@ -212,6 +212,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     zzz_hashes, zzz_position_blends, zzz_sections = stock_zzz_palette_sources(
         sections, resources, section_info, resolve_vertex_info)
     gimi_hashes, gimi_sections = stock_gimi_palette_sources(sections, resources, section_info)
+    gimi_positions = stock_gimi_position_hashes(section_info, gimi_sections, resolved_buffers["resolve_vertex_info"])
     zzz_merged = zzz_merged_palettes(
         sections, resources, resolve_vertex_info, _shader_reader(sections, resource_source))
     component_buffers = resolved_buffers["component_buffers"]
@@ -220,6 +221,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     component_vertex_resources = resolved_buffers["component_vertex_resources"]
     component_blend_vertex_resources = resolved_buffers[
         "component_blend_vertex_resources"]
+    hash_blend_vertex_resources = resolved_buffers["hash_blend_vertex_resources"]
     component_animation_vertex_bindings = resolved_buffers[
         "component_animation_vertex_bindings"]
     # Include static owners so an absent animation cannot fall through to a
@@ -289,9 +291,11 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     def lookup_component_vertex_resources(component):
         return _lookup_component_value(component_vertex_resources, component) or {}
 
-    def lookup_component_blend_vertex_resources(component):
-        return _lookup_component_value(
-            component_blend_vertex_resources, component) or {}
+    def lookup_component_blend_vertex_resources(component, hash_source=None):
+        found = _lookup_component_value(component_blend_vertex_resources, component)
+        if not found and hash_source:
+            found = hash_blend_vertex_resources.get(_extract_hash(hash_source))
+        return found or {}
 
     def lookup_component_animation_vertex_bindings(component, position_resource):
         owner = _lookup_component_value(component_animation_owners, component)
@@ -581,7 +585,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                         [item for item in histories.get("blend", []) if item["slot"] == slot],
                         authored.binding_conditions, resource)
                     for slot, resource in lookup_component_blend_vertex_resources(
-                        _ib_res_to_component(effective_ib)).items()
+                        _ib_res_to_component(effective_ib), effective_ib).items()
                     if slot not in occupied_slots
                 }
                 skinning_resolution[
@@ -616,10 +620,14 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     and not skinning_source.bone_id_offset and not skinning_source.blend_remap
                     and not skinning_source.vertex_vg_file):
                 blend_file = normalize_skinning_source_file(skinning_source.file)
-                palette_hash = (zzz_hashes.get(blend_file) if section_name.casefold() in zzz_sections else None) or (
-                    gimi_hashes.get(blend_file) if section_name.casefold() in gimi_sections else None)
+                zzz_palette = zzz_hashes.get(blend_file) if section_name.casefold() in zzz_sections else None
+                gimi_palette = gimi_hashes.get(blend_file) if section_name.casefold() in gimi_sections else None
+                palette_hash = zzz_palette or gimi_palette
                 if palette_hash:
-                    draw.skinning_source = replace(skinning_source, native_palette_hashes=palette_hash)
+                    positions = () if zzz_palette else gimi_positions.get(
+                        normalize_skinning_source_file(draw.position_file), ())
+                    draw.skinning_source = replace(
+                        skinning_source, native_palette_hashes=palette_hash, native_position_hashes=positions)
             draw.skinning_error = skinning_error
             draw.skinning_resolution = skinning_resolution
             merged = merged_layouts.get(section_name.casefold())

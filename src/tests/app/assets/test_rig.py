@@ -472,11 +472,12 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
     monkeypatch.setattr(rig, "_zzz_morph_reference", lambda *_: object())
     monkeypatch.setattr(rig, "_mod_morph_vertices", lambda *_args, **_kwargs: [0])
 
-    def resolve(geometry_hash, ordinal, ids, hashes=(native,), merged_layout=(), count=3):
+    def resolve(geometry_hash, ordinal, ids, hashes=(native,), merged_layout=(), count=3, positions=()):
         binding = SimpleNamespace(asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
                                   geometry_hash=geometry_hash, first_index=ordinal * 3, index_count=count,
-                                  component_ordinal=ordinal)
-        source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4", native_palette_hashes=hashes)
+                                  component_ordinal=ordinal, metadata_entry=None)
+        source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4", native_palette_hashes=hashes,
+                                native_position_hashes=positions)
         return resolve_game_rig(binding, source, ids, set(), {}, merged_layout=merged_layout)
 
     # Each captured component holds only the slice of the stream palette it
@@ -493,6 +494,12 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
     assert drawn_elsewhere["bone_map"] == {"0": 5, "1": 6, "2": 7} and drawn_elsewhere["morph_binding"] is None
     assert resolve("aaaaaaaa", 1, (3,)) is None
     assert resolve("aaaaaaaa", 1, (0,), (native, "22222222")) is None
+    # A Blend hash the Asset never captured is corroborated only by the stream's own position hash.
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",)) is None
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",), positions=("22222222",)) is None
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",), positions=("11111111",))["bone_map"] == own["bone_map"]
+    # A Blend hash the Asset knows for another stream is a conflict, not a patch change.
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), ("44444444", "99999999"), positions=("11111111",)) is None
     if asset_type == "GIMI":
         # Merged skeleton layouts are a ZZZ program; GIMI keeps the native stream palette.
         assert resolve("aaaaaaaa", 1, (0, 1, 2), merged_layout=(("44444444", 0, 4),))["bone_map"] == own["bone_map"]
@@ -518,7 +525,8 @@ def test_attachment_palette_admits_only_the_assets_own_attachment_stream(tmp_pat
 
     def binding(geometry_hash, asset_type="GIMI"):
         return SimpleNamespace(asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
-                               geometry_hash=geometry_hash, first_index=0, index_count=6, component_ordinal=0)
+                               geometry_hash=geometry_hash, first_index=0, index_count=6, component_ordinal=0,
+                               metadata_entry=None)
 
     def resolve(geometry_hash, attachment, asset_type="GIMI", captured=True):
         source = SkinningSource("part.txt", 32, 4, "gimi_f32_u32_4",
@@ -538,6 +546,35 @@ def test_attachment_palette_admits_only_the_assets_own_attachment_stream(tmp_pat
     assert resolve("cccccccc", True, asset_type="ZZMI") is None
     assert resolve("cccccccc", False) is None
     assert resolve("dddddddd", False)["bone_map"] == {"0": 1, "1": 0}
+
+
+def test_alternate_passes_sharing_an_index_range_are_told_apart_by_metadata_entry(tmp_path, monkeypatch):
+    from app.assets import rig
+
+    (tmp_path / "hash.json").write_text("{}")
+    bones = [{"name": "Root", "parent": -1, "translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+             {"name": "Joint01", "parent": 0, "translation": [0, 1, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}]
+    alternate = {**ATTACHMENT, "expression": {"8": 1.0}}
+    first = dict(geometry_hash="cccccccc", component_ordinal=0, first_index=0, index_count=6, metadata_file="hash.json",
+                 metadata_entry=0, bone_map={"0": 1, "1": 0}, attachment=ATTACHMENT,
+                 vertex_sha256="a" * 64, index_sha256="b" * 64)
+    second = {**first, "metadata_entry": 1, "attachment": alternate, "vertex_sha256": "c" * 64}
+    raw = dict(format="mod-viewer-rig", version=2, coordinate_space="asset", bones=bones, skin_bindings=[],
+               components=[first, second])
+    model = validate_rig(raw)
+    with pytest.raises(ValueError, match="Duplicate rig palette"):
+        validate_rig({**raw, "components": [first, {**second, "metadata_entry": 0}]})
+    monkeypatch.setattr(rig, "_admitted_rig", lambda *_: (str(tmp_path), model))
+    monkeypatch.setattr(rig, "_zzz_metadata", lambda *_: {})
+
+    def binding(entry):
+        return SimpleNamespace(asset_type="GIMI", root=str(tmp_path), metadata="hash.json", geometry_hash="cccccccc",
+                               first_index=0, index_count=6, component_ordinal=0, metadata_entry=entry)
+
+    assert rig.game_attachment(binding(0), set(), {}) == ATTACHMENT
+    assert rig.game_attachment(binding(1), set(), {}) == alternate
+    # A mod draw cannot name the pass, so the shared range stays unbound.
+    assert rig.game_attachment(binding(None), set(), {}) is None
 
 
 @pytest.mark.parametrize("change", [

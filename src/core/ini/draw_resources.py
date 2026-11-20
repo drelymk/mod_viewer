@@ -524,6 +524,7 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
     component_animation_vertex_bindings = {}
     component_vertex_binding_history = {}
     hash_positions, hash_texcoords = {}, {}
+    hash_blend_vertex_resources = {}
     component_roles = _component_roles_for_sections(section_info)
 
     for name, info in section_info.items():
@@ -594,6 +595,12 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
                     component_positions[component_key] = info["vb0"]
 
         texture_hash = _extract_hash(name)
+        if texture_hash and parsed and parsed[1] == "Blend":
+            # Exporters that name sections by hash leave no component name to pair
+            # a draw's Blend stream with; the shared hash token still does.
+            for slot, resource in (info.get("vertex_resources_at_end") or {}).items():
+                if resource is not None:
+                    hash_blend_vertex_resources.setdefault(texture_hash, {}).setdefault(slot, resource)
         if texture_hash:
             if info["vb0"] and texture_hash not in hash_positions:
                 hash_positions[texture_hash] = info["vb0"]
@@ -642,6 +649,7 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         "component_texcoords": component_texcoords,
         "component_vertex_resources": component_vertex_resources,
         "component_blend_vertex_resources": component_blend_vertex_resources,
+        "hash_blend_vertex_resources": hash_blend_vertex_resources,
         "component_animation_vertex_bindings": (
             component_animation_vertex_bindings),
         "component_vertex_binding_history": component_vertex_binding_history,
