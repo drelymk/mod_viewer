@@ -187,7 +187,11 @@ Missing graph keys (an older helper) return `[]`.
        starts at its `start`, and the weight is `elapsed / fade`.
     3. When the fade completes (or immediately when `fade == 0`), drop the
        outgoing clip and begin loading the step after next. Hold at most
-       active + incoming.
+       active + incoming. (implemented, revised) Selecting a sequence now
+       downloads its distinct step clips once, within a 128 MiB budget, and
+       keeps them for the selection, because combo steps can leave about 0.15 s
+       after their fade ends, which is less than a clip round trip. Only steps
+       beyond the budget use this rolling load.
     4. If the incoming step is not loaded at `leave`, hold the outgoing pose
        at `leave` until it is.
     5. After the last step, wrap to step 0, and use `restart` instead of

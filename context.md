@@ -941,11 +941,18 @@ of documentation, comments and tests; use portable fixtures instead.
   Stop and failed loads still release playback ownership and restore the baseline.
   Catalogs may also carry optional authored `sequences` (2–64 steps of catalog
   clips with in-clip start/leave/fade seconds, `cyclic` and `restart`); validate
-  them all-or-nothing so an invalid sequence never hides clips. Sequence playback
-  follows the same handoff rule: hold the active step plus either the preloaded
-  next step or, while crossfading, the outgoing one. Crossfades blend local
-  transforms (shortest-path rotations); facial weights switch at the fade's
-  midpoint because each clip owns its sparse targets. Sequences are not seekable.
+  them all-or-nothing so an invalid sequence never hides clips. Selecting a
+  sequence downloads its distinct step clips sequentially and keeps them, within
+  a fixed byte budget, until the selection changes: combo steps can leave a
+  fraction of a second after they start, so step changes must not wait for a
+  download. Steps beyond the budget load one handoff ahead and hold the leaving
+  pose until ready; stop, failure and reselection release the cache. Crossfades blend local
+  transforms (shortest-path rotations). Rebinding mesh morphs rebuilds sparse
+  records and GPU deformation, so a fully cached sequence binds one merged facial
+  source for its lifetime: targets merge by component and name and must be
+  byte-identical, and facial weights crossfade (unanimated channels contribute
+  zero). Otherwise facial weights switch at the fade's midpoint because each clip
+  owns its sparse targets. Sequences are not seekable.
   Playback may use one uniquely identified verified skeleton's compatible mesh
   subset while the manual ModelRig retains its original all-source admission.
   Apply fallback transforms through each mesh's exact game-bone palette, never

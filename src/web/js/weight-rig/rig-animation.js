@@ -1,6 +1,6 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import { getLocale, t } from '../i18n/index.js';
-import { sampleMorphWeights } from './animation-morphs.js';
+import { mergeClipMorphs, sampleMergedMorphWeights, sampleMorphWeights } from './animation-morphs.js';
 import { createIdleBlink, sampleIdleBlink } from './idle-blink.js';
 
 // Every clip picker shows the same locale-sorted order after the Rest option;
@@ -38,6 +38,9 @@ const scaleA = new Vector3();
 const scaleB = new Vector3();
 const LOCAL_WIDTH = 10;
 const NO_SEQUENCES = Object.freeze([]);
+// Decoded clip data a selected sequence may keep resident (a six-step combo is
+// about 17 MiB).
+const SEQUENCE_CACHE_BYTES = 128 * 1024 * 1024;
 
 function bindPose(rig) {
   let cached = bindCache.get(rig);
@@ -130,7 +133,15 @@ export function sampleAnimation(rig, clip, values, time) {
   return composePose(rig, sampleLocalPose(rig, clip, values, time, bindPose(rig).locals[0]));
 }
 
-export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics, prepare, notify }) {
+export function createRigAnimation({
+  getRig,
+  loadClip,
+  applyPose,
+  suspendPhysics,
+  prepare,
+  notify,
+  sequenceCacheBytes = SEQUENCE_CACHE_BYTES,
+}) {
   let generation = 0;
   let selected = null;
   let clip = null;
@@ -146,9 +157,14 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
   let idleTime = 0;
   let frame = null;
   let last = 0;
-  // Sequence playback holds the active step plus either the preloaded next step
-  // or, while crossfading, the outgoing one; never more than two clips.
+  // A sequence downloads its distinct step clips once, within a byte budget, so
+  // step changes never wait for a download; combo steps can leave a fraction of a
+  // second after they start. Steps beyond the budget load one handoff ahead.
   let sequence = null;
+  let cache = null;
+  // With every step clip cached, one merged facial source stays bound for the
+  // whole sequence so step changes never rebind mesh morphs.
+  let faces = null;
   let step = 0;
   let next = null;
   let outgoing = null;
@@ -181,14 +197,24 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
       sampleLocalPose(rig, outgoing.clip, outgoing.values, outgoing.time, from);
       sampleLocalPose(rig, clip, values, time, to);
       transforms = composePose(rig, blendLocalPose(from, to, weight, blended));
-      // Each clip carries its own sparse targets, so facial weights switch halfway.
-      morphs =
-        weight < 0.5
-          ? sampleMorphWeights(outgoing.clip, outgoing.values, outgoing.time)
-          : sampleMorphWeights(clip, values, time);
+      if (faces) {
+        morphs = sampleMergedMorphWeights(faces, [
+          [outgoing.clip, outgoing.values, outgoing.time, 1 - weight],
+          [clip, values, time, weight],
+        ]);
+      } else {
+        // Without a merged source each clip keeps its own sparse targets, so
+        // facial weights switch halfway.
+        morphs =
+          weight < 0.5
+            ? sampleMorphWeights(outgoing.clip, outgoing.values, outgoing.time)
+            : sampleMorphWeights(clip, values, time);
+      }
     } else {
       transforms = sampleAnimation(rig, clip, values, time);
-      morphs = sampleMorphWeights(clip, values, time);
+      morphs = faces
+        ? sampleMergedMorphWeights(faces, [[clip, values, time, 1]])
+        : sampleMorphWeights(clip, values, time);
     }
     applyPose(transforms, { finalize, morphs: morphs || sampleIdleBlink(idle, idleTime, playing) });
   };
@@ -198,6 +224,8 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
   }
   function clearSequence() {
     sequence = null;
+    cache = null;
+    faces = null;
     step = 0;
     next = null;
     outgoing = null;
@@ -224,8 +252,8 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
   function preload(current) {
     const index = (step + 1) % sequence.steps.length;
     const id = sequence.steps[index].clip;
-    if (id === clip.id) {
-      next = { clip, values };
+    if (id === clip.id || cache.has(id)) {
+      next = cache.get(id) || { clip, values };
       return;
     }
     const rig = getRig();
@@ -359,6 +387,32 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
     }
     return { clip: metadata, values: new Float32Array(buffer), blink };
   }
+  // The first two steps are always held. Later distinct clips are kept while the
+  // cached total stays within budget; downloads are sequential because each
+  // backend load replaces the previous publication.
+  async function loadSequence(rig, chosen, current) {
+    const stored = new Map();
+    const held = new Map();
+    let bytes = 0;
+    let full = false;
+    for (const [number, entryStep] of chosen.steps.entries()) {
+      let entry = held.get(entryStep.clip) || stored.get(entryStep.clip);
+      if (!entry) {
+        if (full && number > 1) continue;
+        entry = await loadEntry(rig, entryStep.clip, current);
+        if (!entry) return null;
+      }
+      if (number < 2) held.set(entryStep.clip, entry);
+      if (!stored.has(entryStep.clip)) {
+        const size = entry.values.byteLength + (entry.clip.morphs?.buffer?.byteLength || 0);
+        if (!full && bytes + size <= sequenceCacheBytes) {
+          stored.set(entryStep.clip, entry);
+          bytes += size;
+        } else full = true;
+      }
+    }
+    return { first: held.get(chosen.steps[0].clip), second: held.get(chosen.steps[1].clip), stored };
+  }
   async function select(id) {
     const rig = getRig();
     const chosen = id ? sequences().find((entry) => entry.id === id) || null : null;
@@ -376,16 +430,24 @@ export function createRigAnimation({ getRig, loadClip, applyPose, suspendPhysics
     loading = true;
     changed();
     try {
-      const first = await loadEntry(rig, chosen ? chosen.steps[0].clip : id, current);
-      if (!first) return;
+      let first;
       let second = null;
+      let stored = null;
       if (chosen) {
-        second =
-          chosen.steps[1].clip === chosen.steps[0].clip ? first : await loadEntry(rig, chosen.steps[1].clip, current);
-        if (!second) return;
+        const loaded = await loadSequence(rig, chosen, current);
+        if (!loaded) return;
+        ({ first, second, stored } = loaded);
+      } else {
+        first = await loadEntry(rig, id, current);
+        if (!first) return;
       }
       clearSequence();
       sequence = chosen;
+      cache = stored;
+      faces =
+        chosen && chosen.steps.every((entryStep) => stored.has(entryStep.clip))
+          ? mergeClipMorphs([...stored.values()].map((entry) => entry.clip))
+          : null;
       next = second;
       clip = first.clip;
       values = first.values;

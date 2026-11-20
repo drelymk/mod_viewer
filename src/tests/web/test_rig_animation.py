@@ -338,8 +338,9 @@ def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_p
     assert not result['paused']['playing'] and result['paused']['time'] == .5
 
 
-def test_sequence_playback_crossfades_steps_and_holds_two_clips(module_page):
-    result = module_page.evaluate('''async () => {
+@pytest.mark.parametrize('cached', [True, False])
+def test_sequence_playback_crossfades_steps_and_caches_its_clips(module_page, cached):
+    result = module_page.evaluate('''async (cached) => {
       const T = await import('three');
       const {createRigAnimation,fillRigClipSelect} = await import('./js/weight-rig/rig-animation.js');
       const sequence = {id:'seq-01',name:'Group01: StateA – StateB',cyclic:true,restart:.3,steps:[
@@ -360,6 +361,7 @@ def test_sequence_playback_crossfades_steps_and_holds_two_clips(module_page):
         data:{url:blob(data[id]),length:data[id].byteLength},
         morphs:{names:['Shape01'],components:[],data:{url:targets,length:4}}}});
       const pending = [];
+      const sources = new Set();
       let latest = 'unset', latestMorphs = null, scheduled = null;
       window.requestAnimationFrame = callback => {scheduled=callback;return 1;};
       window.cancelAnimationFrame = () => {scheduled=null;};
@@ -367,8 +369,10 @@ def test_sequence_playback_crossfades_steps_and_holds_two_clips(module_page):
       const until = async test => { for (let i = 0; i < 400 && !test(); i++) await new Promise(r=>setTimeout(r,5)); };
       const runtime = createRigAnimation({getRig:()=>rig,
         loadClip:(token,id)=>new Promise(resolve=>pending.push({id,resolve})),
-        applyPose:(pose,{morphs=null}={})=>{latest=pose;latestMorphs=morphs;},
-        suspendPhysics:()=>{},prepare:()=>{},notify:()=>{}});
+        applyPose:(pose,{morphs=null}={})=>{latest=pose;latestMorphs=morphs;if(morphs)sources.add(morphs);},
+        suspendPhysics:()=>{},prepare:()=>{},notify:()=>{},
+        // Without cache room, later steps load one handoff ahead.
+        ...(cached ? {} : {sequenceCacheBytes:0})});
       const rootX = () => new T.Vector3().applyMatrix4(latest.get(0)).x;
       const resolveNext = async () => { await until(()=>pending.some(entry=>!entry.done));
         const item = pending.find(entry => !entry.done); item.done = true; item.resolve(respond(item.id)); return item.id; };
@@ -386,10 +390,11 @@ def test_sequence_playback_crossfades_steps_and_holds_two_clips(module_page):
       const settled = {x:rootX(),loads:pending.map(entry=>entry.id)};
       runtime.seek(.95);
       const seekIgnored = runtime.snapshot().time;
-      await resolveNext();
+      if (!cached) await resolveNext();
       await new Promise(r=>setTimeout(r,50));
       scheduled(1300);
       const wrapped = runtime.snapshot();
+      const morphSources = sources.size;
       const reselect = runtime.select('seq-01');
       runtime.stop();
       await until(()=>pending.some(entry=>!entry.done));
@@ -403,26 +408,73 @@ def test_sequence_playback_crossfades_steps_and_holds_two_clips(module_page):
       return {loaded,started:{step:started.step,count:started.stepCount,time:started.time,playing:started.playing,
         sequences:started.sequences.length},startedX,fadeStart:{x:fadeStart.x,morph:fadeStart.morph,
         step:fadeStart.snapshot.step,time:fadeStart.snapshot.time},midpoint,loadsDuringFade,settled,seekIgnored,
-        wrapped:{step:wrapped.step,time:wrapped.time},stale:{selected:stale.selected,latest:latest,step:stale.step,
+        wrapped:{step:wrapped.step,time:wrapped.time},morphSources,stale:{selected:stale.selected,latest:latest,step:stale.step,
         count:stale.stepCount},order,group:group?.label,grouped:[...(group?.children||[])].map(option=>option.value)};
-    }''')
+    }''', cached)
     assert result['loaded'] == ['clip01', 'clip02']
     assert result['started'] == {'step': 0, 'count': 2, 'time': 0, 'playing': True, 'sequences': 1}
     assert result['startedX'] == pytest.approx(0, abs=1e-6)
     # Leaving step 0 at 0.5 s starts the incoming step at its offset with the outgoing pose.
     assert result['fadeStart']['step'] == 1 and result['fadeStart']['time'] == pytest.approx(.1)
     assert result['fadeStart']['x'] == pytest.approx(0, abs=1e-6) and result['fadeStart']['morph'] == pytest.approx(.25)
-    # Halfway through the fade the pose is blended and facial weights come from the incoming clip.
-    assert result['midpoint']['x'] == pytest.approx(1, abs=1e-5) and result['midpoint']['morph'] == pytest.approx(.75)
-    # Nothing else loads while two clips are held; the next step loads once the fade ends.
+    # Halfway through the fade the pose is blended. Cached steps share one merged facial
+    # source whose weights crossfade; otherwise weights switch to the incoming clip.
+    assert result['midpoint']['x'] == pytest.approx(1, abs=1e-5)
+    assert result['midpoint']['morph'] == pytest.approx(.5 if cached else .75)
+    assert result['morphSources'] == (1 if cached else 2)
+    # Cached step clips are never downloaded again; without cache room the next step
+    # loads only once the fade has released the outgoing clip.
     assert result['loadsDuringFade'] == 2
-    assert result['settled'] == {'x': pytest.approx(2, abs=1e-6), 'loads': ['clip01', 'clip02', 'clip01']}
+    assert result['settled'] == {'x': pytest.approx(2, abs=1e-6),
+                                 'loads': ['clip01', 'clip02'] + ([] if cached else ['clip01'])}
     assert result['seekIgnored'] == pytest.approx(.3)
-    # The cyclic sequence wraps to its restart time.
+    # The cyclic sequence wraps to its restart time without waiting for a download when cached.
     assert result['wrapped'] == {'step': 0, 'time': pytest.approx(.3)}
     assert result['stale'] == {'selected': None, 'latest': None, 'step': None, 'count': 0}
     assert result['order'] == ['clip01', 'clip02', 'seq-01']
     assert result['group'] == 'Sequences' and result['grouped'] == ['seq-01']
+
+
+def test_merged_clip_morphs_keep_each_clips_deltas_and_reject_conflicts(module_page):
+    result = module_page.evaluate('''async () => {
+      const {bindAnimationMorphs,mergeClipMorphs,sampleMergedMorphWeights} =
+        await import('./js/weight-rig/animation-morphs.js');
+      // Sparse rows: vertex id, position delta xyz, normal delta xyz.
+      const rows = list => { const view = new DataView(new ArrayBuffer(list.length * 28));
+        list.forEach((row, index) => row.forEach((value, axis) => axis ? view.setFloat32(index*28+axis*4, value, true)
+          : view.setUint32(index*28, value, true))); return view.buffer; };
+      const join = (...buffers) => { const out = new Uint8Array(buffers.reduce((n, b) => n + b.byteLength, 0));
+        let offset = 0; for (const b of buffers) { out.set(new Uint8Array(b), offset); offset += b.byteLength; }
+        return out.buffer; };
+      const shared = rows([[0,1,0,0,0,0,0]]), first = rows([[1,0,2,0,0,0,0]]), second = rows([[1,0,0,3,0,0,0]]);
+      const component = targets => ({vertex_sha256:'v'.repeat(64),index_sha256:'i'.repeat(64),targets});
+      const clip = (names, buffer, targets) => ({morphs:{names,components:[component(targets)],buffer,
+        weights:new Float32Array(names.length)}});
+      const a = clip(['Shape01','Shape02'], join(shared, first),
+        [{name:'Shape01',offset:0,count:1},{name:'Shape02',offset:28,count:1}]);
+      const b = clip(['Shape03','Shape01'], join(second, shared),
+        [{name:'Shape03',offset:0,count:1},{name:'Shape01',offset:28,count:1}]);
+      const merged = mergeClipMorphs([a, b, a]);
+      const state = {gameMorphBinding:{vertex_sha256:'v'.repeat(64),index_sha256:'i'.repeat(64),vertices:[0,1]},
+        indices:new Uint32Array(2),influenceCount:1};
+      const bound = bindAnimationMorphs(state, merged);
+      // Each clip's values land on its own names in the union, scaled by its factor.
+      const frame = (weights) => ({clip:{duration:1,frame_count:1,bone_count:0,morphs:null},values:Float32Array.from(weights)});
+      const left = {...frame([.2,.4]), clip:{...frame([]).clip, morphs:a.morphs}};
+      const right = {...frame([.6,.8]), clip:{...frame([]).clip, morphs:b.morphs}};
+      sampleMergedMorphWeights(merged, [[left.clip,left.values,0,.5],[right.clip,right.values,0,.5]]);
+      const conflict = mergeClipMorphs([a, clip(['Shape01'], rows([[0,9,0,0,0,0,0]]), [{name:'Shape01',offset:0,count:1}])]);
+      const truncated = mergeClipMorphs([clip(['Shape01'], new ArrayBuffer(10), [{name:'Shape01',offset:0,count:1}])]);
+      return {names:merged.names,targets:merged.components[0].targets.map(t=>t.name),bytes:merged.buffer.byteLength,
+        entries:[...bound.entries],ranges:[...bound.ranges],weights:[...merged.weights],conflict,truncated};
+    }''')
+    assert result['names'] == ['Shape01', 'Shape02', 'Shape03']
+    assert result['targets'] == ['Shape01', 'Shape02', 'Shape03'] and result['bytes'] == 3 * 28
+    # Vertex 0 keeps the shared delta once; vertex 1 keeps both clips' own deltas.
+    assert result['ranges'] == [0, 1, 1, 3]
+    assert result['entries'] == pytest.approx([0, 1, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0, 2, 0, 0, 3, 0, 0, 0])
+    assert result['weights'] == pytest.approx([.1 + .4, .2, .3])
+    assert result['conflict'] is None and result['truncated'] is None
 
 
 @pytest.mark.parametrize('case,expected', [
