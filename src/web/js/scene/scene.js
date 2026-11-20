@@ -423,6 +423,12 @@ export function resetCharacterShadows() {
   viewportRenderPipeline.reset();
 }
 
+/** Seat the shared floor on an applied clip's ground; null restores the rest base. */
+export function setCharacterGroundAnchor(anchor, { request = true } = {}) {
+  characterShadowController.setGroundAnchor(anchor);
+  if (request) requestRender();
+}
+
 export function invalidateCharacterShadowGeometry({ request = true } = {}) {
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();

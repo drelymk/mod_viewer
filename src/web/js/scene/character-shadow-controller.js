@@ -113,10 +113,14 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
   let modelBounds = new THREE.Box3();
   let casterBounds = new THREE.Box3();
   // The ground is measured once per load (or explicit re-seat) and then held:
-  // posing, physics, animation, visibility and translation never move it.
+  // posing, physics, animation frames, visibility and translation never move
+  // it. Selecting or stopping a rig clip re-seats it once (setGroundAnchor).
   let groundFrame = null;
   let groundFrameDirty = true;
   let groundLockCount = 0;
+  // Optional world floor height from an applied rig clip; see setGroundAnchor.
+  let groundAnchor = null;
+  let groundAnchored = false;
   let lastLightPosition = null;
   let lastLightTarget = null;
   let groundAvailable = false;
@@ -144,6 +148,20 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
   function reanchorGround() {
     groundFrameDirty = true;
     invalidateGeometry();
+  }
+
+  /**
+   * Seat the floor on an animation's own ground instead of the rest-pose base.
+   * `anchor` returns a world floor height (or null to keep the rest base) and
+   * is read whenever the ground is locked, so quarter turns and Reset View
+   * re-evaluate it. Pass null when the clip stops.
+   */
+  function setGroundAnchor(anchor) {
+    if (anchor === groundAnchor) return;
+    groundAnchor = anchor || null;
+    groundFrameDirty = true;
+    shadowFitDirty = true;
+    shadowMapDirty = true;
   }
 
   function setMeshes(nextMeshes = []) {
@@ -198,17 +216,21 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
 
   // Lock the floor to the model's rest pose: the visible base when anything is
   // visible, otherwise the whole model. Rest bounds keep a re-anchor during
-  // playback from reading padded animation bounds. Grid, shadow receiver and
-  // environment floor share this frame, including while the key light is off.
+  // playback from reading padded animation bounds. An applied clip's ground
+  // anchor replaces only the height; center and size stay rest-pose derived.
+  // Grid, shadow receiver and environment floor share this frame, including
+  // while the key light is off.
   function lockGround() {
     if (!groundFrameDirty) return groundFrame;
     groundFrameDirty = false;
     const whole = computeRestBounds(meshes);
     const visible = computeRestBounds(meshes, { visibleOnly: true });
     const base = finiteBox(visible) ? visible : whole;
+    const anchored = finiteBox(base) ? groundAnchor?.() : null;
+    groundAnchored = Number.isFinite(anchored);
     groundFrame = finiteBox(base)
       ? Object.freeze({
-          y: base.min.y,
+          y: groundAnchored ? anchored : base.min.y,
           center: Object.freeze([(base.min.x + base.max.x) / 2, (base.min.z + base.max.z) / 2]),
           size: Math.max(whole.getSize(new THREE.Vector3()).length(), MIN_SIZE),
         })
@@ -322,6 +344,8 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     shadowMapDirty = false;
     groundFrame = null;
     groundFrameDirty = true;
+    groundAnchor = null;
+    groundAnchored = false;
     lastLightPosition = null;
     lastLightTarget = null;
     groundAvailable = false;
@@ -347,6 +371,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
       groundVisible: ground.visible,
       groundHeight: ground.position.y,
       groundLockCount,
+      groundAnchored,
       shadowFrustum: ['left', 'right', 'bottom', 'top'].map((side) => light.shadow.camera[side]),
       normalBias: light.shadow.normalBias,
     };
@@ -357,6 +382,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     adoptMeshes,
     forgetMeshes,
     reanchorGround,
+    setGroundAnchor,
     invalidateGeometry,
     invalidateVisibility,
     invalidateMap,

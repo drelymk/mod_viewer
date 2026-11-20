@@ -212,7 +212,42 @@ function setDDSOrientation(texture) {
   texture.updateMatrix();
 }
 
+// Latest requested URL and request count per texture, so a refetch of
+// released levels never overwrites a newer load or reload.
+const ddsSources = new WeakMap();
+
+// Every parsed mip is a view of the whole fetched file, so holding the mips
+// keeps each DDS (up to 64 MiB for an 8192px BC7) in renderer memory after the
+// GPU already has its copy. Three.js calls `onUpdate` once `writeTexture` has
+// copied the levels; keep only their sizes from then on. A later upload
+// request must not hand Three.js the released levels: it refetches the same
+// URL while the GPU keeps its identical copy, and the fresh bytes upload once
+// they arrive. Disposed DDS textures are evicted, never reused.
+function releaseUploadedLevels(texture) {
+  texture.onUpdate = null;
+  texture.mipmaps = texture.mipmaps.map(({ width, height }) => ({ width, height, data: null }));
+  texture.image = { width: texture.image.width, height: texture.image.height };
+  let restoring = false;
+  Object.defineProperty(texture, 'needsUpdate', {
+    configurable: true,
+    set(value) {
+      const source = ddsSources.get(texture);
+      if (value !== true || restoring || !source) return;
+      restoring = true;
+      const generation = source.generation;
+      fetchDDSIntoTexture(texture, source.url, null, null, () => ddsSources.get(texture).generation === generation + 1)
+        .catch(() => {})
+        .finally(() => {
+          restoring = false;
+        });
+    },
+  });
+}
+
 function applyParsedTexture(texture, parsed) {
+  // Fresh levels lift a released texture's upload guard.
+  delete texture.needsUpdate;
+  texture.onUpdate = releaseUploadedLevels;
   texture.mipmaps = parsed.mipmaps;
   texture.image = parsed.compressed ? { width: parsed.width, height: parsed.height } : parsed.mipmaps[0];
   texture.format = parsed.format;
@@ -230,6 +265,10 @@ function applyParsedTexture(texture, parsed) {
 }
 
 function fetchDDSIntoTexture(texture, url, onLoad, onError, shouldApply) {
+  const source = ddsSources.get(texture) || { url, generation: 0 };
+  source.url = url;
+  source.generation += 1;
+  ddsSources.set(texture, source);
   return fetch(url, { cache: 'no-store' })
     .then((response) => {
       if (!response.ok) throw new Error(`DDS request failed (${response.status})`);

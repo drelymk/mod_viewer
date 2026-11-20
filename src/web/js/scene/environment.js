@@ -9,13 +9,19 @@ import {
   color,
   exp,
   float,
+  floor as cellOf,
+  fract,
   fwidth,
   length,
   max,
   min,
   mix,
+  mx_cell_noise_float,
   mx_fractal_noise_float,
+  mx_noise_float,
+  mx_worley_noise_float_2d,
   neutralToneMapping,
+  normalize,
   normalWorldGeometry,
   smoothstep,
   step,
@@ -70,7 +76,7 @@ const OUTDOOR_ATMOSPHERE = makeAtmosphere(
     cloudScale: 0.0004,
   },
   0.25,
-  0x5a645d,
+  0x6b5a47,
 );
 const SUNSET_ATMOSPHERE = makeAtmosphere(
   5,
@@ -86,7 +92,7 @@ const SUNSET_ATMOSPHERE = makeAtmosphere(
     cloudScale: 0.0004,
   },
   0.5,
-  0x514856,
+  0x574849,
 );
 
 const INDOOR_DAYLIGHT = 0xd8eaff;
@@ -106,6 +112,8 @@ const atmosphereAccent = (atmosphere) => ({
  * - lights: baseline intensities until the IBL capture is ready (or if it fails).
  * - ibl: environment intensity and the lighter fill used once IBL is active.
  * - floor: in model-size units, so tiny and huge mods share one composition.
+ *   `surface` picks the procedural material (polished tile, varnished wood
+ *   boards or packed dirt); `soak` darkens it where puddles wet it.
  * - capture: the room baked into PMREM for indoor presets. Dark capture walls
  *   leave metals and shadow-facing surfaces almost black, so rooms carry broad
  *   bounce as well as softbox highlights.
@@ -126,7 +134,7 @@ const PRESET_DEFINITIONS = deepFreeze({
     // toon boundary beside the movable inspection key.
     ibl: { intensity: 0.85, ambient: 0.1, hemisphere: 0.23 },
     backdrop: { spill: 0.22, daylight: 0 },
-    floor: { base: 0.42, pool: 0.75, poolRadius: 0.9, gloss: 0.3, puddles: 0, haze: 2.6, glint: 0 },
+    floor: { surface: 'tile', base: 0.42, pool: 0.75, poolRadius: 0.9, gloss: 0.3, puddles: 0, haze: 2.6, glint: 0 },
     capture: {
       room: { color: 0xa6a6a6, size: [18, 12, 18], y: 1 },
       floorY: -4.95,
@@ -152,7 +160,17 @@ const PRESET_DEFINITIONS = deepFreeze({
     lights: { ambient: 0.24, hemisphere: 0.32 },
     ibl: { intensity: 0.65, ambient: 0.18, hemisphere: 0.26 },
     backdrop: { spill: 0, daylight: 0.04 },
-    floor: { base: 0.5, pool: 0.55, poolRadius: 1.0, gloss: 0.18, puddles: 0.12, patch: 0.9, haze: 3.2, glint: 0 },
+    floor: {
+      surface: 'wood',
+      base: 0.5,
+      pool: 0.55,
+      poolRadius: 1.0,
+      gloss: 0.18,
+      puddles: 0.12,
+      patch: 0.9,
+      haze: 3.2,
+      glint: 0,
+    },
     capture: {
       room: { color: 0xb99a7b, size: [18, 10, 18], y: 2 },
       floorY: -2.95,
@@ -179,7 +197,18 @@ const PRESET_DEFINITIONS = deepFreeze({
     // Keep the blue sky in reflections, with less saturated indirect fill
     // carrying shadow-facing skin and white fabric instead of extra sunlight.
     ibl: { intensity: 1.0, ambient: 0.22, hemisphere: 0.38 },
-    floor: { base: 0.9, pool: 0.12, poolRadius: 1.2, gloss: 0.04, puddles: 0.35, patch: 2.4, haze: 5, glint: 1 },
+    floor: {
+      surface: 'dirt',
+      base: 0.9,
+      pool: 0.12,
+      poolRadius: 1.2,
+      gloss: 0.04,
+      puddles: 0.35,
+      soak: 0.45,
+      patch: 2.4,
+      haze: 5,
+      glint: 1,
+    },
   },
   sunset: {
     atmosphere: SUNSET_ATMOSPHERE,
@@ -194,7 +223,18 @@ const PRESET_DEFINITIONS = deepFreeze({
     accent: atmosphereAccent(SUNSET_ATMOSPHERE),
     lights: { ambient: 0.24, hemisphere: 0.44 },
     ibl: { intensity: 0.8, ambient: 0.14, hemisphere: 0.26 },
-    floor: { base: 0.85, pool: 0.18, poolRadius: 1.2, gloss: 0.06, puddles: 0.45, patch: 2.4, haze: 5, glint: 2 },
+    floor: {
+      surface: 'dirt',
+      base: 0.85,
+      pool: 0.18,
+      poolRadius: 1.2,
+      gloss: 0.06,
+      puddles: 0.45,
+      soak: 0.45,
+      patch: 2.4,
+      haze: 5,
+      glint: 2,
+    },
   },
 });
 
@@ -289,40 +329,241 @@ function createRoomBackdrop({ palette, lightDirection, backdrop: { spill, daylig
   });
 }
 
+/*
+ * Procedural floor surfaces, in the same model-size units as the rest of the
+ * floor (one unit is roughly the model's rest-pose diagonal, so a character
+ * stands on boards about a hand wide). Each returns an albedo multiplier that
+ * averages near one, so the palette floor colour, and the ambient tints derived
+ * from it, still describe the floor as a whole. `gloss` scales the preset
+ * gloss and `slope` is the surface gradient along world x/z, used to light
+ * relief and to bend reflections. Every feature fades to its average once the
+ * pixel footprint approaches its size, so distant floor never shimmers.
+ */
+
+// Visibility of a feature with the given repeat, from the pixel footprint.
+function resolved(footprint, period) {
+  return smoothstep(period * 0.15, period * 0.6, footprint).oneMinus();
+}
+
+// Box-filtered coverage of a seam (half-width `half`) at distance `d`; once
+// the footprint spans the repeat it settles to the seam's area fraction.
+function seamCoverage(d, half, period, footprint) {
+  const sharp = clamp(footprint.mul(0.5).add(half).sub(d).div(footprint), 0, 1);
+  return mix(sharp, (2 * half) / period, smoothstep(period * 0.1, period * 0.4, footprint));
+}
+
+const TILE = freeze({ size: 0.27, grout: 0.0016, bevel: 0.004 });
+
+// Large-format polished porcelain with soft stone clouding and thin grout.
+function tileSurface({ point, footprint }) {
+  const grid = point.div(TILE.size);
+  const cell = cellOf(grid);
+  const within = fract(grid);
+  const id = mx_cell_noise_float(cell).toVar();
+  const id2 = mx_cell_noise_float(cell.add(vec2(57, 13))).toVar();
+  const edge = min(min(within.x, within.x.oneMinus()), min(within.y, within.y.oneMinus())).mul(TILE.size);
+  const grout = seamCoverage(edge, TILE.grout, TILE.size, footprint).toVar();
+  const seed = id.mul(13);
+  const clouding = mx_noise_float(vec3(point.mul(4), seed)).mul(0.05);
+  // Soft, low-contrast veining; sharp veins read as cracks at viewer scale.
+  const veins = smoothstep(0, 0.2, mx_fractal_noise_float(vec3(point.mul(5), seed), 3, 2, 0.5).abs())
+    .oneMinus()
+    .mul(resolved(footprint, 0.03));
+  const speckle = mx_cell_noise_float(point.mul(700)).sub(0.5).mul(0.08).mul(resolved(footprint, 0.0015));
+  // Rounded tile edges catch less light just before the grout.
+  const bevel = smoothstep(TILE.grout, TILE.grout + TILE.bevel, edge)
+    .mul(0.1)
+    .add(0.9);
+  const tone = mix(0.95, 1.06, id)
+    .mul(clouding.add(1))
+    .mul(veins.mul(-0.05).add(1))
+    .add(speckle)
+    .mul(mix(1, bevel, resolved(footprint, TILE.bevel * 2)));
+  const smudges = mx_noise_float(vec3(point.mul(3), 9))
+    .mul(0.25)
+    .add(0.95);
+  return {
+    albedo: mix(vec3(tone), vec3(0.56, 0.56, 0.58), grout),
+    gloss: mix(0.85, 1.15, id2).mul(smudges).mul(grout.oneMinus()),
+    // Lippage: each tile sits a hair off level, breaking reflections per tile.
+    slope: vec2(id.sub(0.5), id2.sub(0.5)).mul(0.012).mul(grout.oneMinus()),
+  };
+}
+
+const PLANK = freeze({ width: 0.065, length: 0.6, gap: 0.0009, rings: 5 });
+
+// Varnished oak boards running away from the default front camera, with
+// staggered end joints, per-board tone, growth rings and fibre streaks.
+function woodSurface({ point, footprint }) {
+  const across = point.x.div(PLANK.width);
+  const row = cellOf(across);
+  const along = point.y.div(PLANK.length).add(mx_cell_noise_float(vec2(row, 17.5)));
+  const board = cellOf(along);
+  const id = mx_cell_noise_float(vec2(row, board)).toVar();
+  const id2 = mx_cell_noise_float(vec2(board.add(31), row)).toVar();
+  const u = fract(along);
+  const v = fract(across).toVar();
+  const side = min(v, v.oneMinus()).mul(PLANK.width);
+  const end = min(u, u.oneMinus()).mul(PLANK.length);
+  const gaps = max(
+    seamCoverage(side, PLANK.gap, PLANK.width, footprint),
+    seamCoverage(end, PLANK.gap, PLANK.length, footprint),
+  ).toVar();
+  const seed = id.mul(97);
+  // Gentle, uneven drift keeps grain near-straight along the board.
+  const wobble = mx_fractal_noise_float(vec3(point.y.mul(3), v.mul(2), seed), 2, 2.3, 0.4);
+  const rings = fract(v.mul(PLANK.rings).add(wobble.mul(0.45)).add(id2.mul(5)));
+  const lateWood = smoothstep(0.55, 0.7, rings)
+    .mul(smoothstep(0.82, 1, rings).oneMinus())
+    .mul(resolved(footprint, PLANK.width / PLANK.rings));
+  const fibres = mx_noise_float(vec3(point.y.mul(18), point.x.mul(420), seed)).mul(resolved(footprint, 0.0025));
+  const streaks = mx_noise_float(vec3(point.y.mul(4), point.x.mul(90), seed.add(5))).mul(resolved(footprint, 0.011));
+  const wear = mx_noise_float(vec3(point.mul(2), 3))
+    .mul(0.06)
+    .add(1);
+  const warmth = mix(vec3(1.05, 0.98, 0.9), vec3(0.95, 1.0, 1.07), id2);
+  const tone = mix(0.8, 1.18, id)
+    .mul(lateWood.mul(-0.14).add(1))
+    .mul(fibres.mul(0.06).add(1))
+    .mul(streaks.mul(0.08).add(1))
+    .mul(wear)
+    .mul(gaps.mul(-0.7).add(1));
+  return {
+    albedo: warmth.mul(tone),
+    gloss: mix(0.7, 1.2, id2).mul(gaps.oneMinus()),
+    // Boards cup slightly across their width, so varnish reflections break
+    // board by board instead of mirroring one flat sheet.
+    slope: vec2(v.sub(0.5).mul(0.05).mul(resolved(footprint, PLANK.width)), id.sub(0.5).mul(0.02)),
+  };
+}
+
+const DIRT = freeze({ clods: 16, stones: 30, relief: 0.002 });
+
+function dirtRelief(point) {
+  const clods = mx_fractal_noise_float(vec3(point.mul(DIRT.clods), 0), 4, 2.1, 0.5);
+  // Stones vary in size and thin out unevenly instead of forming clusters of
+  // identical discs; most Worley cells hold none. Half jitter keeps every
+  // feature point within [0.25, 0.75] of its cell, so a disc no wider than
+  // 0.24 never crosses into a neighbour and per-cell size and presence agree.
+  const stoneCell = point.mul(DIRT.stones);
+  const size = mx_cell_noise_float(stoneCell.add(vec2(0.5, 9.5)));
+  const present = step(0.55, mx_cell_noise_float(stoneCell));
+  const scatter = smoothstep(-0.4, 0.4, mx_noise_float(vec3(point.mul(3), 4)));
+  const radius = mix(0.07, 0.23, size);
+  const stones = smoothstep(radius.mul(0.6), radius, mx_worley_noise_float_2d(stoneCell, 0.5))
+    .oneMinus()
+    .mul(present)
+    .mul(scatter);
+  return { clods, stones, height: clods.mul(0.003).add(stones.mul(0.002)) };
+}
+
+// Packed earth with clods, scattered pebbles, sandy grain and dry grass,
+// relief-lit from the preset's dominant light.
+function dirtSurface({ point, footprint, lightDirection }) {
+  const here = dirtRelief(point);
+  const clods = here.clods.toVar();
+  const stones = here.stones.mul(resolved(footprint, 1 / DIRT.stones)).toVar();
+  // One directional difference toward the light is enough to shade relief.
+  const flat = new THREE.Vector2(lightDirection[0], lightDirection[2]);
+  if (flat.lengthSq() < 1e-10) flat.set(1, 0);
+  flat.normalize();
+  const towardLight = vec2(flat.x, flat.y);
+  const rise = here.height.sub(dirtRelief(point.sub(towardLight.mul(DIRT.relief))).height).div(DIRT.relief);
+  const slope = towardLight.mul(rise.negate()).mul(resolved(footprint, 0.5 / DIRT.clods));
+
+  const region = mx_fractal_noise_float(vec3(point.mul(1.6), 8), 3, 2, 0.5)
+    .mul(0.5)
+    .add(0.5);
+  const hue = mix(vec3(1.08, 0.98, 0.86), vec3(0.9, 0.93, 0.98), clamp(region, 0, 1));
+  const patches = mx_noise_float(vec3(point.mul(6), 2))
+    .mul(0.12)
+    .add(1);
+  const grain = mx_cell_noise_float(point.mul(500)).sub(0.5).mul(0.18).mul(resolved(footprint, 0.002));
+  const soil = hue.mul(patches).mul(clods.mul(0.12).add(1)).add(grain);
+  const pebble = vec3(1.3, 1.27, 1.22).mul(mx_cell_noise_float(point.mul(DIRT.stones)).mul(0.4).add(0.8));
+  const grass = smoothstep(
+    0.62,
+    0.78,
+    mx_fractal_noise_float(vec3(point.mul(2.2), 21), 3, 2, 0.5)
+      .mul(0.5)
+      .add(0.5),
+  )
+    .mul(
+      mx_noise_float(vec3(point.mul(vec2(220, 60)), 5))
+        .mul(0.4)
+        .add(0.6),
+    )
+    .mul(0.7);
+  return {
+    albedo: mix(mix(soil, pebble, stones), vec3(0.92, 1.04, 0.6), grass),
+    gloss: stones.mul(2).add(1),
+    slope,
+  };
+}
+
+const FLOOR_SURFACES = freeze({ tile: tileSurface, wood: woodSurface, dirt: dirtSurface });
+
 /**
  * Composite an infinite floor into a background colour without scene geometry.
  *
  * The view ray is intersected with the floor plane at the model's base. The
- * floor is shaded with a light pool, Fresnel-weighted mirrored reflections on
- * glossy patches, and dissolves into the backdrop with distance from the model
- * and toward the horizon, so it never draws over or clips an animated model.
+ * floor is shaded with its procedural surface, a light pool, relief lit from
+ * the preset light and Fresnel-weighted mirrored reflections on glossy
+ * patches, and dissolves into the backdrop with distance from the model and
+ * toward the horizon, so it never draws over or clips an animated model.
  */
-function compositeFloor({ direction, backdrop, reflection, look, palette, floor }) {
+function compositeFloor({ direction, backdrop, reflection, look, palette, floor, lightDirection }) {
   const above = cameraPosition.y.sub(floor.height);
   const down = direction.y.negate();
   const visible = step(1e-5, above).mul(step(1e-5, down));
   const scale = floor.scale;
   const travel = min(above.div(max(down, 1e-5)), scale.mul(400));
   const local = cameraPosition.xz.add(direction.xz.mul(travel)).sub(floor.center);
-  const radius = length(local).div(scale);
+  const point = local.div(scale).toVar();
+  const radius = length(point);
+  const span = fwidth(point);
+  const footprint = max(max(span.x, span.y), 1e-6).toVar();
 
-  const pool = exp(radius.div(look.poolRadius).pow(2).negate());
-  const diffuse = color(palette.floor).mul(pool.mul(look.pool).add(look.base));
-
+  let wet = float(0);
   let gloss = float(look.gloss);
   if (look.puddles) {
     // Large-scale noise picks out mirror-like patches; their edges widen with
     // screen-space derivatives so distant patches stay filtered.
-    const patches = mx_fractal_noise_float(vec3(local.div(scale.mul(look.patch)), 0), 4, 2, 0.5)
+    const patches = mx_fractal_noise_float(vec3(point.div(look.patch), 0), 4, 2, 0.5)
       .mul(0.5)
       .add(0.5)
       .toVar();
     const edge = max(fwidth(patches), 0.02);
-    const puddles = smoothstep(edge.negate().add(0.6), edge.add(0.66), patches).mul(look.puddles);
-    gloss = clamp(puddles.add(look.gloss), 0, 1);
+    wet = smoothstep(edge.negate().add(0.6), edge.add(0.66), patches).toVar();
   }
+  const material = FLOOR_SURFACES[look.surface]({ point, footprint, lightDirection });
+  // Standing water fills relief and seams, leaving a flat mirror.
+  const slope = material.slope.mul(wet.oneMinus()).toVar();
+  gloss = clamp(gloss.mul(material.gloss).add(wet.mul(look.puddles ?? 0)), 0, 1);
+
+  // Lambert response of the tilted surface relative to the flat floor.
+  const [lx, ly, lz] = lightDirection;
+  const lift = Math.max(ly, 0.3);
+  const relief = clamp(
+    slope.x
+      .mul(lx / lift)
+      .add(slope.y.mul(lz / lift))
+      .oneMinus(),
+    0.7,
+    1.3,
+  );
+  const soaked = wet.mul(look.soak ?? 0).oneMinus();
+  const pool = exp(radius.div(look.poolRadius).pow(2).negate());
+  const diffuse = color(palette.floor)
+    .mul(material.albedo)
+    .mul(pool.mul(look.pool).add(look.base))
+    .mul(relief)
+    .mul(soaked);
+
   const fresnel = down.oneMinus().pow(5).mul(0.96).add(0.04);
-  const mirrored = vec3(direction.x, down, direction.z);
+  // Mirror about the tilted normal, to first order in the slope.
+  const bend = down.mul(2);
+  const mirrored = normalize(vec3(direction.x.sub(bend.mul(slope.x)), down, direction.z.sub(bend.mul(slope.y))));
   const surface = mix(diffuse, reflection(mirrored, gloss), fresnel.mul(gloss));
 
   const haze = max(exp(radius.div(look.haze).negate()).oneMinus(), smoothstep(-0.03, 0, direction.y));
@@ -346,7 +587,7 @@ function createPresetBackground(preset, floor) {
   const display = Fn(() => {
     const direction = normalWorldGeometry.normalize();
     const backdrop = sky ? sky.rgb : room(direction);
-    return vec4(compositeFloor({ direction, backdrop, reflection, look, palette, floor }), 1);
+    return vec4(compositeFloor({ direction, backdrop, reflection, look, palette, floor, lightDirection }), 1);
   })();
   return { display, sky };
 }
