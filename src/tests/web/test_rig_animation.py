@@ -66,8 +66,11 @@ def test_auto_weight_rig_load_order_and_viewport_playback_lifecycle(viewer, kind
         payload['metadata'].update(source_kind='asset', asset=dict(rig_session='session01', path='Asset01'))
     bones = [dict(name='Root', parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1]),
              dict(name='Joint01', parent=0, translation=[1, 0, 0], rotation=[0, 0, 0, 1])]
+    sequence = dict(id='sequence01', name='Sequence01', cyclic=True, restart=0,
+                    steps=[dict(clip=clip, start=0, leave=.5, fade=0) for clip in ['clip01', 'clip02']])
     weights['game_rigs'] = {'rig01': dict(id='rig01', version=2, bones=bones, animation_session='session01',
-        animations=[dict(id=clip, name=clip, duration=1) for clip in ['clip01', 'clip02']])}
+        animations=[dict(id=clip, name=clip, duration=1) for clip in ['clip01', 'clip02']],
+        animation_sequences=[sequence])}
     weights['meshes']['mesh-00'].update(game_rig_id='rig01', game_bone_map={'0': 0, '1': 1})
     page = viewer({'model01': payload, 'model02': model_payload(), 'fixture-weights': weights},
                   preferences={'autoLoadWeightRig': True, 'autoRestoreMissingAssetParts': True},
@@ -112,36 +115,97 @@ def test_auto_weight_rig_load_order_and_viewport_playback_lifecycle(viewer, kind
       return getLoadedWeightRigFeature().getRigAnimationState().playing;
     }''')
     page.evaluate("window.__bridge.release('weights')")
-    page.wait_for_function("document.querySelector('#animation-clip').value==='clip01'")
+    page.wait_for_function("document.querySelector('#animation-clip .animation-picker-name').textContent==='clip01'")
     page.wait_for_function("!document.querySelector('#animation-play-pause').disabled")
     assert page.locator('#animation-playback').is_visible()
+    assert page.locator('#animation-frame').is_visible()
     assert page.evaluate('''async () => {
       const {getLoadedWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
       window.__autoRig=getLoadedWeightRigFeature();
       return window.__autoRig.getModelRigState().loaded && window.__autoRig.getRigAnimationState().playing;
     }''')
+    playing = "id => window.__autoRig.getRigAnimationState().selected===id && window.__autoRig.getRigAnimationState().playing"
     revision = page.evaluate('window.__autoRig.getModelRigState().structureRevision')
-    page.locator('#animation-next').click()
-    page.wait_for_function("window.__autoRig.getRigAnimationState().selected==='clip02' && window.__autoRig.getRigAnimationState().playing")
-    page.locator('#animation-next').click()
-    page.wait_for_function("window.__autoRig.getRigAnimationState().selected==='clip01' && window.__autoRig.getRigAnimationState().playing")
-    page.locator('#animation-previous').click()
-    page.wait_for_function("window.__autoRig.getRigAnimationState().selected==='clip02' && window.__autoRig.getRigAnimationState().playing")
+    # Toolbar popovers stay anchored to their button and overlay the dock.
+    page.locator('#light-btn').click()
+    assert page.evaluate('''() => {
+      const popover = document.getElementById('light-popover').getBoundingClientRect();
+      const dock = document.getElementById('animation-playback').getBoundingClientRect();
+      const button = document.getElementById('light-btn').getBoundingClientRect();
+      const top = document.elementFromPoint(popover.left + popover.width / 2, popover.bottom - 2);
+      return popover.bottom <= button.top && popover.bottom > dock.top && !!top?.closest('#light-popover');
+    }''')
+    page.keyboard.press('Escape')
+    for control, clip in [('next', 'clip02'), ('next', 'clip01'), ('previous', 'clip02')]:
+        page.locator(f'#animation-{control}').click()
+        page.wait_for_function(playing, arg=clip)
     page.locator('#animation-play-pause').click()
     assert page.evaluate('!window.__autoRig.getRigAnimationState().playing')
     page.locator('#animation-frame').evaluate("node=>{node.value='0.5';node.dispatchEvent(new Event('input'));}")
     assert page.evaluate('window.__autoRig.getRigAnimationState().time') == .5
-    page.locator('#animation-clip').select_option('clip01')
-    page.wait_for_function('window.__autoRig.getRigAnimationState().playing')
+    # The picker lists Rest, then clips and sequences in labelled groups; the
+    # query matches every term and Enter picks the highlighted match.
+    picker = page.locator('#animation-picker')
+    names = "[...document.querySelectorAll('#animation-options .animation-option-name')].map(node=>node.textContent)"
+    page.locator('#animation-clip').click()
+    assert picker.is_visible()
+    assert page.evaluate(names) == ['Rest pose', 'clip01', 'clip02', 'Sequence01']
+    assert page.locator('.animation-option[aria-selected="true"]').get_attribute('data-value') == 'clip02'
+    page.keyboard.type('CLIP 1')
+    assert page.evaluate(names) == ['clip01']
+    page.keyboard.press('Enter')
+    page.wait_for_function(playing, arg='clip01')
+    assert picker.is_hidden()
+    assert page.evaluate("document.activeElement.id") == 'animation-clip'
     assert page.evaluate('window.__autoRig.getModelRigState().structureRevision') == revision
-    page.locator('#animation-clip').select_option('')
-    assert page.evaluate('!window.__autoRig.getRigAnimationState().selected')
+    # Sequences replace the scrubber with a step bar; Next stays within sequences.
+    page.locator('#animation-clip').click()
+    page.locator('.animation-filter[data-filter="sequences"]').click()
+    assert page.evaluate(names) == ['Sequence01']
+    page.locator('.animation-option[data-value="sequence01"]').click()
+    page.wait_for_function(playing, arg='sequence01')
+    page.wait_for_function("window.__autoRig.getRigAnimationState().stepCount===2")
+    assert page.locator('#animation-steps .animation-step').count() == 2
+    assert page.locator('#animation-frame').is_enabled() and page.locator('#animation-frame').is_visible()
     page.locator('#animation-play-pause').click()
-    page.wait_for_function('window.__autoRig.getRigAnimationState().playing')
+    page.locator('#animation-frame').evaluate("node=>{node.value='0.75';node.dispatchEvent(new Event('input'));}")
+    state = page.evaluate('window.__autoRig.getRigAnimationState()')
+    assert (state['step'], state['sequenceTime'], state['sequenceDuration']) == (1, pytest.approx(.75), 1)
+    assert page.locator('#animation-frame-counter').text_content() == 'Step 2 / 2 · 0.75 / 1.00 s'
+    page.locator('#animation-play-pause').click()
+    page.locator('#animation-next').click()
+    page.wait_for_function(playing, arg='sequence01')
+    page.locator('#animation-clip').click()
+    page.locator('.animation-filter[data-filter="all"]').click()
+    page.locator('.animation-option[data-value=""]').click()
+    assert page.evaluate('!window.__autoRig.getRigAnimationState().selected')
+    assert page.locator('#animation-clip .animation-picker-name').text_content() == 'Rest pose'
+    # Play, Space and Stop resume or leave the last choice instead of the first clip.
+    page.locator('#animation-play-pause').click()
+    page.wait_for_function(playing, arg='sequence01')
+    page.locator('#animation-stop').click()
+    assert page.evaluate('!window.__autoRig.getRigAnimationState().selected')
+    assert page.locator('#animation-stop').is_disabled()
+    page.evaluate('document.activeElement.blur()')
+    page.keyboard.press(' ')
+    page.wait_for_function(playing, arg='sequence01')
+    page.keyboard.press(' ')
+    assert page.evaluate('!window.__autoRig.getRigAnimationState().playing')
+    # Collapsing the dock keeps play/pause beside the toolbar toggle.
+    toggle = page.locator('#animation-toggle-btn')
+    toggle.click()
+    assert page.locator('#animation-playback').is_hidden()
+    assert toggle.get_attribute('aria-pressed') == 'false'
+    assert page.locator('#animation-tools #animation-play-pause').is_visible()
+    page.locator('#animation-play-pause').click()
+    page.wait_for_function(playing, arg='sequence01')
+    toggle.click()
+    assert page.locator('#animation-transport #animation-play-pause').is_visible()
     open_model(page, 'model02')
     wait_loaded(page)
     page.wait_for_function('!window.__autoRig.isWeightRigActivating()')
     assert page.locator('#animation-playback').is_hidden()
+    assert page.locator('#animation-tools').is_hidden()
     assert page.evaluate('!window.__autoRig.getRigAnimationState().playing')
     page.locator('#settings-btn').click()
     checkbox = page.locator('#settings-auto-load-weight-rig')
@@ -388,13 +452,23 @@ def test_sequence_playback_crossfades_steps_and_caches_its_clips(module_page, ca
       const loadsDuringFade = pending.length;
       scheduled(700);
       const settled = {x:rootX(),loads:pending.map(entry=>entry.id)};
-      runtime.seek(.95);
-      const seekIgnored = runtime.snapshot().time;
       if (!cached) await resolveNext();
       await new Promise(r=>setTimeout(r,50));
       scheduled(1300);
       const wrapped = runtime.snapshot();
       const morphSources = sources.size;
+      // Seeking runs along the whole sequence timeline and swaps in that step's clip.
+      const drain = async () => { for (let i = 0; i < 4; i++) { await new Promise(r=>setTimeout(r,20));
+        const item = pending.find(entry=>!entry.done); if (!item) return;
+        item.done = true; item.resolve(respond(item.id)); } };
+      const seeks = [];
+      for (const position of [.95, .2]) {
+        runtime.seek(position);
+        await drain();
+        const state = runtime.snapshot();
+        seeks.push({step:state.step,time:state.time,position:state.sequenceTime,
+          length:state.sequenceDuration,x:rootX()});
+      }
       const reselect = runtime.select('seq-01');
       runtime.stop();
       await until(()=>pending.some(entry=>!entry.done));
@@ -407,7 +481,7 @@ def test_sequence_playback_crossfades_steps_and_caches_its_clips(module_page, ca
       urls.forEach(url=>URL.revokeObjectURL(url));
       return {loaded,started:{step:started.step,count:started.stepCount,time:started.time,playing:started.playing,
         sequences:started.sequences.length},startedX,fadeStart:{x:fadeStart.x,morph:fadeStart.morph,
-        step:fadeStart.snapshot.step,time:fadeStart.snapshot.time},midpoint,loadsDuringFade,settled,seekIgnored,
+        step:fadeStart.snapshot.step,time:fadeStart.snapshot.time},midpoint,loadsDuringFade,settled,seeks,
         wrapped:{step:wrapped.step,time:wrapped.time},morphSources,stale:{selected:stale.selected,latest:latest,step:stale.step,
         count:stale.stepCount},order,group:group?.label,grouped:[...(group?.children||[])].map(option=>option.value)};
     }''', cached)
@@ -427,9 +501,15 @@ def test_sequence_playback_crossfades_steps_and_caches_its_clips(module_page, ca
     assert result['loadsDuringFade'] == 2
     assert result['settled'] == {'x': pytest.approx(2, abs=1e-6),
                                  'loads': ['clip01', 'clip02'] + ([] if cached else ['clip01'])}
-    assert result['seekIgnored'] == pytest.approx(.3)
     # The cyclic sequence wraps to its restart time without waiting for a download when cached.
     assert result['wrapped'] == {'step': 0, 'time': pytest.approx(.3)}
+    # Step spans of 0.5 s and 0.7 s make a 1.2 s timeline; uncached step clips download first.
+    assert result['seeks'] == [
+        {'step': 1, 'time': pytest.approx(.55), 'position': pytest.approx(.95), 'length': pytest.approx(1.2),
+         'x': pytest.approx(2, abs=1e-6)},
+        {'step': 0, 'time': pytest.approx(.2), 'position': pytest.approx(.2), 'length': pytest.approx(1.2),
+         'x': pytest.approx(0, abs=1e-6)},
+    ]
     assert result['stale'] == {'selected': None, 'latest': None, 'step': None, 'count': 0}
     assert result['order'] == ['clip01', 'clip02', 'seq-01']
     assert result['group'] == 'Sequences' and result['grouped'] == ['seq-01']

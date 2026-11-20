@@ -1218,7 +1218,7 @@ def test_panel_opacity_preserves_functional_feedback_and_fades_only_surfaces(mod
       editor.innerHTML = '<div class="ace_gutter"></div><div class="ace_search"><input class="ace_search_field"></div>';
       const targets = [...document.querySelectorAll(`.panel-surface, .dock-tabs, .right-dock-tabs,
         #toolbar, #mod-path, #ini-view-btn, #health-btn, #export-btn, #footer,
-        #tool-panel, #inspector-panel, #weight-rig-panel, #sidebar,
+        #tool-panel, #animation-playback, #inspector-panel, #weight-rig-panel, #sidebar,
         .ui-popover, .open-mod-menu, .ini-file-menu, .panel-action-menu,
         #ini-editor-text, .ace_gutter, .ace_search, .ace_search_field,
         .health-filters button:not(.active), .modal-field input, .modal-field select,

@@ -956,6 +956,13 @@ def test_animation_suspension_and_release_restore_canonical_geometry_then_resume
       slider.value = '1'; slider.dispatchEvent(new Event('input',{bubbles:true}));
     }''')
     assert page.locator('#animation-frame-counter').text_content() == '1 / 1'
+    page.locator('#animation-play-pause').click()
+    page.locator('#animation-stop').click()
+    assert page.locator('#animation-play-pause').get_attribute('aria-label') == 'Play animation'
+    assert page.locator('#animation-frame-counter').text_content() == '0 / 1'
+    page.locator('#animation-frame').evaluate('''slider => {
+      slider.value = '1'; slider.dispatchEvent(new Event('input',{bubbles:true}));
+    }''')
     page.locator('.inspector-visibility-btn').click()
     page.wait_for_function("document.getElementById('animation-play-pause').hidden")
     page.locator('.inspector-visibility-btn').click()
@@ -1008,7 +1015,7 @@ def test_animation_suspension_and_release_restore_canonical_geometry_then_resume
       window.__selectCompute('1');
     }''')
     page.wait_for_function("!document.getElementById('animation-play-pause').hidden")
-    assert page.locator('#tool-buttons > #animation-play-pause').is_visible()
+    assert page.locator('#animation-tools > #animation-play-pause').is_visible()
     assert page.evaluate('window.__playbackButton === document.getElementById("animation-play-pause")')
     assert page.evaluate("import('./js/mesh/animation-runtime.js').then(module => module.animationRuntimeSnapshot().rafActive)")
     assert not page.evaluate("import('./js/mesh/animation-runtime.js').then(module => module.getAnimationPlaybackState().paused)")
@@ -1023,7 +1030,7 @@ def test_animation_suspension_and_release_restore_canonical_geometry_then_resume
     assert page.evaluate("import('./js/mesh/animation-runtime.js').then(module => !module.animationRuntimeSnapshot().rafActive)")
     open_model(page, 'fixture-04')
     wait_loaded(page, 2)
-    page.wait_for_function("document.getElementById('animation-play-pause').parentElement.id === 'tool-buttons'")
+    page.wait_for_function("document.getElementById('animation-play-pause').parentElement.id === 'animation-tools'")
     assert page.locator('#animation-playback').is_hidden()
     page.locator('#animation-play-pause').click()
     page.evaluate('''async () => {
@@ -1035,7 +1042,7 @@ def test_animation_suspension_and_release_restore_canonical_geometry_then_resume
     assert page.locator('#animation-frame').is_visible()
     assert page.locator('#animation-play-pause').get_attribute('aria-label') == 'Play animation'
     page.evaluate('window.__setSecondVisible(true)')
-    page.wait_for_function("document.getElementById('animation-play-pause').parentElement.id === 'tool-buttons'")
+    page.wait_for_function("document.getElementById('animation-play-pause').parentElement.id === 'animation-tools'")
     assert page.locator('#animation-playback').is_hidden()
     assert page.evaluate('window.__playbackButton === document.getElementById("animation-play-pause")')
     assert bridge_calls(page, 'preferencesSave') == []

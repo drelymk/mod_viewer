@@ -688,10 +688,14 @@ function syncAnimation(state = getRigAnimationState()) {
   ui.animationPlay.textContent = t(state.playing ? 'animation.pause' : 'animation.play');
   ui.animationPlay.disabled = activating || !state.duration || state.loading;
   ui.animationStop.disabled = !state.selected;
-  ui.animationTime.disabled = activating || !state.duration || state.loading || !!state.stepCount;
-  ui.animationTime.max = String(state.duration || 1);
-  ui.animationTime.value = String(state.time);
-  const timeText = `${state.time.toFixed(2)} / ${state.duration.toFixed(2)} s`;
+  // Sequences scrub along their whole timeline; clips in clip seconds.
+  const sequence = !!state.stepCount;
+  const position = sequence ? state.sequenceTime : state.time;
+  const duration = sequence ? state.sequenceDuration : state.duration;
+  ui.animationTime.disabled = activating || !duration || state.loading;
+  ui.animationTime.max = String(duration || 1);
+  ui.animationTime.value = String(position);
+  const timeText = `${position.toFixed(2)} / ${duration.toFixed(2)} s`;
   const stepLabel = state.stepCount
     ? `${t('weightRig.animationSequenceStep', { step: state.step + 1, count: state.stepCount })} · `
     : '';
