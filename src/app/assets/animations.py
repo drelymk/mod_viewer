@@ -62,6 +62,16 @@ def _sequences(raw_sequences, entries):
                 cleaned.append({"clip": clip, "start": start, "leave": leave, "fade": fade})
             if restart >= _sequence_number(entries[cleaned[0]["clip"]]["duration"]):
                 raise ValueError("Invalid animation sequence restart.")
+            # Playback crossfades into the following step (the head after the last step), so a fade
+            # may never outlast that step's own leave; a cyclic restart must precede the head's leave.
+            for number, step in enumerate(cleaned):
+                wraps = number == len(cleaned) - 1
+                following = cleaned[0] if wraps else cleaned[number + 1]
+                following_start = restart if wraps and cyclic else following["start"]
+                if step["fade"] > following["leave"] - following_start + _SEQUENCE_SLACK:
+                    raise ValueError("Invalid animation sequence fade.")
+            if cyclic and restart >= cleaned[0]["leave"]:
+                raise ValueError("Invalid animation sequence restart.")
             seen.add(key)
             sequences.append({"id": key, "name": name, "cyclic": cyclic, "restart": restart, "steps": cleaned})
         return sequences

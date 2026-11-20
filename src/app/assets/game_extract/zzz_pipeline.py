@@ -9,7 +9,7 @@ import numpy as np
 
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
-from . import zzz_animation, zzz_index, zzz_morphs
+from . import animator_sequences, gi_index, zzz_animation, zzz_index, zzz_morphs
 from .native import humanoid_controls
 from .pipeline import clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
 from .runtime import ExtractionCancelled, check_cancelled
@@ -249,6 +249,55 @@ def adopt_rig(asset, chosen, captured, label="ZZZ"):
     return rig, previous
 
 
+MAX_CONTROLLERS = 16
+
+
+def _sequences(client, index, family, converted, cancel):
+    """Authored sequences of the character's controllers (battle, then suffixed ones)."""
+    base = family + "_Controller"
+    named = {}
+    for row in index:
+        if row["type"] == "AnimatorController" and (row["name"] == base or row["name"].startswith(base + "_")):
+            named.setdefault(row["name"], []).append(row)
+    cabs = gi_index.by_cab(index)
+    result, seen, total = [], set(), 0
+    for name in sorted(named, key=lambda name: (name != base, name))[:MAX_CONTROLLERS]:
+        if len(named[name]) != 1:
+            continue  # Copies of one controller name are never guessed between.
+        check_cancelled(cancel)
+        try:
+            controller = client.read(named[name][0])
+        except ExtractionCancelled:
+            raise
+        except (ValueError, KeyError, TypeError):
+            continue
+        states = controller.get("states") if isinstance(controller, dict) else None
+        clips = {}
+        for number, state in enumerate(states if isinstance(states, list) else []):
+            motions = state.get("motions") if isinstance(state, dict) else None
+            body = motions[0] if isinstance(motions, list) and motions else None
+            leaves = body.get("leaves") if isinstance(body, dict) else None
+            if not isinstance(state, dict) or state.get("mirror") or state.get("mirror_param") or not isinstance(leaves, list) or len(leaves) != 1:
+                continue
+            leaf = leaves[0]
+            if not isinstance(leaf, dict) or not isinstance(leaf.get("cab"), str) or type(leaf.get("path_id")) is not int:
+                continue
+            row = gi_index.resolve_pointer(cabs, leaf["cab"], leaf["path_id"])
+            if row is not None and zzz_index.identity(row) in converted:
+                clips[number] = converted[zzz_index.identity(row)]
+        label = name.removeprefix(base).lstrip("_")
+        for item in animator_sequences.derive(controller, clips, animator_sequences.FRAME_COUNT,
+                                              f"{label} · " if label else ""):
+            if item["id"] in seen or total + len(item["steps"]) > animator_sequences.MAX_SEQUENCE_TOTAL_STEPS:
+                continue
+            seen.add(item["id"])
+            total += len(item["steps"])
+            result.append(item)
+            if len(result) == animator_sequences.MAX_SEQUENCES:
+                return result
+    return result
+
+
 def build(client, root, record, output, query, progress, cancel, index=None):
     captured, fingerprints = capture(root, record)
     if index is None:
@@ -268,7 +317,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     clips = [row for row in index if row["type"] == "AnimationClip" and row["name"].startswith(chosen["family"] + "_Ani_")]
     if not clips or len(clips) > 4096:
         raise ValueError("No bounded character animation set was found for the verified ZZZ Avatar.")
-    imported, skipped, provenance, seen = 0, [], [], set()
+    imported, skipped, provenance, seen, converted = 0, [], [], {}, {}
     for number, row in enumerate(clips):
         progress("convert", number, len(clips))
         check_cancelled(cancel)
@@ -291,8 +340,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         digest = hashlib.sha256(binary).hexdigest()
         duplicate = row["name"], digest
         if duplicate in seen:
+            converted[source] = seen[duplicate]
             continue
-        seen.add(duplicate)
         key = reusable_clip_key(entries, existing, source, row["name"], {digest})
         if key is None:
             key = clip_id(row["name"], source, set(entries))
@@ -309,6 +358,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         entry = dict(id=key, name=row["name"][:128], file=key + ".json", duration=duration)
         read_clip(str(library), entry, rig, validated_morphs=validated_morphs)
         entries[key], existing[key] = entry, metadata
+        seen[duplicate] = converted[source] = (key, duration)
         provenance.append(dict(id=key, source=source, omitted_non_transform_channels=unsupported,
                                facial_glb=metadata.get("morphs", {}).get("file")))
         imported += 1
@@ -316,11 +366,13 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             raise ValueError("The extracted animation library exceeds its size limit.")
     if not imported:
         raise ValueError("No compatible ZZZ animation clips could be converted. Existing Asset files were preserved.")
-    write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values())), 1024 * 1024)
+    sequences = _sequences(client, index, chosen["family"], converted, cancel)
+    write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
+                                                   clips=list(entries.values()), sequences=sequences), 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="zzz", skeleton_id=rig["id"], skeleton=chosen["source"],
                   meshes=chosen["meshes"], proven_components=len(chosen["matched"]), unmatched_components=len(captured) - len(chosen["matched"]),
-                  bones=len(rig["bones"]), clips=len(entries), imported=imported, secondary=0, skipped=len(skipped),
+                  bones=len(rig["bones"]), clips=len(entries), imported=imported, secondary=0, sequences=len(sequences), skipped=len(skipped),
                   skipped_details=skipped, animations=provenance)
     write_document(output / "RigExtraction.json", report, 4 * 1024 * 1024)
     return report, fingerprints

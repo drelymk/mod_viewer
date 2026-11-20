@@ -229,10 +229,14 @@ def _mutated_sequences(mutate):
     lambda s: s[0]["steps"][0].update(start=float("nan")),
     lambda s: s[0].update(restart=True),
     lambda s: s[0].update(restart=1.0),
+    # The fade must end before the following step's own leave (its start to leave span).
+    lambda s: s[0]["steps"][1].update(start=0.3),
+    lambda s: s[0].update(restart=0.5),
 ], ids=[
     "absent-key", "unknown-clip", "duplicate-id", "id-equals-clip-id", "start-not-before-leave",
     "leave-beyond-duration", "fade-beyond-remaining", "one-step", "non-bool-cyclic",
     "nan-number", "bool-number", "restart-not-before-head-duration",
+    "fade-beyond-next-step-span", "restart-not-before-head-leave",
 ])
 def test_invalid_animation_sequences_drop_all_sequences_and_keep_clips(tmp_path, mutate):
     rig, source = sample()

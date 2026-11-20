@@ -515,19 +515,41 @@ def test_zzz_case_only_clip_names_keep_distinct_files_and_stable_reimport_ids(tm
     root, asset, record, _avatar, _mesh, rows, client = fixture(tmp_path)
     rows[-1]["name"] = "Avatar_Type01_Character01_Ani_Sequence"
     rows.append({**rows[-1], "path_id": 50, "name": "Avatar_Type01_Character01_Ani_sequence"})
+    # A two-state controller chains the two converted clips: Any State enters state 0, which
+    # leaves for state 1 after one input press and a frame window.
+    def leaf(path_id):
+        return dict(motions=[dict(leaves=[dict(cab="CAB-01", path_id=path_id)])])
+    def edge(dest, conditions, fade=0.0):
+        return dict(dest=dest, duration=fade, offset=0.0, exit_time=1.0, has_exit_time=False, fixed_duration=True,
+                    conditions=[dict(param=param, mode=mode, threshold=value) for param, mode, value in conditions])
+    controller = dict(states=[
+        dict(name="Idle", path="Base Layer.Idle", transitions=[edge(1, [("Input01", 1, 0), ("FrameCount", 9, 6)], fade=0.1)], **leaf(2)),
+        dict(name="Attack", path="Base Layer.Attack", transitions=[], **leaf(50)),
+    ], selectors=[], any_state=[edge(0, [("Input01", 1, 0)])])
+    rows.append({**rows[0], "name": "Avatar_Type01_Character01_Controller", "type": "AnimatorController", "path_id": 60})
+    read = client.read
+    def read_controller(row):
+        return deepcopy(controller) if row["type"] == "AnimatorController" else read(row)
+    client.read = read_controller
     output = tmp_path / "output"
     report, _ = zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, threading.Event(), rows)
-    assert report["clips"] == 2 and report["imported"] == 2
+    assert report["clips"] == 2 and report["imported"] == 2 and report["sequences"] == 1
     manifest = json.loads((output / "Animation/manifest.json").read_text())
     entries = manifest["clips"]
     assert len({entry["file"].casefold() for entry in entries}) == 2
     sources = [json.loads((output / "Animation" / entry["file"]).read_text())["source"] for entry in entries]
     assert len(set(sources)) == 2
+    (sequence,) = manifest["sequences"]
+    assert [step["clip"] for step in sequence["steps"]] == [entries[0]["id"], entries[1]["id"]]
+    assert sequence["steps"][1]["leave"] == entries[1]["duration"] and sequence["steps"][1]["fade"] == 0
+    assert sequence["steps"][0]["start"] == 0 and sequence["steps"][0]["leave"] == pytest.approx(0.1)
+    assert sequence["steps"][0]["fade"] == pytest.approx(0.1)
     shutil.copyfile(output / "Rig.json", asset / "Rig.json")
     shutil.copytree(output / "Animation", asset / "Animation")
     second = tmp_path / "second"
     zzz_pipeline.build(client, root, record, second, "Character01", lambda *_: None, threading.Event(), rows)
     assert json.loads((second / "Animation/manifest.json").read_text())["clips"] == entries
+    assert json.loads((second / "Animation/manifest.json").read_text())["sequences"] == manifest["sequences"]
 
 
 def test_zzz_index_composite_identity_staleness_and_failed_build_preserve_cache(tmp_path, monkeypatch):

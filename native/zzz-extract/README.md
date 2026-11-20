@@ -40,6 +40,7 @@ Geometry, path hashes and inverse binds establish identity. Equivalent Avatar
 copies in one animation family use the existing reference-world tolerance;
 differences in the skeleton or animation ownership remain rejected. Generated
 clip paths are unique with Windows case-insensitive semantics.
+ZZZ also indexes and reads AnimatorControllers with the same exported graph as Genshin (used only for authored sequences).
 Locators include game-relative block path, bundle offset, internal file ordinal,
 CAB and PathID. Never resolve an object by CAB basename or PathID alone.
 

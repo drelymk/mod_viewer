@@ -279,3 +279,30 @@ This checkout is in use by another session on `claude/gimi-mod-rig-binding`
 with uncommitted edits to `rig.py` and `test_gi_extraction.py`. Implement in a
 separate worktree on a new branch from `origin/main`
 (`claude/gi-animation-sequences`), then open a PR targeting `main`.
+
+## 9. ZZZ and WuWa (implemented)
+
+- ZZZ: the native reader indexes and reads AnimatorControllers in both games (ZZZ index
+  version bumped, clip runtime `zzz-7`). `zzz_pipeline` derives sequences from
+  `<family>_Controller` and `<family>_Controller_*` controllers, maps leaf clips through
+  the converted clip identities, and skips a name with several indexed copies.
+- ZZZ windows are `FrameCount` (60 Hz frames since the step start); Genshin keeps
+  `NormalizedTime`. Sequence names carry the controller suffix.
+- WuWa: the native helper searches and exports `AnimMontage` JSON (direct-4). Each
+  montage is one slot timeline: contiguous segments at play rate 1, loop counts expanded,
+  explicit section links only, a link back to the first section repeats, hard cuts.
+- Combo order between montages lives in gameplay code and is not inferred. Montage
+  failures never block clips; they are reported as `sequences`, `skipped_sequences` and
+  `sequence_error` in the extraction report.
+- Catalog validation and playback both bound a crossfade by the incoming step: the fade
+  may not outlast that step's leave. A cyclic restart must precede the head's leave.
+- Review fixes folded in: fade clamp to the incoming step (playback and validation),
+  restart check for cyclic sequences, malformed destinations ignored during routing,
+  state playback speed other than 1 excluded from chains, selector routing by the first
+  fully satisfied transition, and unnamed selector inputs never guessed past.
+- Timing follows Unity's default (no interruption): a state's edges are evaluated only
+  after its incoming transition completes, a cycle closes only when the closing
+  transition completes before the head leaves, and input edges without their own exit
+  time or window are not steps. The derivation is shared in
+  `game_extract/animator_sequences.py`; montage timelines are in
+  `game_extract/montage_sequences.py`.

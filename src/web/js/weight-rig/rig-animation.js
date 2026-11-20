@@ -280,7 +280,7 @@ export function createRigAnimation({
     const current = generation;
     if (outgoing) {
       outgoing.time = Math.min(outgoing.time + elapsed, outgoing.clip.duration);
-      time = Math.min(time + elapsed, clip.duration);
+      time = Math.min(time + elapsed, sequence.steps[step].leave);
       fadeElapsed += elapsed;
       if (fadeElapsed >= fadeDuration) {
         outgoing = null;

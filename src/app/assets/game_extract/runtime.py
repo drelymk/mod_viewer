@@ -11,7 +11,7 @@ from .bundle import runtime_directory
 
 
 PARSER_COMMIT = "cb909733773daea9015a67f6955d6f2ec24d3629"
-VERSION = "direct-3-" + PARSER_COMMIT[:12]
+VERSION = "direct-4-" + PARSER_COMMIT[:12]
 MAX_RESPONSE = 32 * 1024 * 1024
 MAX_EXPORT_BYTES = 160 * 1024 * 1024
 MAX_WORK_BYTES = 4 * 1024 ** 3

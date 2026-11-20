@@ -952,7 +952,9 @@ of documentation, comments and tests; use portable fixtures instead.
   source for its lifetime: targets merge by component and name and must be
   byte-identical, and facial weights crossfade (unanimated channels contribute
   zero). Otherwise facial weights switch at the fade's midpoint because each clip
-  owns its sparse targets. Sequences are not seekable.
+  owns its sparse targets. Sequences are not seekable. A crossfade never outlasts its
+  incoming step (catalog validation and playback both enforce it), and a cyclic restart
+  precedes the head's leave.
   Playback may use one uniquely identified verified skeleton's compatible mesh
   subset while the manual ModelRig retains its original all-source admission.
   Apply fallback transforms through each mesh's exact game-bone palette, never
@@ -1072,6 +1074,11 @@ of documentation, comments and tests; use portable fixtures instead.
   Building is explicit (Settings confirm dialog or index button) or automatic
   when extracting without a ready index; the extraction Browse pick is saved to
   Settings, and clearing the WWMI folder deletes its index.
+- WuWa authored sequences are single AnimMontage timelines: one slot, contiguous
+  segments at play rate 1, loop counts expanded, explicit section links only, and a
+  link back to the first section repeats (hard cuts). Combo order between montages
+  lives in gameplay code and is not inferred. Montage failures never block clips and
+  are reported in the extraction report (`sequences`, `skipped_sequences`, `sequence_error`).
 - ZZZ uses a separate minimal native reader built from pinned original AnimeStudio
   source and its rebuilt ZZZ V2 ACL decoder, plus the same pinned Oodle decoder as
   WuWa. No GUI, Ultimate fork, media exporters or updater is bundled. The shared
@@ -1160,6 +1167,10 @@ of documentation, comments and tests; use portable fixtures instead.
   then uses the shared morph-before-skinning playback and restoration lifecycle.
   Preserve compatible libraries and user files in the
   existing staging transaction. Extraction/indexing stays off ordinary load paths.
+  ZZZ also indexes AnimatorControllers (index version `zzz-3`) and reads them with the
+  Genshin controller graph. Authored sequences come only from `<family>_Controller` and
+  `<family>_Controller_*` controllers; a name with several indexed copies is skipped,
+  never guessed, and sequence names carry the controller suffix.
 - Genshin Impact (GIMI) extraction runs the same pinned reader in `--gi` mode with the
   database ACL decoder rebuilt from the same unmodified source. Accept only the
   global `GenshinImpact_Data` layout; the effective block set is
@@ -1208,11 +1219,20 @@ of documentation, comments and tests; use portable fixtures instead.
   non-transform channels instead of hiding them.
   Controller reads export the base state machine's authored graph (state
   transitions, Any State transitions, entry/exit selectors, named conditions).
-  Sequences chain converted plain states only: from Any State targets, entry
-  selectors, states nothing leads to, then other edge targets, follow automatic
-  exit-time edges or edges whose non-`NormalizedTime` conditions are a subset of
-  the chain's entry input, leaving at the exit time or the earliest
-  `NormalizedTime` window (continuous input). A cycle closes only on its head;
+  Genshin and ZZZ sequences chain converted plain states only: from Any State
+  targets, entry selectors, states nothing leads to, then other edge targets.
+  Selector nodes route by the first transition whose whole input holds; an
+  unevaluable (unnamed) selector input is never guessed past. A chain follows
+  automatic exit-time edges or edges whose non-window conditions are a subset of
+  the chain's entry input, leaving at the exit time (at the later of exit time and
+  window when the edge repeats the chain input) or the earliest window (continuous
+  input). An input edge needs its own exit time or window; untimed input edges are
+  not steps. Without exported interruption settings, Unity's default applies: a
+  state's edges wait for its incoming transition to complete, and a cycle closes
+  only if the closing transition completes before the head leaves. States with a
+  playback speed other than 1 never join a chain. Genshin's
+  window is `NormalizedTime` (normalized); ZZZ's is `FrameCount` (60 Hz frames since
+  the step start, matching authored exit times). A cycle closes only on its head;
   runs contained in a longer chain are dropped. Locomotion is driven by game code
   and has no authored edges, so it is never sequenced.
   GIMI mods prove a palette only through a stock skinning pass: a safe

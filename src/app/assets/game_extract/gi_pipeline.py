@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from app.assets.animations import read_clip
-from . import gi_animation, gi_index, zzz_morphs, zzz_native, zzz_pipeline
+from . import animator_sequences, gi_animation, gi_index, zzz_morphs, zzz_native, zzz_pipeline
 from .mecanim import HumanSolver
 from .pipeline import clip_id, preserve_library, reusable_clip_key, write_document
 from .runtime import ExtractionCancelled, check_cancelled
@@ -143,7 +143,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             raise ValueError("The extracted animation library exceeds its size limit.")
     if not imported:
         raise ValueError("No compatible Genshin Impact animation clips could be converted. Existing Asset files were preserved.")
-    sequences = gi_animation.sequences(controller, state_clips)
+    sequences = animator_sequences.derive(controller, state_clips, animator_sequences.NORMALIZED_TIME)
     write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
                                                    clips=list(entries.values()), sequences=sequences), 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)

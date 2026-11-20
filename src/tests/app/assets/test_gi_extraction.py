@@ -614,9 +614,9 @@ def window(lower):
      {0: ("clip-a", 1.0), 1: ("clip-b", 1.0)}, []),
 ])
 def test_gi_sequences_follow_authored_continuations(controller, clips, expected):
-    from app.assets.game_extract import gi_animation
+    from app.assets.game_extract import animator_sequences
 
-    result = gi_animation.sequences(controller, clips)
+    result = animator_sequences.derive(controller, clips, animator_sequences.NORMALIZED_TIME)
     # Times are stored rounded to 1e-6, so they compare exactly.
     assert [(item["name"], item["cyclic"], item["restart"],
              [(step["clip"], step["start"], step["leave"], step["fade"]) for step in item["steps"]])

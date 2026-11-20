@@ -360,8 +360,9 @@ The Animation section offers selection, Play/Pause, Stop / Rest pose and scrubbi
 Playback loops and temporarily suspends Weight physics. Stop restores the exact
 baseline; manual posing or rig editing stops animation first. Compatible mods
 automatically use the same animation library as their verified Asset rig.
-Genshin Impact libraries may also list authored sequences (for example a normal
-attack combo) in their own picker group. A sequence plays its steps with the
+Genshin Impact and ZZZ libraries may also list authored controller sequences (for
+example a normal attack combo), and Wuthering Waves libraries may list multi-part
+montages, in their own picker group. A sequence plays its steps with the
 controller's crossfades and loops; it shows the current step and cannot be
 scrubbed.
 
