@@ -91,9 +91,11 @@ TQS tracks. Unknown transform bindings reject a clip; unsupported non-transform
 channels are counted explicitly in clip metadata and the extraction report.
 Facial extraction retains single-frame blend shapes and their authored full
 weights. Renderer paths and Animator Avatar references come from explicit Unity
-pointers. Streamed null-mesh renderers require a unique geometry-proven mesh with
+pointers. Streamed null-mesh renderers require a geometry-proven mesh with
 the same complete ordered bone paths and any nonempty default-weight count; names cannot establish a
-route. Complete triangle multisets preserve duplicate counts during geometry proof.
+route. Several such proven copies (for example a `SeparateMesh_` export) share the
+route only when their facial targets on the captured parts agree within float
+export noise of one representative. Complete triangle multisets preserve duplicate counts during geometry proof.
 Each converted facial clip includes a playable GLB with a checked sparse runtime
 view. The viewer loads that GLB lazily with the clip, applies facial deltas before
 skinning, and restores the original geometry when playback ends. Unsupported

@@ -1,5 +1,6 @@
 """Verified Unity renderer routes and contained facial GLBs for ZZZ playback."""
 
+import functools
 import hashlib
 import json
 import math
@@ -11,6 +12,8 @@ import numpy as np
 from . import zzz_index
 
 MAX_BYTES = 128 * 1024 * 1024
+# Equivalent native copies of one renderer mesh may differ by float export noise.
+TOLERANCE = 1e-6
 
 
 def _references(lookup, owner, reference, kind):
@@ -62,6 +65,22 @@ def _channels(mesh):
     return result
 
 
+def _mapped(item, channels):
+    """Each channel's deltas on the captured part's vertices, in capture axes."""
+    signs = [*item["signs"], *item["signs"]]
+    return {key: {compact: (np.asarray(channel["rows"][original]) * signs).tolist()
+                  for compact, original in item["vertices"].items() if original in channel["rows"]}
+            for key, channel in channels.items()}
+
+
+def _targets_agree(first, other):
+    """Same targets on the same vertices, with every delta within the tolerance of the representative."""
+    return first.keys() == other.keys() and all(
+        target.keys() == other[name].keys()
+        and np.allclose(list(target.values()), [other[name][vertex] for vertex in target], rtol=0, atol=TOLERANCE)
+        for name, target in first.items())
+
+
 def prepare(chosen, captured, rows, expressions=None):
     """Adopt routes only through native renderer mesh and Animator Avatar pointers.
 
@@ -73,6 +92,27 @@ def prepare(chosen, captured, rows, expressions=None):
     source_meshes = {zzz_index.identity(item["row"]): item["mesh"] for items in native.values() for item in items}
     allowed_avatars = chosen["avatar_sources"]
     paths = {bone["hash"]: bone["path"] for bone in chosen["avatar"]["bones"]}
+    channels_of = functools.cache(lambda source: _channels(source_meshes[source]))
+    mapped = {}
+
+    def mapped_of(item):
+        if id(item) not in mapped:
+            mapped[id(item)] = _mapped(item, channels_of(zzz_index.identity(item["row"])))
+        return mapped[id(item)]
+
+    def equivalent(copies):
+        """Copies agree with one fixed representative, never another tolerated copy, on every captured part."""
+        if len(copies) == 1:
+            return True
+        # Copies may list the same channels in another order.
+        identities = [{key: (channel["name"], channel["weight"]) for key, channel in channels_of(source).items()}
+                      for source in copies]
+        first, *others = [[(number, mapped_of(item)) for number, items in native.items() for item in items
+                           if zzz_index.identity(item["row"]) == source] for source in copies]
+        return all(other == identities[0] for other in identities[1:]) and all(len(other) == len(first) and all(
+            number == other_number and _targets_agree(targets, other_targets)
+            for (number, targets), (other_number, other_targets) in zip(first, other)) for other in others)
+
     lookup = {}
     for row in rows:
         if row["type"] in ("Mesh", "Avatar"):
@@ -89,8 +129,11 @@ def prepare(chosen, captured, rows, expressions=None):
         if isinstance(renderer.get("mesh"), dict) and renderer["mesh"].get("path_id") == 0:
             # Some native prefabs stream their mesh and serialize a null Mesh
             # pointer and an empty default-weight array. Their explicit ordered
-            # bone pointers must still prove one unique verified mesh. A supplied
-            # nonempty default-weight count must also agree.
+            # bone pointers must still prove the verified mesh. Several proven
+            # copies may share that palette (for example a SeparateMesh export);
+            # they form one route only when they place the same identities and
+            # targets on every captured part they matched. A supplied nonempty
+            # default-weight count must also agree.
             bones = renderer.get("bone_paths")
             count = renderer.get("blend_shape_count")
             if (not isinstance(bones, list) or not bones or len(bones) > 4096
@@ -100,9 +143,7 @@ def prepare(chosen, captured, rows, expressions=None):
             hashes = [zlib.crc32(bone.encode("utf-8")) for bone in bones]
             meshes = {source for source, mesh in source_meshes.items() if mesh["bone_hashes"] == hashes
                       and (not count or len((mesh.get("blend_shapes") or {}).get("channels", [])) == count)}
-            identities = {hashlib.sha256(json.dumps(source_meshes[source], sort_keys=True, separators=(",", ":")).encode()).digest()
-                          for source in meshes}
-            if len(identities) != 1:
+            if not meshes or not equivalent(sorted(meshes)):
                 continue
         if (not meshes or not meshes <= sources or not avatars or not avatars <= allowed_avatars
                 or paths.get(key) != path):
@@ -110,7 +151,6 @@ def prepare(chosen, captured, rows, expressions=None):
         for source in meshes:
             routes.setdefault(source, set()).add(key)
     bindings, components, offsets = {}, [], {}
-    channel_cache = {}
     for number, items in native.items():
         part = captured[number]
         shown = (expressions or {}).get(number, {})
@@ -119,13 +159,10 @@ def prepare(chosen, captured, rows, expressions=None):
             source = zzz_index.identity(item["row"])
             if source not in routes:
                 continue
-            mesh, signs = item["mesh"], item["signs"]
-            if source not in channel_cache:
-                channel_cache[source] = _channels(mesh)
-            channels = channel_cache[source]
+            channels = channels_of(source)
             if not channels:
                 continue
-            mapping = item["vertices"]
+            deltas = mapped_of(item)
             targets = {}
             for path in sorted(routes[source]):
                 for key, channel in channels.items():
@@ -139,17 +176,13 @@ def prepare(chosen, captured, rows, expressions=None):
                     # One rendered target is shared by its parts; their captures must agree.
                     if abs(offsets.setdefault(name, offset) - offset) > 0.02:
                         raise ValueError("Captured facial expressions disagree.")
-                    target = {}
-                    for compact, original in mapping.items():
-                        if original in channel["rows"]:
-                            delta = np.asarray(channel["rows"][original]) * [*signs, *signs]
-                            target[compact] = delta.tolist()
-                    if target:
-                        targets[name] = target
+                    if deltas[key]:
+                        targets[name] = deltas[key]
             candidates.append(targets)
         if not candidates:
             continue
-        if any(candidate != candidates[0] for candidate in candidates[1:]):
+        # The first proven copy is the representative whose targets are emitted.
+        if any(not _targets_agree(candidates[0], candidate) for candidate in candidates[1:]):
             raise ValueError("Equivalent native meshes disagree about facial targets.")
         if candidates[0]:
             components.append(dict(part=part, targets=candidates[0]))

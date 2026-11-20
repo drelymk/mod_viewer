@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import struct
 import threading
+import time
 from unittest.mock import patch
 
 import numpy as np
@@ -18,6 +19,7 @@ from app.assets.animations import AnimationSessions, read_clip
 from app.assets.animation_morphs import read_morphs
 from app.assets.game_extract import zzz_animation, zzz_index, zzz_morphs, zzz_native, zzz_pipeline, zzz_runtime
 from app.assets.game_extract.pipeline import rest_worlds
+from app.assets.game_extract.runtime import ExtractionCancelled
 from app.assets.loader.hash_asset import load_hash_asset
 from app.assets.rig import resolve_game_rig, validate_rig
 from app.assets.resolver import AssetComponentBinding
@@ -600,6 +602,58 @@ def test_zzz_case_only_clip_names_keep_distinct_files_and_stable_reimport_ids(tm
     assert json.loads((second / "Animation/manifest.json").read_text())["sequences"] == manifest["sequences"]
 
 
+@pytest.mark.parametrize("case", ["complete", "failure", "cancelled", "serial"])
+def test_parallel_index_scan_keeps_archive_order_and_stops_every_helper(tmp_path, monkeypatch, case):
+    monkeypatch.setattr(zzz_index.os, "cpu_count", lambda: 8)
+    files = [f"block-{number:03}" for number in range(100)]
+    failing = files[3 * zzz_index.SCAN_BATCH] if case == "failure" else None
+    helpers, consumed = [], []
+    cancel = threading.Event()
+
+    class Helper:
+        def __init__(self, work, stop):
+            self.stop, self.closed = stop, False
+
+        def scan_many(self, batch):
+            if batch[0] == failing:
+                raise ValueError("Synthetic scan failure.")
+            # Later batches finish first so completion order differs from archive order.
+            for _ in range((len(files) - files.index(batch[0])) // 10):
+                if self.stop.is_set():
+                    raise ExtractionCancelled("Stopped.")
+                time.sleep(.001)
+            return [dict(block=name) for name in batch]
+
+        def close(self):
+            self.closed = True
+
+    class Client(Helper):
+        work = tmp_path / "work"
+
+        def clone(self, work, stop):
+            assert work.parent == self.work and work.is_dir()
+            helpers.append(Helper(work, stop))
+            return helpers[-1]
+
+    Client.work.mkdir()
+    client = Helper(None, cancel) if case == "serial" else Client(None, cancel)
+    def progress(_phase, current, _total):
+        if case == "cancelled" and current:
+            cancel.set()
+    if case in ("complete", "serial"):
+        zzz_index.scan_batches(client, files, progress, cancel, consumed.append)
+        assert [row["block"] for batch in consumed for row in batch] == files
+        assert len(helpers) == (0 if case == "serial" else zzz_index.MAX_SCAN_WORKERS)
+    else:
+        expected = (ValueError, "Synthetic scan failure") if case == "failure" else (ExtractionCancelled, "cancelled")
+        with pytest.raises(expected[0], match=expected[1]):
+            zzz_index.scan_batches(client, files, progress, cancel, consumed.append)
+        # Earlier batches were consumed in order; every helper was told to stop.
+        assert len(consumed) == (3 if case == "failure" else 1)
+        assert all(helper.stop.is_set() for helper in helpers)
+    assert all(helper.closed for helper in helpers)
+
+
 def test_zzz_index_composite_identity_staleness_and_failed_build_preserve_cache(tmp_path, monkeypatch):
     folder = tmp_path / "game"
     blocks = folder / zzz_runtime.BLOCK_DIRS[0]
@@ -853,11 +907,12 @@ def test_zzz_facial_glb_extraction_publication_reimport_and_mod_mapping_lifecycl
     sessions.clear()
 
 
-@pytest.mark.parametrize("route", ["direct", "streamed", "empty_defaults", "equivalent_avatar", "wrong_bones", "wrong_count", "wrong_avatar", "ambiguous_cab"])
+@pytest.mark.parametrize("route", ["direct", "streamed", "empty_defaults", "equivalent_avatar", "copy_noise",
+                                   "wrong_bones", "wrong_count", "wrong_avatar", "ambiguous_cab", "copy_differs"])
 def test_zzz_facial_renderer_routes_require_native_pointer_or_unique_palette_proof(tmp_path, route):
     root, _asset, record, _avatar, _mesh, rows, client = facial_fixture(tmp_path)
     renderer = rows[-1]["renderer"]
-    if route in ("streamed", "empty_defaults", "wrong_bones", "wrong_count"):
+    if route in ("streamed", "empty_defaults", "wrong_bones", "wrong_count", "copy_noise", "copy_differs"):
         renderer["mesh"]["path_id"] = 0
         renderer.update(bone_paths=["", "Root/Joint01"], blend_shape_count=1)
         if route == "wrong_bones":
@@ -866,6 +921,12 @@ def test_zzz_facial_renderer_routes_require_native_pointer_or_unique_palette_pro
             renderer["blend_shape_count"] = 2
         elif route == "empty_defaults":
             renderer["blend_shape_count"] = 0
+        elif route in ("copy_noise", "copy_differs"):
+            # A second proven export of the streamed mesh shares its palette, lists
+            # its two shapes in another order and has float export noise or a
+            # genuinely different facial target.
+            rows.append({**rows[1], "name": "Character01_Body", "path_id": 50})
+            renderer["blend_shape_count"] = 2
         # The synthetic Avatar hashes must match its actual path CRCs.
         import zlib
         original = client.read
@@ -875,6 +936,17 @@ def test_zzz_facial_renderer_routes_require_native_pointer_or_unique_palette_pro
                 data["bones"][1]["hash"] = zlib.crc32(b"Root/Joint01")
             if row["type"] == "Mesh":
                 data["bone_hashes"][1] = zlib.crc32(b"Root/Joint01")
+                shapes = data["blend_shapes"]
+                if route.startswith("copy_"):
+                    shapes["channels"].append(dict(name="Shape02", hash=124, first=1, count=1))
+                    shapes["weights"].append(100)
+                    shapes["frames"].append(dict(first=1, count=1, normals=True))
+                    shapes["vertices"].append(dict(index=1, position=[0, 1, 0], normal=[0, 0, 0]))
+                if row["path_id"] == 50:
+                    data["name"] = row["name"]
+                    data["bind_poses"][0][3] = 1e-9
+                    shapes["channels"].reverse()
+                    shapes["vertices"][0]["position"][2] += 3e-9 if route == "copy_noise" else .01
             return data
         client.read = read
     elif route == "wrong_avatar":
@@ -887,8 +959,14 @@ def test_zzz_facial_renderer_routes_require_native_pointer_or_unique_palette_pro
         rows.append({**rows[1], "name": "UnrelatedMesh01", "block": "ZenlessZoneZero_Data/StreamingAssets/Blocks/2.blk"})
     captured, _ = zzz_native.capture(root, record)
     chosen = zzz_pipeline.verify_candidates(client, captured, rows, "Character01", threading.Event())
+    if route.startswith("copy_"):
+        assert len({zzz_index.identity(item["row"]) for items in chosen["native"].values() for item in items}) == 2
     prepared = zzz_morphs.prepare(chosen, captured, rows)
-    assert bool(prepared["bindings"]) == bool(prepared["components"]) == (route in ("direct", "streamed", "empty_defaults", "equivalent_avatar"))
+    assert bool(prepared["bindings"]) == bool(prepared["components"]) == (
+        route in ("direct", "streamed", "empty_defaults", "equivalent_avatar", "copy_noise"))
+    if prepared["components"]:
+        target = next(value for name, value in prepared["components"][0]["targets"].items() if name.endswith(":Shape01"))
+        assert target.keys() == {0} and target[0] == pytest.approx([0, 0, 2, 0, 1, 0], abs=1e-6)
 
 
 @pytest.mark.parametrize("change", ["header", "range", "descriptor", "external"])
@@ -922,8 +1000,6 @@ def test_zzz_facial_glb_rejects_invalid_embedded_runtime_data(tmp_path, change):
 
 
 def test_zzz_runtime_manifest_integrity_containment_and_cancellation(tmp_path):
-    from app.assets.game_extract.runtime import ExtractionCancelled
-
     bundle = tmp_path / "runtime"
     bundle.mkdir()
     names = ("ModViewer.ZzzExtract.exe", "UnityReader.dll", "AnimeStudio.ACL.ZZZV2.dll", "AnimeStudio.ACL.DB.dll",

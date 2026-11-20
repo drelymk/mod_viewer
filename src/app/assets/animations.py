@@ -4,13 +4,14 @@ import hashlib
 import json
 import math
 import re
-import struct
 import uuid
 from threading import RLock
 
+import numpy as np
+
 from app.runtime import server
 from . import animation_keys, paths
-from .animation_morphs import idle_blink, morph_names, read_morphs
+from .animation_morphs import bounded, idle_blink, morph_names, read_morphs
 
 
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -89,6 +90,19 @@ def _json(file, limit=1024 * 1024):
     return json.loads(data)
 
 
+def _valid_transforms(data, size, width):
+    """Bounded rows whose rotation quaternions are unit length within 0.001.
+
+    Summing the squares left to right in float64 matches the scalar check exactly.
+    """
+    rows = np.frombuffer(data, "<f4", count=size // 4).reshape(-1, width)
+    if not bounded(rows):
+        return False
+    q = rows[:, 3:7].astype(np.float64)
+    length = q[:, 0] * q[:, 0] + q[:, 1] * q[:, 1] + q[:, 2] * q[:, 2] + q[:, 3] * q[:, 3]
+    return bool((np.abs(length - 1) <= 0.001).all())
+
+
 def _read_clip(directory, entry, rig, *, validated_morphs=None, full_validation=True):
     """Read bounded playback data, with full validation for extraction."""
     raw = _json(paths.safe_asset_path(directory, entry["file"]))
@@ -117,15 +131,11 @@ def _read_clip(directory, entry, rig, *, validated_morphs=None, full_validation=
         data = stream.read(size + 1)
     if len(data) != size or (full_validation and hashlib.sha256(data).hexdigest() != raw.get("sha256")):
         raise ValueError("Animation data is incomplete or has changed.")
-    if full_validation:
-        for row in struct.iter_unpack("<" + str(width) + "f", memoryview(data)[:bone_size]):
-            if (not all(math.isfinite(v) and abs(v) <= 1e6 for v in row)
-                    or abs(sum(v * v for v in row[3:7]) - 1) > 0.001):
-                raise ValueError("Animation contains invalid transforms.")
+    if full_validation and not _valid_transforms(data, bone_size, width):
+        raise ValueError("Animation contains invalid transforms.")
     morph_data = None
     if names:
-        if full_validation and any(not math.isfinite(value) or abs(value) > 1e6
-               for (value,) in struct.iter_unpack("<f", memoryview(data)[bone_size:])):
+        if full_validation and not bounded(np.frombuffer(data, "<f4", offset=bone_size)):
             raise ValueError("Animation contains invalid morph weights.")
         morph_data = read_morphs(directory, raw["morphs"], validated=validated_morphs, full_validation=full_validation)
     return raw, data, morph_data

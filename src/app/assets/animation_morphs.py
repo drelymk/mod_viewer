@@ -7,7 +7,17 @@ import os
 import re
 import struct
 
+import numpy as np
+
 from . import paths
+
+# One sparse target row: vertex index then position and normal deltas.
+_DELTA = np.dtype([("vertex", "<u4"), ("delta", "<f4", (6,))])
+
+
+def bounded(values):
+    """Every value is finite with magnitude at most 1e6; NaN and infinities fail the comparison."""
+    return bool((np.abs(values) <= 1e6).all())
 
 
 def _file_identity(file):
@@ -182,12 +192,10 @@ def read_morphs(directory, raw, *, validated=None, full_validation=True):
                 raise ValueError("Invalid morph target range.")
             seen.add(name)
             if full_validation:
-                vertices = set()
-                for row in struct.iter_unpack("<I6f", memoryview(data)[cursor:cursor + length * 28]):
-                    if (row[0] >= count or row[0] in vertices
-                            or any(not math.isfinite(value) or abs(value) > 1e6 for value in row[1:])):
-                        raise ValueError("Invalid morph vertex delta.")
-                    vertices.add(row[0])
+                rows = np.frombuffer(data, _DELTA, count=length, offset=cursor)
+                vertices = rows["vertex"]
+                if (vertices >= count).any() or len(np.unique(vertices)) != length or not bounded(rows["delta"]):
+                    raise ValueError("Invalid morph vertex delta.")
             cursor += length * 28
     if cursor != len(data):
         raise ValueError("Invalid morph data length.")

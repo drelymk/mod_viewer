@@ -7,8 +7,7 @@ from pathlib import Path
 
 from app.settings import config, paths
 from . import gi_runtime
-from .runtime import check_cancelled
-from .zzz_index import identity
+from .zzz_index import identity, scan_batches
 
 MAX_BYTES = 256 * 1024 * 1024
 FORMAT = 1
@@ -112,15 +111,16 @@ def scan(client, folder, progress, cancel):
     root = gi_runtime.validate_folder(folder)
     files = gi_runtime.archives(root)
     rows = []
-    for number in range(0, len(files), 16):
-        progress("index", number, len(files))
-        check_cancelled(cancel)
-        for row in client.scan_many(files[number:number + 16]):
+
+    def consume(batch):
+        for row in batch:
             if row.get("type") == "SkinnedMeshRenderer":
                 row = _route(row)
                 if row is None:
                     continue
             rows.append(row)
+
+    scan_batches(client, files, progress, cancel, consume)
     progress("index", len(files), len(files))
     if not valid_rows(rows):
         raise ValueError("The Genshin Impact metadata index is incomplete or ambiguous.")

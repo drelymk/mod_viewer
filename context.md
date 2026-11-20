@@ -1176,9 +1176,13 @@ of documentation, comments and tests; use portable fixtures instead.
   Facial curves require captured-geometry correspondence, native shape hashes,
   and a renderer path under the proven Animator Avatar. Resolve explicit mesh
   pointers through complete index locators; a streamed null-mesh renderer may
-  instead prove one unique native mesh through its complete ordered bone paths
-  and, when serialized, exact nonempty default-weight count. Ambiguous references
-  or incompatible targets stay omitted.
+  instead prove its native mesh through its complete ordered bone paths
+  and, when serialized, exact nonempty default-weight count. Several proven
+  copies matching those paths form one route only when, mapped onto every
+  captured part, their channel names, hashes, weights and vertex sets are equal
+  and deltas are within 1e-6 of one fixed representative, whose targets are
+  emitted; never chain those tolerances. Ambiguous references or incompatible
+  targets stay omitted.
   Single-frame native shapes retain their authored full-weight scale and axis
   reflection; unsupported in-between shapes are never flattened. Extraction reads
   the game's exact `legacyClampBlendShapeWeights` PlayerSettings policy
