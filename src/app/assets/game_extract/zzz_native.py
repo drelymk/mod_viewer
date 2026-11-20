@@ -432,7 +432,8 @@ def _drifted_weight_palette(part, mesh, mapping, drift):
 
     Only vertices whose influences pair unambiguously by weight order vote, so a captured
     id must map to one native bone by a clear majority, distinct ids to distinct bones, and
-    nearly every vertex must then agree with the native influences within ``drift``.
+    nearly every vertex must then agree with the native influences within ``drift``. Every
+    captured id with any weight must be mapped, or the palette could never bind.
     """
     def influences(weights, bones):
         return sorted(((float(w), int(b)) for w, b in zip(weights, bones) if w > _NOISE_WEIGHT), reverse=True)
@@ -451,13 +452,26 @@ def _drifted_weight_palette(part, mesh, mapping, drift):
             continue
         for (_, a), (_, b) in zip(left, right):
             votes.setdefault(a, Counter())[b] += 1
-    palette = {}
-    for local, counter in votes.items():
-        best, count = counter.most_common(1)[0]
-        if count < _DRIFT_AGREEMENT * sum(counter.values()):
-            return None
-        palette[local] = best
-    if len(set(palette.values())) != len(palette):
+    palette = _majority_palette(votes)
+    if palette is None:
+        return None
+    # The viewer must map every captured id with any weight, including ids seen only as
+    # noise. Those pair a vertex's one remaining light influence with its one remaining
+    # light native influence, by the same clear majority; an unpaired id rejects the palette.
+    used, light_votes = set(), {}
+    for captured, source in mapping.items():
+        blend = part["blends"][captured]
+        used.update(int(b) for w, b in zip(blend[:4], blend[4:]) if w > 0)
+        light = [int(b) for w, b in zip(blend[:4], blend[4:]) if 0 < w <= _NOISE_WEIGHT and int(b) not in palette]
+        native = [int(b) for w, b in zip(mesh["weights"][source], mesh["bone_indices"][source])
+                  if 0 < w <= _NOISE_WEIGHT and int(b) not in palette.values()]
+        if len(light) == len(native) == 1:
+            light_votes.setdefault(light[0], Counter())[native[0]] += 1
+    light_palette = _majority_palette(light_votes)
+    if light_palette is None:
+        return None
+    palette.update(light_palette)
+    if len(set(palette.values())) != len(palette) or not used <= palette.keys():
         return None
     disagree = 0
     for left, right in rows:
@@ -469,3 +483,14 @@ def _drifted_weight_palette(part, mesh, mapping, drift):
     if not palette or disagree > (1 - _DRIFT_AGREEMENT) * len(rows):
         return None
     return {str(a): b for a, b in sorted(palette.items())}
+
+
+def _majority_palette(votes):
+    """Each captured id's native bone by a clear majority of its votes, or None."""
+    palette = {}
+    for local, counter in votes.items():
+        best, count = counter.most_common(1)[0]
+        if count < _DRIFT_AGREEMENT * sum(counter.values()):
+            return None
+        palette[local] = best
+    return palette

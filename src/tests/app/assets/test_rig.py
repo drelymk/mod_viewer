@@ -498,6 +498,8 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
     assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",)) is None
     assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",), positions=("22222222",)) is None
     assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",), positions=("11111111",))["bone_map"] == own["bone_map"]
+    # A Blend hash the Asset knows for another stream is a conflict, not a patch change.
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), ("44444444", "99999999"), positions=("11111111",)) is None
     if asset_type == "GIMI":
         # Merged skeleton layouts are a ZZZ program; GIMI keeps the native stream palette.
         assert resolve("aaaaaaaa", 1, (0, 1, 2), merged_layout=(("44444444", 0, 4),))["bone_map"] == own["bone_map"]
