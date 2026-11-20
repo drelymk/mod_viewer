@@ -4,9 +4,11 @@ A montage plays its slot track's segments back to back (hard cuts, no
 crossfade) and moves between composite sections only through their explicit
 ``NextSectionName`` links; a section without one ends the montage. Combo order
 between montages lives in gameplay code, so only a single montage's own
-timeline becomes a sequence.
+timeline becomes an authored sequence; Start/Loop/End clip sets get separately
+labeled name-ordered previews.
 """
 
+import re
 from collections import Counter
 
 from .animator_sequences import MAX_SEQUENCE_STEPS, MAX_SEQUENCE_TOTAL_STEPS, MAX_SEQUENCES, finite, sequence_id
@@ -127,6 +129,48 @@ def timeline(properties, clips):
     if any(step["start"] >= step["leave"] for step in steps):
         raise ValueError("Montage timing is invalid.")
     return steps, cyclic, steps[0]["start"] if cyclic else 0.0
+
+
+NAMED_PART = re.compile(r"(?P<stem>.+)_(?P<part>Start|Loop|End(?P<end>\d*))", re.IGNORECASE)
+NAME_SUFFIX = " (by name)"
+
+
+def name_sequences(clips, exclude=()):
+    """Start/Loop/End clip sets in one folder, ordered by name (a labeled preview convenience).
+
+    Gameplay code chains these clips, so no authored data orders them; names only ever
+    order a preview here and never pair or identify clips. A stem with exactly one
+    ``_Start`` and/or one ``_Loop`` plus its ``_End`` variants becomes one sequence per
+    end (``Start → Loop → End``, hard cuts, played once); two parts are required.
+    ``clips`` maps an AnimSequence package path to ``(clip id, duration)``; sequences
+    whose ids are in ``exclude`` are skipped.
+    """
+    groups = {}
+    for package, value in clips.items():
+        folder, _slash, name = package.rpartition("/")
+        match = NAMED_PART.fullmatch(name)
+        if match:
+            part = "end" if match["end"] is not None else match["part"].casefold()
+            groups.setdefault((folder, match["stem"].casefold()), {}).setdefault(part, []).append((name, value))
+    clip_ids = {clip_id for clip_id, _duration in clips.values()}
+    result, seen = [], set(exclude)
+    for (_folder, _stem), parts in sorted(groups.items()):
+        if any(len(parts.get(part, [])) > 1 for part in ("start", "loop")):
+            continue
+        lead = [parts[part][0] for part in ("start", "loop") if part in parts]
+        ends = sorted(parts.get("end", [])) or [None]
+        for end in ends:
+            chain = lead + ([end] if end else [])
+            if len(chain) < 2:
+                continue
+            steps = [dict(clip=clip_id, start=0.0, leave=round(duration, 6), fade=0.0) for _name, (clip_id, duration) in chain]
+            identifier = sequence_id(steps, False, 0.0)
+            if identifier in seen or identifier in clip_ids:
+                continue
+            seen.add(identifier)
+            name = f"{chain[0][0]} – {chain[-1][0]}"[:128 - len(NAME_SUFFIX)] + NAME_SUFFIX
+            result.append(dict(id=identifier, name=name, cyclic=False, restart=0.0, steps=steps))
+    return result
 
 
 def sequences(montages, clips, root):

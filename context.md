@@ -1079,6 +1079,11 @@ of documentation, comments and tests; use portable fixtures instead.
   link back to the first section repeats (hard cuts). Combo order between montages
   lives in gameplay code and is not inferred. Montage failures never block clips and
   are reported in the extraction report (`sequences`, `skipped_sequences`, `sequence_error`).
+  Intentional exception to name-free ordering, for preview only: converted
+  `X_Start`/`X_Loop`/`X_End[n]` clips in one folder also form name-ordered sequences
+  (one per end, hard cuts, each clip once), always labeled `(by name)`, listed after
+  authored timelines and counted as `name_sequences`. Names never pair, identify or
+  admit clips, and a stem with several starts or loops is skipped.
 - ZZZ uses a separate minimal native reader built from pinned original AnimeStudio
   source and its rebuilt ZZZ V2 ACL decoder, plus the same pinned Oodle decoder as
   WuWa. No GUI, Ultimate fork, media exporters or updater is bundled. The shared

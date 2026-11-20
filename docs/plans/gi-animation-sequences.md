@@ -293,6 +293,9 @@ separate worktree on a new branch from `origin/main`
 - WuWa: the native helper searches and exports `AnimMontage` JSON (direct-4). Each
   montage is one slot timeline: contiguous segments at play rate 1, loop counts expanded,
   explicit section links only, a link back to the first section repeats, hard cuts.
+- WuWa `X_Start`/`X_Loop`/`X_End[n]` clip sets in one folder also get name-ordered
+  preview sequences labeled `(by name)` (an explicit, preview-only exception; names never
+  pair or identify clips).
 - Combo order between montages lives in gameplay code and is not inferred. Montage
   failures never block clips; they are reported as `sequences`, `skipped_sequences` and
   `sequence_error` in the extraction report.

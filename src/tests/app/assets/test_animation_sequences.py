@@ -136,3 +136,25 @@ def test_montage_sequences_name_shared_montage_names_by_folder_and_drop_duplicat
     assert skipped == []
     # Sorted by package; an identical timeline is listed once.
     assert [item["name"] for item in result] == ["AM_Copy01", "AM_Test01 (CommonAnim/Extra)"]
+
+
+@pytest.mark.parametrize("names, expected", [
+    # One sequence per end variant, ordered Start, Loop, End; case does not matter.
+    (["Charge01_Start", "Charge01_loop", "Charge01_End01", "Charge01_End02"],
+     ["Charge01_Start – Charge01_End01 (by name)", "Charge01_Start – Charge01_End02 (by name)"]),
+    # Two parts are enough; a lone part, or a stem with two starts, is never guessed.
+    (["Air01_Start", "Air01_End", "Solo01_Loop", "Twin01_Start", "twin01_start", "Twin01_End"],
+     ["Air01_Start – Air01_End (by name)"]),
+])
+def test_name_ordered_start_loop_end_previews(names, expected):
+    clips = {f"{ROOT}/CommonAnim/{name}": (f"clip-{number}", 1.0 + number) for number, name in enumerate(names)}
+    # The same names in another folder form their own group.
+    clips[f"{ROOT}/CommonAnim/UiAnim/Air01_Loop"] = ("clip-ui", 3.0)
+    result = montage_sequences.name_sequences(clips)
+    assert [item["name"] for item in result] == expected
+    by_name = {name: clips[f"{ROOT}/CommonAnim/{name}"] for name in names}
+    first = result[0]
+    assert all(step["start"] == 0 and step["fade"] == 0 for step in first["steps"]) and not first["cyclic"]
+    parts = first["name"].removesuffix(" (by name)").split(" – ")
+    assert first["steps"][0]["clip"] == by_name[parts[0]][0] and first["steps"][-1]["clip"] == by_name[parts[1]][0]
+    assert first["id"] not in {item["id"] for item in montage_sequences.name_sequences(clips, exclude={first["id"]})}

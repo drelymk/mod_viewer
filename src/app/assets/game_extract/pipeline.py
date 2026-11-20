@@ -611,6 +611,16 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     except (ValueError, KeyError, TypeError) as error:
         # Sequences are optional: discovery failures never block the clips.
         sequences, sequence_error = [], str(error) if isinstance(error, ValueError) else "Montage metadata is incomplete."
+    # Start/Loop/End clip sets chained by gameplay code get labeled name-ordered previews
+    # after the authored montage timelines, within the same sequence bounds.
+    named = montage_sequences.name_sequences(converted, {item["id"] for item in sequences})
+    total, name_sequences = sum(len(item["steps"]) for item in sequences), 0
+    for item in named:
+        if len(sequences) == montage_sequences.MAX_SEQUENCES or total + len(item["steps"]) > montage_sequences.MAX_SEQUENCE_TOTAL_STEPS:
+            break
+        sequences.append(item)
+        total += len(item["steps"])
+        name_sequences += 1
     manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()), sequences=sequences)
     write_document(library / "manifest.json", manifest, 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
@@ -620,7 +630,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                   bones=len(rig["bones"]), clips=len(entries), imported=imported, secondary=secondary,
                   skipped=len(skipped_items), skipped_layers=sum(item["kind"] == "layer" for item in skipped_items.values()),
                   skipped_details=list(skipped_items.values()),
-                  sequences=len(sequences), skipped_sequences=len(skipped_sequences),
+                  sequences=len(sequences), name_sequences=name_sequences, skipped_sequences=len(skipped_sequences),
                   skipped_sequence_details=skipped_sequences, sequence_error=sequence_error)
     (output / "RigExtraction.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report, fingerprints
