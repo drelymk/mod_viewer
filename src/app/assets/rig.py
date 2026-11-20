@@ -190,7 +190,10 @@ def validate_rig(raw):
         count = _integer(component.get("index_count"), 3)
         if count % 3:
             raise ValueError("Invalid rig triangle range.")
-        identity = geometry_hash, ordinal, first, count
+        # Alternate draw passes of one hash Asset share an index range; only
+        # their captured metadata entry tells them apart.
+        entry = component.get("metadata_entry")
+        identity = geometry_hash, ordinal, first, count, None if entry is None else _integer(entry)
         if identity in identities:
             raise ValueError("Duplicate rig palette.")
         identities.add(identity)
@@ -609,17 +612,26 @@ def _zzz_stream_palettes(rig, directory, hashes, cache):
     ZZZ skins a whole stream once, at its Blend pass, with one palette. Each
     captured component of that stream records the part of it its draw used.
     """
-    palettes = []
     if not hashes:
-        return palettes
+        return []
+    return [palette for palette, stream in _zzz_captured_streams(rig, directory, cache)
+            if set(hashes) <= {stream.get("blend_vb"), stream.get("position_vb")}]
+
+
+def _zzz_captured_streams(rig, directory, cache):
+    """(palette, native stream identity) of every captured component with a Blend stream."""
     for palette in rig["components"]:
         # Weightless attachments have no native Blend stream for a mod to share.
         if not palette.get("metadata_file") or "metadata_entry" not in palette or "attachment" in palette:
             continue
-        stream = _zzz_metadata(directory, palette, cache) or {}
-        if set(hashes) <= {stream.get("blend_vb"), stream.get("position_vb")}:
-            palettes.append(palette)
-    return palettes
+        yield palette, _zzz_metadata(directory, palette, cache) or {}
+
+
+def _zzz_unknown_hashes(rig, directory, hashes, cache):
+    """True when no captured stream of the Asset carries any of ``hashes``."""
+    wanted = set(hashes)
+    return not any(wanted & {stream.get("blend_vb"), stream.get("position_vb")}
+                   for _palette, stream in _zzz_captured_streams(rig, directory, cache))
 
 
 def _zzz_stream_bone_map(palettes, offset=0, count=None):
@@ -650,7 +662,8 @@ def _hash_asset_palette(binding, enabled_roots, cache):
     matches = [p for p in rig["components"]
                if (p["geometry_hash"], p["first_index"]) == (binding.geometry_hash, binding.first_index)
                and (binding.index_count is None or p["index_count"] == binding.index_count)
-               and (binding.component_ordinal is None or p["component_ordinal"] == binding.component_ordinal)]
+               and (binding.component_ordinal is None or p["component_ordinal"] == binding.component_ordinal)
+               and (binding.metadata_entry is None or p.get("metadata_entry") == binding.metadata_entry)]
     if len(matches) != 1:
         return None
     palette = matches[0]
@@ -701,6 +714,11 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
                 # The proven native stream decides the palette, even when
                 # another component's override draws that stream.
                 stream = _zzz_stream_palettes(rig, directory, source.native_palette_hashes, cache)
+                # A game patch can change a Blend hash the Asset never captured; only then may
+                # the stream's own position hash name it. Known but conflicting hashes reject.
+                if (not stream and source.native_position_hashes
+                        and _zzz_unknown_hashes(rig, directory, source.native_palette_hashes, cache)):
+                    stream = _zzz_stream_palettes(rig, directory, source.native_position_hashes, cache)
                 mapping = _zzz_stream_bone_map(stream) if stream else None
                 if mapping is None:
                     return None

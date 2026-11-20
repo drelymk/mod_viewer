@@ -96,7 +96,7 @@ def index_shape(shape):
 
 def verify_candidates(client, captured, rows, query, cancel, *,
                       mesh_hint=lambda avatar_row, family, mesh_row: _mesh_family_hint(family, mesh_row["name"]), label="ZZZ",
-                      placement_tolerance=2e-4, shape_key=exact_shape):
+                      placement_tolerance=2e-4, shape_key=exact_shape, weight_drift=0.0):
     skinned = [part for part in captured if not part.get("weightless")]
     weightless_counts = [part["index_count"] for part in captured if part.get("weightless")]
     # Shapes only narrow candidates; every adopted part still needs proof.
@@ -154,12 +154,12 @@ def verify_candidates(client, captured, rows, query, cancel, *,
                 if part.get("weightless"):
                     found = match_attachment_candidates(part, mesh)
                 elif any(section["count"] == part["index_count"] for section in mesh["sections"]):
-                    found = match_component_candidates(part, mesh)
+                    found = match_component_candidates(part, mesh, weight_drift)
                 else:
                     continue
                 for palette, signs, vertices, *attachment in found:
                     conversion = np.diag([*signs, 1]) @ np.linalg.inv(placement)
-                    group = next((item for item in placements if np.allclose(item["basis"], conversion, rtol=0, atol=2e-4)), None)
+                    group = next((item for item in placements if np.allclose(item["basis"], conversion, rtol=0, atol=placement_tolerance)), None)
                     if group is None:
                         group = dict(basis=conversion, matches={}, ambiguous=set(), sources=set(), native={})
                         placements.append(group)
