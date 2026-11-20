@@ -514,11 +514,17 @@ def test_gi_build_layers_controller_states_and_keeps_clip_identity(tmp_path):
     from app.assets.animations import read_clip
 
     root, asset, record, rows, client = animated_fixture(tmp_path)
+    # A body-only state chained with Idle by authored exit-time edges, entered from Any State.
+    controller = client.documents[30]
+    controller["states"].append(dict(controller["states"][1], name="Combo", motions=[controller["states"][1]["motions"][0]]))
+    controller["states"][1]["transitions"] = [sequence_edge(7, exit_time=0.5, has_exit=True, fade=0.1)]
+    controller["states"][7]["transitions"] = [sequence_edge(1, exit_time=1.0, has_exit=True, fade=0.1)]
+    controller.update(any_state=[sequence_edge(1, ("Input01", 1, 0))], selectors=[])
     output = tmp_path / "output"
     report, _ = gi_pipeline.build(client, root, record, output, None, lambda *_: None, threading.Event(), rows)
-    assert report["game"] == "gi" and report["imported"] == 1
+    assert report["game"] == "gi" and report["imported"] == 2 and report["sequences"] == 1
     # A plain state's name wins over a blend-tree leaf that shares the same clips.
-    assert [item["state"] for item in report["animations"]] == ["Idle"]
+    assert [item["state"] for item in report["animations"]] == ["Idle", "Combo"]
     reasons = {item["state"]: item["reason"] for item in report["skipped_details"]}
     assert set(reasons) == {"Tree 2", "Mirrored", "Uneven", "Missing", "Empty", "Silent"}
     assert "no animation curves" in reasons["Silent"]
@@ -527,6 +533,11 @@ def test_gi_build_layers_controller_states_and_keeps_clip_identity(tmp_path):
     rig = validate_rig_document(output / "Rig.json")
     manifest = json.loads((output / "Animation/manifest.json").read_text())
     entry = manifest["clips"][0]
+    idle, combo = (item["id"] for item in report["animations"])
+    [sequence] = manifest["sequences"]
+    assert (sequence["cyclic"], sequence["restart"]) == (True, 0.0)
+    assert [(step["clip"], step["start"], step["leave"], step["fade"]) for step in sequence["steps"]] == [
+        (idle, 0.0, 0.5, 0.1), (combo, 0.0, 1.0, 0.0)]
     metadata, data = read_clip(str(output / "Animation"), entry, rig)
     layers = metadata["layers"]
     assert layers["omitted"] == dict(non_transform=1, translation_dof=1, humanoid_owned=2, unbound=1, masked=1)
@@ -545,7 +556,72 @@ def test_gi_build_layers_controller_states_and_keeps_clip_identity(tmp_path):
     # Reimporting over the installed library keeps the same clip identity.
     shutil.copytree(output, asset, dirs_exist_ok=True)
     again, _ = gi_pipeline.build(client, root, record, tmp_path / "again", None, lambda *_: None, threading.Event(), rows)
-    assert [item["id"] for item in again["animations"]] == [entry["id"]]
+    assert [item["id"] for item in again["animations"]] == [idle, combo] and entry["id"] == idle
+    assert json.loads((tmp_path / "again/Animation/manifest.json").read_text())["sequences"] == [sequence]
+
+
+def sequence_edge(dest, *conditions, exit_time=1.0, has_exit=False, fade=0.0, fixed=False, offset=0.0):
+    return dict(dest=dest, duration=fade, offset=offset, exit_time=exit_time, has_exit_time=has_exit,
+                fixed_duration=fixed, conditions=[dict(param=param, mode=mode, threshold=value)
+                                                  for param, mode, value in conditions])
+
+
+def sequence_graph(transitions, any_state=(), selectors=()):
+    names = ["StateA", "StateB", "StateC", "StateD"]
+    return dict(states=[dict(name=names[index], path=f"Base Layer.Root.Group01.{names[index]}", transitions=edges)
+                        for index, edges in enumerate(transitions)],
+                any_state=list(any_state), selectors=list(selectors))
+
+
+TRIGGER = (("Input01", 1, 0), ("Choice01", 6, 1))
+
+
+def window(lower):
+    return ("NormalizedTime", 3, lower), ("NormalizedTime", 4, 0.9)
+
+
+@pytest.mark.parametrize("controller, clips, expected", [
+    # A combo repeats its entry input inside each window; other inputs and NormalizedTime
+    # misuse never continue it, fades convert to seconds and the closing offset restarts it.
+    (sequence_graph([
+        [sequence_edge(3, ("Move01", 6, 2), *window(0.05)), sequence_edge(2, ("Input01", 1, 0), ("Choice01", 6, 6), *window(0.1)),
+         sequence_edge(1, *TRIGGER, *window(0.25), fade=0.1, offset=0.1)],
+        [sequence_edge(2, *TRIGGER, ("NormalizedTime", 6, 0.2)), sequence_edge(2, *TRIGGER, *window(0.5), fade=0.3, fixed=True)],
+        [sequence_edge(0, *TRIGGER, *window(0.75), fade=0.1, offset=0.05)],
+        []], any_state=[sequence_edge(0, *TRIGGER, ("Gate01", 1, 0))]),
+     {0: ("clip-a", 2.0), 1: ("clip-b", 2.0), 2: ("clip-c", 2.0), 3: ("clip-d", 1.0)},
+     [("Group01: StateA – StateC", True, 0.1, [("clip-a", 0, 0.5, 0.2), ("clip-b", 0.2, 1.0, 0.3), ("clip-c", 0, 1.5, 0.2)])]),
+    # An automatic chain starts where nothing leads; its fade is clamped to the remaining clip.
+    (sequence_graph([[sequence_edge(1, exit_time=0.8, has_exit=True, fade=0.25, fixed=True)], []]),
+     {0: ("clip-a", 1.0), 1: ("clip-b", 2.0)},
+     [("Group01: StateA – StateB", False, 0, [("clip-a", 0, 0.8, 0.2), ("clip-b", 0, 2.0, 0)])]),
+    # Reaching a non-head state again stops the chain; that loop is its own cycle, and
+    # runs already inside another chain are not repeated.
+    (sequence_graph([[sequence_edge(1, has_exit=True)], [sequence_edge(2, has_exit=True)], [sequence_edge(1, has_exit=True)]]),
+     {0: ("clip-a", 1.0), 1: ("clip-b", 1.0), 2: ("clip-c", 1.0)},
+     [("Group01: StateA – StateC", False, 0, [("clip-a", 0, 1.0, 0), ("clip-b", 0, 1.0, 0), ("clip-c", 0, 1.0, 0)]),
+      ("Group01: StateB – StateC", True, 0, [("clip-b", 0, 1.0, 0), ("clip-c", 0, 1.0, 0)])]),
+    # An unconverted destination cuts the chain.
+    (sequence_graph([[sequence_edge(1, has_exit=True)], [sequence_edge(2, has_exit=True)], []]),
+     {0: ("clip-a", 1.0), 1: ("clip-b", 1.0)},
+     [("Group01: StateA – StateB", False, 0, [("clip-a", 0, 1.0, 0), ("clip-b", 0, 1.0, 0)])]),
+    # A window that closes before the entry offset, an unnamed input and a missing graph yield nothing.
+    (sequence_graph([[sequence_edge(1, *TRIGGER, *window(0.5))], []], any_state=[sequence_edge(0, *TRIGGER, offset=0.6)]),
+     {0: ("clip-a", 1.0), 1: ("clip-b", 1.0)}, []),
+    (sequence_graph([[sequence_edge(1, (None, 1, 0), *window(0.5))], []], any_state=[sequence_edge(0, (None, 1, 0))]),
+     {0: ("clip-a", 1.0), 1: ("clip-b", 1.0)}, []),
+    ({"states": [dict(name="StateA", transitions=[sequence_edge(1, has_exit=True)]), dict(name="StateB")]},
+     {0: ("clip-a", 1.0), 1: ("clip-b", 1.0)}, []),
+])
+def test_gi_sequences_follow_authored_continuations(controller, clips, expected):
+    from app.assets.game_extract import gi_animation
+
+    result = gi_animation.sequences(controller, clips)
+    # Times are stored rounded to 1e-6, so they compare exactly.
+    assert [(item["name"], item["cyclic"], item["restart"],
+             [(step["clip"], step["start"], step["leave"], step["fade"]) for step in item["steps"]])
+            for item in result] == expected
+    assert all(item["id"].startswith("seq-") for item in result) and len({item["id"] for item in result}) == len(result)
 
 
 def add_facial_route(rows, client, values, clamp=True):

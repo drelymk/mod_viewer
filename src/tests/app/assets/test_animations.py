@@ -201,6 +201,60 @@ def test_layer_metadata_timing_mask_and_reference_contract(tmp_path):
         apply(base, rig, 2, 1, entry, tmp_path)
 
 
+def _valid_sequence():
+    """A two-step sequence that reuses the single fixture clip for both steps."""
+    return dict(id="seq-0001", name="Sequence 01", cyclic=True, restart=0.25,
+                steps=[dict(clip="clip01", start=0, leave=0.5, fade=0.25),
+                       dict(clip="clip01", start=0, leave=0.5, fade=0)])
+
+
+def _mutated_sequences(mutate):
+    if mutate is None:
+        return None
+    sequences = [_valid_sequence()]
+    mutate(sequences)
+    return sequences
+
+
+@pytest.mark.parametrize("mutate", [
+    None,
+    lambda s: s[0]["steps"][0].update(clip="clip99"),
+    lambda s: s.append(_valid_sequence()),
+    lambda s: s[0].update(id="clip01"),
+    lambda s: s[0]["steps"][0].update(start=0.5),
+    lambda s: s[0]["steps"][0].update(leave=1.5),
+    lambda s: s[0]["steps"][0].update(fade=0.6),
+    lambda s: s[0].update(steps=s[0]["steps"][:1]),
+    lambda s: s[0].update(cyclic=1),
+    lambda s: s[0]["steps"][0].update(start=float("nan")),
+    lambda s: s[0].update(restart=True),
+    lambda s: s[0].update(restart=1.0),
+], ids=[
+    "absent-key", "unknown-clip", "duplicate-id", "id-equals-clip-id", "start-not-before-leave",
+    "leave-beyond-duration", "fade-beyond-remaining", "one-step", "non-bool-cyclic",
+    "nan-number", "bool-number", "restart-not-before-head-duration",
+])
+def test_invalid_animation_sequences_drop_all_sequences_and_keep_clips(tmp_path, mutate):
+    rig, source = sample()
+    _, data = converter()(source, rig, 1)
+    directory = tmp_path / "Asset01" / "Animation"
+    directory.mkdir(parents=True)
+    metadata = dict(format="mod-viewer-animation", version=1, coordinate_space="asset",
+                    layout="frame-major-tq-f32le", skeleton_id=rig["id"], frame_count=2,
+                    bone_count=2, duration=1, data_file="Clip01.bin", sha256=hashlib.sha256(data).hexdigest())
+    (directory / "Clip01.bin").write_bytes(data)
+    (directory / "Clip01.json").write_text(json.dumps(metadata))
+    manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
+                    clips=[dict(id="clip01", name="Clip 01", file="Clip01.json", duration=1)])
+    sequences = _mutated_sequences(mutate)
+    if sequences is not None:
+        manifest["sequences"] = sequences
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    catalog = AnimationSessions().catalog(str(tmp_path), "Asset01", rig, lambda: True)
+    assert len(catalog["animations"]) == 1
+    assert catalog["animation_sequences"] == []
+
+
 def test_animation_library_containment_integrity_and_session_lifecycle(tmp_path, monkeypatch):
     rig, source = sample()
     _, data = converter()(source, rig, 1)
@@ -214,7 +268,8 @@ def test_animation_library_containment_integrity_and_session_lifecycle(tmp_path,
         (directory / "Clip01.json").write_text(json.dumps(metadata))
     write_metadata()
     manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
-                    clips=[dict(id="clip01", name="Clip 01", file="Clip01.json", duration=1)])
+                    clips=[dict(id="clip01", name="Clip 01", file="Clip01.json", duration=1)],
+                    sequences=[_valid_sequence()])
     (directory / "manifest.json").write_text(json.dumps(manifest))
     published, released = [], []
     monkeypatch.setattr("app.assets.animations.server.publish_geometry",
@@ -225,6 +280,10 @@ def test_animation_library_containment_integrity_and_session_lifecycle(tmp_path,
     catalog = sessions.catalog(str(tmp_path), "Asset01", rig, lambda: current)
     token = catalog["animation_session"]
     assert len(catalog["animations"]) == 1 and not published
+    assert catalog["animation_sequences"] == [
+        dict(id="seq-0001", name="Sequence 01", cyclic=True, restart=0.25,
+             steps=[dict(clip="clip01", start=0.0, leave=0.5, fade=0.25),
+                    dict(clip="clip01", start=0.0, leave=0.5, fade=0.0)])]
     assert sessions.load("invented", "clip01")["status"] == "error"
     assert sessions.load(token, "../Clip01")["status"] == "error"
     assert sessions.load(token, "clip01")["clip"]["data"]["length"] == len(data)

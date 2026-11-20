@@ -8,6 +8,8 @@ namespace ModViewer.ZzzExtract;
 internal static class GiExport
 {
     private const int MaxStates = 4096;
+    private const int MaxTransitions = 65536;
+    private const int MaxConditions = 64;
     private const int MaxLeaves = 64;
     private const int MaxControllerClips = 8192;
 
@@ -188,8 +190,30 @@ internal static class GiExport
             skeleton_mask = (layer.m_SkeletonMask?.m_Data ?? []).Select(e => new { path_hash = e.m_PathHash, weight = e.m_Weight }).ToArray()
         }).ToArray();
         if (constant.m_StateMachineArray.Count == 0) throw new InvalidDataException();
-        var states = constant.m_StateMachineArray[0].m_StateConstantArray;
+        var machine = constant.m_StateMachineArray[0];
+        var states = machine.m_StateConstantArray;
         if (states.Count > MaxStates) throw new InvalidDataException();
+        int transitionCount = 0;
+        object Condition(ConditionConstant c) => new { param = Name(c.m_EventID), mode = c.m_ConditionMode, threshold = c.m_EventThreshold };
+        object[] Conditions(List<ConditionConstant> list)
+        {
+            if (list.Count > MaxConditions) throw new InvalidDataException();
+            return list.Select(Condition).ToArray();
+        }
+        object Transition(TransitionConstant t)
+        {
+            if (++transitionCount > MaxTransitions) throw new InvalidDataException();
+            return new
+            {
+                dest = t.m_DestinationState,
+                duration = t.m_TransitionDuration,
+                offset = t.m_TransitionOffset,
+                exit_time = t.m_ExitTime,
+                has_exit_time = t.m_HasExitTime,
+                fixed_duration = t.m_HasFixedDuration,
+                conditions = Conditions(t.m_ConditionConstantArray)
+            };
+        }
         object? Motion(StateConstant state, int set)
         {
             if (set >= state.m_BlendTreeConstantIndexArray.Length) return null;
@@ -228,7 +252,22 @@ internal static class GiExport
                 mirror = state.m_Mirror,
                 mirror_param = state.m_MirrorParamID,
                 ik_on_feet = state.m_IKOnFeet,
+                loop = state.m_Loop,
+                tag = Name(state.m_TagID),
+                path = Name(state.m_FullPathID),
+                transitions = state.m_TransitionConstantArray.Select(Transition).ToArray(),
                 motions = Enumerable.Range(0, layers.Length == 0 ? 0 : (int)layers.Max(l => l.motion_set) + 1).Select(set => Motion(state, set)).ToArray()
+            }).ToArray(),
+            default_state = machine.m_DefaultState,
+            any_state = machine.m_AnyStateTransitionConstantArray.Select(Transition).ToArray(),
+            selectors = machine.m_SelectorStateConstantArray.Select(s => new
+            {
+                entry = s.m_isEntry,
+                transitions = s.m_TransitionConstantArray.Select(t =>
+                {
+                    if (++transitionCount > MaxTransitions) throw new InvalidDataException();
+                    return (object)new { dest = t.m_Destination, conditions = Conditions(t.m_ConditionConstantArray) };
+                }).ToArray()
             }).ToArray()
         };
     }

@@ -939,6 +939,13 @@ of documentation, comments and tests; use portable fixtures instead.
   Switching clips freezes the displayed pose until the replacement is ready, then
   starts it at zero. Keep only the active and incoming clip during that handoff;
   Stop and failed loads still release playback ownership and restore the baseline.
+  Catalogs may also carry optional authored `sequences` (2–64 steps of catalog
+  clips with in-clip start/leave/fade seconds, `cyclic` and `restart`); validate
+  them all-or-nothing so an invalid sequence never hides clips. Sequence playback
+  follows the same handoff rule: hold the active step plus either the preloaded
+  next step or, while crossfading, the outgoing one. Crossfades blend local
+  transforms (shortest-path rotations); facial weights switch at the fade's
+  midpoint because each clip owns its sparse targets. Sequences are not seekable.
   Playback may use one uniquely identified verified skeleton's compatible mesh
   subset while the manual ModelRig retains its original all-source admission.
   Apply fallback transforms through each mesh's exact game-bone palette, never
@@ -1192,6 +1199,15 @@ of documentation, comments and tests; use portable fixtures instead.
   mismatched blend trees and empty body clips with reasons; report additive synced
   layers as unapplied. Count unbound, Humanoid-owned, masked, translation-DoF and
   non-transform channels instead of hiding them.
+  Controller reads export the base state machine's authored graph (state
+  transitions, Any State transitions, entry/exit selectors, named conditions).
+  Sequences chain converted plain states only: from Any State targets, entry
+  selectors, states nothing leads to, then other edge targets, follow automatic
+  exit-time edges or edges whose non-`NormalizedTime` conditions are a subset of
+  the chain's entry input, leaving at the exit time or the earliest
+  `NormalizedTime` window (continuous input). A cycle closes only on its head;
+  runs contained in a longer chain are dropped. Locomotion is driven by game code
+  and has no authored edges, so it is never sequenced.
   GIMI mods prove a palette only through a stock skinning pass: a safe
   `TextureOverride` closure binding a file-backed, unaliased stride-32 Blend at vb1
   with `handling = skip` and `draw = <count>, 0` (literal or variable). Allowed

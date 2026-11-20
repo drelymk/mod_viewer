@@ -338,6 +338,93 @@ def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_p
     assert not result['paused']['playing'] and result['paused']['time'] == .5
 
 
+def test_sequence_playback_crossfades_steps_and_holds_two_clips(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three');
+      const {createRigAnimation,fillRigClipSelect} = await import('./js/weight-rig/rig-animation.js');
+      const sequence = {id:'seq-01',name:'Group01: StateA – StateB',cyclic:true,restart:.3,steps:[
+        {clip:'clip01',start:0,leave:.5,fade:.2},{clip:'clip02',start:.1,leave:.8,fade:.2}]};
+      const rig = {id:'rig01',bones:[
+        {name:'Root',parent:-1,translation:[0,0,0],rotation:[0,0,0,1]},
+        {name:'Joint01',parent:0,translation:[1,0,0],rotation:[0,0,0,1]},
+      ],animations:['clip01','clip02'].map(id=>({id,name:id,duration:1})),animation_session:'session01',
+        animation_sequences:[sequence]};
+      // Each clip holds its root at a fixed x and one constant facial weight.
+      const frame = x => [x,0,0,0,0,0,1, 1,0,0,0,0,0,1];
+      const urls = [];
+      const blob = data => { const url = URL.createObjectURL(new Blob([data])); urls.push(url); return url; };
+      const data = {clip01:new Float32Array([...frame(0),...frame(0),.25,.25]),
+                    clip02:new Float32Array([...frame(2),...frame(2),.75,.75])};
+      const targets = blob(new Uint8Array(4));
+      const respond = id => ({status:'ok',clip:{id,skeleton_id:rig.id,frame_count:2,bone_count:2,duration:1,
+        data:{url:blob(data[id]),length:data[id].byteLength},
+        morphs:{names:['Shape01'],components:[],data:{url:targets,length:4}}}});
+      const pending = [];
+      let latest = 'unset', latestMorphs = null, scheduled = null;
+      window.requestAnimationFrame = callback => {scheduled=callback;return 1;};
+      window.cancelAnimationFrame = () => {scheduled=null;};
+      Object.defineProperty(performance,'now',{value:()=>0,configurable:true});
+      const until = async test => { for (let i = 0; i < 400 && !test(); i++) await new Promise(r=>setTimeout(r,5)); };
+      const runtime = createRigAnimation({getRig:()=>rig,
+        loadClip:(token,id)=>new Promise(resolve=>pending.push({id,resolve})),
+        applyPose:(pose,{morphs=null}={})=>{latest=pose;latestMorphs=morphs;},
+        suspendPhysics:()=>{},prepare:()=>{},notify:()=>{}});
+      const rootX = () => new T.Vector3().applyMatrix4(latest.get(0)).x;
+      const resolveNext = async () => { await until(()=>pending.some(entry=>!entry.done));
+        const item = pending.find(entry => !entry.done); item.done = true; item.resolve(respond(item.id)); return item.id; };
+      const selecting = runtime.select('seq-01');
+      const loaded = [await resolveNext(), await resolveNext()];
+      await selecting;
+      const started = runtime.snapshot();
+      const startedX = rootX();
+      scheduled(500);
+      const fadeStart = {x:rootX(),morph:latestMorphs.weights[0],snapshot:runtime.snapshot()};
+      scheduled(600);
+      const midpoint = {x:rootX(),morph:latestMorphs.weights[0]};
+      const loadsDuringFade = pending.length;
+      scheduled(700);
+      const settled = {x:rootX(),loads:pending.map(entry=>entry.id)};
+      runtime.seek(.95);
+      const seekIgnored = runtime.snapshot().time;
+      await resolveNext();
+      await new Promise(r=>setTimeout(r,50));
+      scheduled(1300);
+      const wrapped = runtime.snapshot();
+      const reselect = runtime.select('seq-01');
+      runtime.stop();
+      await until(()=>pending.some(entry=>!entry.done));
+      await resolveNext();
+      await reselect;
+      const stale = runtime.snapshot();
+      const select = document.createElement('select');
+      const order = fillRigClipSelect(select, rig.animations, rig.animation_sequences).map(item=>item.id);
+      const group = select.querySelector('optgroup');
+      urls.forEach(url=>URL.revokeObjectURL(url));
+      return {loaded,started:{step:started.step,count:started.stepCount,time:started.time,playing:started.playing,
+        sequences:started.sequences.length},startedX,fadeStart:{x:fadeStart.x,morph:fadeStart.morph,
+        step:fadeStart.snapshot.step,time:fadeStart.snapshot.time},midpoint,loadsDuringFade,settled,seekIgnored,
+        wrapped:{step:wrapped.step,time:wrapped.time},stale:{selected:stale.selected,latest:latest,step:stale.step,
+        count:stale.stepCount},order,group:group?.label,grouped:[...(group?.children||[])].map(option=>option.value)};
+    }''')
+    assert result['loaded'] == ['clip01', 'clip02']
+    assert result['started'] == {'step': 0, 'count': 2, 'time': 0, 'playing': True, 'sequences': 1}
+    assert result['startedX'] == pytest.approx(0, abs=1e-6)
+    # Leaving step 0 at 0.5 s starts the incoming step at its offset with the outgoing pose.
+    assert result['fadeStart']['step'] == 1 and result['fadeStart']['time'] == pytest.approx(.1)
+    assert result['fadeStart']['x'] == pytest.approx(0, abs=1e-6) and result['fadeStart']['morph'] == pytest.approx(.25)
+    # Halfway through the fade the pose is blended and facial weights come from the incoming clip.
+    assert result['midpoint']['x'] == pytest.approx(1, abs=1e-5) and result['midpoint']['morph'] == pytest.approx(.75)
+    # Nothing else loads while two clips are held; the next step loads once the fade ends.
+    assert result['loadsDuringFade'] == 2
+    assert result['settled'] == {'x': pytest.approx(2, abs=1e-6), 'loads': ['clip01', 'clip02', 'clip01']}
+    assert result['seekIgnored'] == pytest.approx(.3)
+    # The cyclic sequence wraps to its restart time.
+    assert result['wrapped'] == {'step': 0, 'time': pytest.approx(.3)}
+    assert result['stale'] == {'selected': None, 'latest': None, 'step': None, 'count': 0}
+    assert result['order'] == ['clip01', 'clip02', 'seq-01']
+    assert result['group'] == 'Sequences' and result['grouped'] == ['seq-01']
+
+
 @pytest.mark.parametrize('case,expected', [
     ('partial', [0]), ('same_skeleton', [0, 1]), ('detached_skeleton', [0, 1]), ('invalid_palette', [0]),
     ('different_skeleton', [0]), ('competing_libraries', None),

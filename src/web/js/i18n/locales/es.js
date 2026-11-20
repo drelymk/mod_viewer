@@ -23,6 +23,8 @@ export default {
   'weightRig.animationRest': 'Pose de reposo',
   'weightRig.animationLoading': 'Cargando animación…',
   'weightRig.animationEmpty': 'No hay animaciones de assets compatibles disponibles.',
+  'weightRig.animationSequences': 'Secuencias',
+  'weightRig.animationSequenceStep': 'Paso {step} / {count}',
   'rigExtract.title': 'Extraer rig/animación',
   'rigExtract.asset': 'Destino del asset',
   'rigExtract.game': 'Carpeta del juego',

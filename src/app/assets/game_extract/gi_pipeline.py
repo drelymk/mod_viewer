@@ -81,7 +81,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     mask = gi_animation.streamer_mask(streamer_layer)
     pairs, skipped = gi_animation.state_pairs(controller, index)
     facial, facial_error = _facial(chosen, captured, index)
-    imported, provenance, seen = 0, [], set()
+    imported, provenance, seen, state_clips = 0, [], set(), {}
     for number, pair in enumerate(pairs):
         progress("convert", number, len(pairs))
         check_cancelled(cancel)
@@ -132,14 +132,16 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         entry = dict(id=key, name=pair["state"][:128], file=key + ".json", duration=duration)
         read_clip(str(library), entry, rig, validated_morphs=validated_morphs)
         entries[key], existing[key] = entry, metadata
+        state_clips.update((index, (key, duration)) for index in pair["state_indices"])
         provenance.append(dict(id=key, source=source, state=pair["state"], layers=layers))
         imported += 1
         if len(entries) > 1024 or sum(file.stat().st_size for file in library.rglob("*") if file.is_file()) > 2 * 1024 ** 3:
             raise ValueError("The extracted animation library exceeds its size limit.")
     if not imported:
         raise ValueError("No compatible Genshin Impact animation clips could be converted. Existing Asset files were preserved.")
+    sequences = gi_animation.sequences(controller, state_clips)
     write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
-                                                   clips=list(entries.values())), 1024 * 1024)
+                                                   clips=list(entries.values()), sequences=sequences), 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="gi", skeleton_id=rig["id"], skeleton=chosen["source"],
                   meshes=chosen["meshes"], proven_components=len(chosen["matched"]),
@@ -149,7 +151,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                   streamer_layer=streamer_layer.get("name") if streamer_layer else None,
                   unapplied_layers=[layer.get("name") for layer in gi_animation.synced_layers(controller)
                                     if layer is not streamer_layer],
-                  clips=len(entries), imported=imported, secondary=0, skipped=len(skipped), skipped_details=skipped,
+                  clips=len(entries), imported=imported, secondary=0, sequences=len(sequences),
+                  skipped=len(skipped), skipped_details=skipped,
                   facial_targets=len(facial["bindings"]) if facial else 0, facial_error=facial_error,
                   animations=provenance)
     write_document(output / "RigExtraction.json", report, 4 * 1024 * 1024)

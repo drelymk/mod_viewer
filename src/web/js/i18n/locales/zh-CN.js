@@ -21,6 +21,8 @@ export default {
   'weightRig.animationRest': '静止姿势',
   'weightRig.animationLoading': '正在加载动画…',
   'weightRig.animationEmpty': '没有可用的兼容资产动画。',
+  'weightRig.animationSequences': '序列',
+  'weightRig.animationSequenceStep': '步骤 {step} / {count}',
   'rigExtract.title': '提取骨架/动画',
   'rigExtract.asset': '资产保存位置',
   'rigExtract.game': '游戏文件夹',

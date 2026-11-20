@@ -22,6 +22,7 @@ export function initAnimationPlayback() {
   const previous = document.getElementById('animation-previous');
   const next = document.getElementById('animation-next');
   let clipList = null;
+  let sequenceList = null;
   let clipLocale = null;
   let sortedClips = [];
   const resize = new ResizeObserver(() => {
@@ -53,15 +54,17 @@ export function initAnimationPlayback() {
     button.querySelector('use').setAttribute('href', paused ? '#icon-play' : '#icon-pause');
     clipControls.hidden = !useRig;
     if (useRig) {
-      if (clipList !== rig.clips || clipLocale !== getLocale()) {
+      if (clipList !== rig.clips || sequenceList !== rig.sequences || clipLocale !== getLocale()) {
         clipList = rig.clips;
+        sequenceList = rig.sequences;
         clipLocale = getLocale();
-        sortedClips = fillRigClipSelect(clips, rig.clips);
+        sortedClips = fillRigClipSelect(clips, rig.clips, rig.sequences);
       }
       clips.value = rig.selected || '';
       clips.disabled = previous.disabled = next.disabled = !!activating;
       slider.hidden = counter.hidden = false;
-      slider.disabled = activating || rig.loading || !rig.duration;
+      // Sequence playback owns the timeline, so scrubbing stays off while a sequence runs.
+      slider.disabled = rig.stepCount ? true : activating || rig.loading || !rig.duration;
       slider.min = '0';
       slider.max = String(rig.duration || 1);
       slider.step = '0.001';
@@ -69,12 +72,16 @@ export function initAnimationPlayback() {
       slider.setAttribute('aria-label', t('weightRig.animationTime'));
       const text = `${rig.time.toFixed(2)} / ${rig.duration.toFixed(2)} s`;
       slider.setAttribute('aria-valuetext', text);
+      const stepLabel = rig.stepCount
+        ? `${t('weightRig.animationSequenceStep', { step: rig.step + 1, count: rig.stepCount })} · `
+        : '';
       counter.textContent = rig.errorKey
         ? t(rig.errorKey)
-        : rig.error || (rig.loading ? t('weightRig.animationLoading') : text);
+        : rig.error || (rig.loading ? t('weightRig.animationLoading') : `${stepLabel}${text}`);
       return;
     }
     clipList = null;
+    sequenceList = null;
     slider.disabled = false;
     slider.step = '1';
     slider.setAttribute('aria-label', t('animation.frame'));

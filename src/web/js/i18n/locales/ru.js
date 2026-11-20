@@ -23,6 +23,8 @@ export default {
   'weightRig.animationRest': 'Исходная поза',
   'weightRig.animationLoading': 'Загрузка анимации…',
   'weightRig.animationEmpty': 'Нет доступных совместимых анимаций ассета.',
+  'weightRig.animationSequences': 'Последовательности',
+  'weightRig.animationSequenceStep': 'Шаг {step} / {count}',
   'rigExtract.title': 'Извлечь риг/анимацию',
   'rigExtract.asset': 'Папка назначения ассета',
   'rigExtract.game': 'Папка игры',

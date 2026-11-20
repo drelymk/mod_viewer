@@ -672,26 +672,35 @@ function buildAnimationSection(parent) {
 function syncAnimation(state = getRigAnimationState()) {
   if (!ui?.animationSelect) return;
   // Ticks rerun this at 60 Hz; the clip list only changes with the rig or locale.
-  if (ui.animationClips !== state.clips || ui.animationLocale !== getLocale()) {
+  if (
+    ui.animationClips !== state.clips ||
+    ui.animationSequences !== state.sequences ||
+    ui.animationLocale !== getLocale()
+  ) {
     ui.animationClips = state.clips;
+    ui.animationSequences = state.sequences;
     ui.animationLocale = getLocale();
-    fillRigClipSelect(ui.animationSelect, state.clips);
+    fillRigClipSelect(ui.animationSelect, state.clips, state.sequences);
   }
   ui.animationSelect.value = state.selected || '';
   const activating = isWeightRigActivating();
-  ui.animationSelect.disabled = activating || !state.clips.length;
+  ui.animationSelect.disabled = activating || (!state.clips.length && !state.sequences?.length);
   ui.animationPlay.textContent = t(state.playing ? 'animation.pause' : 'animation.play');
   ui.animationPlay.disabled = activating || !state.duration || state.loading;
   ui.animationStop.disabled = !state.selected;
-  ui.animationTime.disabled = activating || !state.duration || state.loading;
+  ui.animationTime.disabled = activating || !state.duration || state.loading || !!state.stepCount;
   ui.animationTime.max = String(state.duration || 1);
   ui.animationTime.value = String(state.time);
+  const timeText = `${state.time.toFixed(2)} / ${state.duration.toFixed(2)} s`;
+  const stepLabel = state.stepCount
+    ? `${t('weightRig.animationSequenceStep', { step: state.step + 1, count: state.stepCount })} · `
+    : '';
   ui.animationStatus.textContent =
     (state.errorKey ? t(state.errorKey) : state.error) ||
     (state.loading
       ? t('weightRig.animationLoading')
       : state.clips.length
-        ? `${state.time.toFixed(2)} / ${state.duration.toFixed(2)} s`
+        ? `${stepLabel}${timeText}`
         : t('weightRig.animationEmpty'));
 }
 
