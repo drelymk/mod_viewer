@@ -442,6 +442,8 @@ export default {
   'weightRig.animationRest': 'Rest pose',
   'weightRig.animationLoading': 'Loading animation...',
   'weightRig.animationEmpty': 'No compatible Asset animations available.',
+  'weightRig.animationSequences': 'Sequences',
+  'weightRig.animationSequenceStep': 'Step {step} / {count}',
   'weightRig.title': 'Weight/Rig',
   'weightRig.mesh': 'Mesh',
   'weightRig.weight': 'WEIGHT',

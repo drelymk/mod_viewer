@@ -40,6 +40,7 @@ Geometry, path hashes and inverse binds establish identity. Equivalent Avatar
 copies in one animation family use the existing reference-world tolerance;
 differences in the skeleton or animation ownership remain rejected. Generated
 clip paths are unique with Windows case-insensitive semantics.
+ZZZ also indexes and reads AnimatorControllers with the same exported graph as Genshin (used only for authored sequences).
 Locators include game-relative block path, bundle offset, internal file ordinal,
 CAB and PathID. Never resolve an object by CAB basename or PathID alone.
 
@@ -68,6 +69,11 @@ pointers spell CAB names in lower case); null-mesh renderers stay unrouted. Read
 - controller layers (names, motion sets, blend modes, weights, skeleton masks)
   and Base Layer states with each motion set's blend-tree leaves as
   `(cab, path_id)` clip pointers. Pairing and conversion happen in Python.
+- AnimatorController reads also export the base state machine's authored graph:
+  per-state loop flag, tag, path and transitions, Any State transitions and entry/exit
+  selectors. Each transition carries its destination (a state index, or 30000 +
+  selector index), duration, offset, exit time, has-exit-time and fixed-duration
+  flags and named conditions (mode, threshold). Arrays are bounded.
 
 GCC rejects one uninstantiated ACL template body that MSVC accepts, so the
 database decoder is built with `-Wno-template-body`; its source is unmodified.

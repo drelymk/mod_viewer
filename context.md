@@ -939,6 +939,22 @@ of documentation, comments and tests; use portable fixtures instead.
   Switching clips freezes the displayed pose until the replacement is ready, then
   starts it at zero. Keep only the active and incoming clip during that handoff;
   Stop and failed loads still release playback ownership and restore the baseline.
+  Catalogs may also carry optional authored `sequences` (2–64 steps of catalog
+  clips with in-clip start/leave/fade seconds, `cyclic` and `restart`); validate
+  them all-or-nothing so an invalid sequence never hides clips. Selecting a
+  sequence downloads its distinct step clips sequentially and keeps them, within
+  a fixed byte budget, until the selection changes: combo steps can leave a
+  fraction of a second after they start, so step changes must not wait for a
+  download. Steps beyond the budget load one handoff ahead and hold the leaving
+  pose until ready; stop, failure and reselection release the cache. Crossfades blend local
+  transforms (shortest-path rotations). Rebinding mesh morphs rebuilds sparse
+  records and GPU deformation, so a fully cached sequence binds one merged facial
+  source for its lifetime: targets merge by component and name and must be
+  byte-identical, and facial weights crossfade (unanimated channels contribute
+  zero). Otherwise facial weights switch at the fade's midpoint because each clip
+  owns its sparse targets. Sequences are not seekable. A crossfade never outlasts its
+  incoming step (catalog validation and playback both enforce it), and a cyclic restart
+  precedes the head's leave.
   Playback may use one uniquely identified verified skeleton's compatible mesh
   subset while the manual ModelRig retains its original all-source admission.
   Apply fallback transforms through each mesh's exact game-bone palette, never
@@ -1058,6 +1074,16 @@ of documentation, comments and tests; use portable fixtures instead.
   Building is explicit (Settings confirm dialog or index button) or automatic
   when extracting without a ready index; the extraction Browse pick is saved to
   Settings, and clearing the WWMI folder deletes its index.
+- WuWa authored sequences are single AnimMontage timelines: one slot, contiguous
+  segments at play rate 1, loop counts expanded, explicit section links only, and a
+  link back to the first section repeats (hard cuts). Combo order between montages
+  lives in gameplay code and is not inferred. Montage failures never block clips and
+  are reported in the extraction report (`sequences`, `skipped_sequences`, `sequence_error`).
+  Intentional exception to name-free ordering, for preview only: converted
+  `X_Start`/`X_Loop`/`X_End[n]` clips in one folder also form name-ordered sequences
+  (one per end, hard cuts, each clip once), always labeled `(by name)`, listed after
+  authored timelines and counted as `name_sequences`. Names never pair, identify or
+  admit clips, and a stem with several starts or loops is skipped.
 - ZZZ uses a separate minimal native reader built from pinned original AnimeStudio
   source and its rebuilt ZZZ V2 ACL decoder, plus the same pinned Oodle decoder as
   WuWa. No GUI, Ultimate fork, media exporters or updater is bundled. The shared
@@ -1146,6 +1172,14 @@ of documentation, comments and tests; use portable fixtures instead.
   then uses the shared morph-before-skinning playback and restoration lifecycle.
   Preserve compatible libraries and user files in the
   existing staging transaction. Extraction/indexing stays off ordinary load paths.
+  ZZZ also indexes AnimatorControllers (index version `zzz-3`) and reads them with the
+  Genshin controller graph. Authored sequences come only from the family's controllers
+  (`<family>…_Controller…`, compared without the family's internal underscores and
+  ending on a token boundary, since `Name_Variant` clips use `NameVariant_Controller`);
+  names only pick candidates. Index copies of one object (same CAB and PathID in
+  several blocks) are one controller; different objects sharing a name are skipped,
+  never guessed. Leaves bind by pointer to converted clips whose copies share one clip
+  key, and sequence names carry the controller suffix.
 - Genshin Impact (GIMI) extraction runs the same pinned reader in `--gi` mode with the
   database ACL decoder rebuilt from the same unmodified source. Accept only the
   global `GenshinImpact_Data` layout; the effective block set is
@@ -1192,6 +1226,24 @@ of documentation, comments and tests; use portable fixtures instead.
   mismatched blend trees and empty body clips with reasons; report additive synced
   layers as unapplied. Count unbound, Humanoid-owned, masked, translation-DoF and
   non-transform channels instead of hiding them.
+  Controller reads export the base state machine's authored graph (state
+  transitions, Any State transitions, entry/exit selectors, named conditions).
+  Genshin and ZZZ sequences chain converted plain states only: from Any State
+  targets, entry selectors, states nothing leads to, then other edge targets.
+  Selector nodes route by the first transition whose whole input holds; an
+  unevaluable (unnamed) selector input is never guessed past. A chain follows
+  automatic exit-time edges or edges whose non-window conditions are a subset of
+  the chain's entry input, leaving at the exit time (at the later of exit time and
+  window when the edge repeats the chain input) or the earliest window (continuous
+  input). An input edge needs its own exit time or window; untimed input edges are
+  not steps. Without exported interruption settings, Unity's default applies: a
+  state's edges wait for its incoming transition to complete, and a cycle closes
+  only if the closing transition completes before the head leaves. States with a
+  playback speed other than 1 never join a chain. Genshin's
+  window is `NormalizedTime` (normalized); ZZZ's is `FrameCount` (60 Hz frames since
+  the step start, matching authored exit times). A cycle closes only on its head;
+  runs contained in a longer chain are dropped. Locomotion is driven by game code
+  and has no authored edges, so it is never sequenced.
   GIMI mods prove a palette only through a stock skinning pass: a safe
   `TextureOverride` closure binding a file-backed, unaliased stride-32 Blend at vb1
   with `handling = skip` and `draw = <count>, 0` (literal or variable). Allowed

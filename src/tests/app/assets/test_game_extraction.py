@@ -25,6 +25,7 @@ CHARACTER = "Client/Content/Aki/Character/Role/BodyType01/Character01"
 MESH = CHARACTER + "/Skin01/Model/Model01"
 SKELETON = CHARACTER + "/Skin01/Model/Skeleton01"
 BASE = CHARACTER + "/CommonAnim/Clip01"
+MONTAGE = CHARACTER + "/CommonAnim/Montage01"
 LAYER = CHARACTER + "/Skin01/RibbonAnim/Rib_Clip01"
 
 
@@ -96,7 +97,7 @@ def fixture(tmp_path, scale=(1, 1, 1)):
             self.work.mkdir()
 
         def search(self, query, kind, under):
-            return [MESH] if kind == "SkeletalMesh" else [BASE, LAYER]
+            return [MESH] if kind == "SkeletalMesh" else ([BASE, LAYER] if kind == "AnimSequence" else [])
 
         def export(self, kind, package, destination, format=None):
             destination.mkdir(parents=True, exist_ok=True)
@@ -207,7 +208,7 @@ def test_mesh_name_is_tried_first_then_captured_geometry(tmp_path):
     assert queries[0] == ("Unrelated Name", pipeline.ROLE_ROOT)
     assert {under.rsplit("/", 1)[-1] for query, under in queries if not query} >= {"FemaleMS", "MaleMS"}
     queries.clear()
-    client.search = lambda query, kind, under: queries.append(query) or original(query, kind, under)
+    client.search = lambda query, kind, under: (queries.append(query) if kind != "AnimMontage" else None) or original(query, kind, under)
     pipeline.build(client, str(root), record, tmp_path / "named", "Character01", lambda *_: None, threading.Event())
     assert queries == ["Character01", ""]  # mesh by name, then the animation search
 
@@ -262,7 +263,7 @@ def test_extraction_uses_verified_source_reference_with_mesh_specific_rest_rotat
         return result
 
     client.export, client.batch = export, batch
-    client.search = lambda query, kind, under: [MESH] if kind == "SkeletalMesh" else [BASE]
+    client.search = lambda query, kind, under: [MESH] if kind == "SkeletalMesh" else ([BASE] if kind == "AnimSequence" else [])
     output = tmp_path / "output"
     if mode not in ("Animation", "short", "empty"):
         with pytest.raises(ValueError, match="unsupported retargeting"):
@@ -428,7 +429,7 @@ def test_companion_extraction_exposes_animation_for_every_preview_source(tmp_pat
 
     def search(query, kind, under):
         searches.append((kind, under))
-        return [package] if under == "Client/Content/Aki/Character" else original_search(query, kind, under)
+        return [package] if under == "Client/Content/Aki/Character" and kind != "AnimMontage" else original_search(query, kind, under)
 
     client.search = search
     client.export = lambda kind, path, *args: [path] if path == package else original_export(kind, path, *args)
@@ -524,12 +525,34 @@ def test_incomplete_animation_discovery_never_produces_sidecars(tmp_path, failur
 
 def test_native_proof_and_secondary_pipeline_lifecycle(tmp_path):
     root, asset, record, client, rows = fixture(tmp_path)
+    search, batch = client.search, client.batch
+    def search_montages(query, kind, under):
+        return [MONTAGE] if kind == "AnimMontage" else search(query, kind, under)
+    def batch_montages(kind, packages, destination, format=None):
+        result = batch(kind, [package for package in packages if package != MONTAGE], destination, format)
+        if MONTAGE in packages:
+            # Two contiguous segments of the one converted clip, cut at 0.2 seconds.
+            segments = [dict(AnimReference=dict(ObjectPath=BASE + ".0"), StartPos=0, AnimStartTime=0, AnimEndTime=0.2),
+                        dict(AnimReference=dict(ObjectPath=BASE + ".0"), StartPos=0.2, AnimStartTime=0.2, AnimEndTime=1)]
+            destination.mkdir(parents=True, exist_ok=True)
+            file = destination / "Montage01.json"
+            file.write_text(json.dumps([dict(Type="AnimMontage", Properties=dict(Skeleton=dict(ObjectPath=SKELETON + ".0"),
+                SlotAnimTracks=[dict(AnimTrack=dict(AnimSegments=segments))]))]))
+            result[MONTAGE] = dict(state="completed", rootFiles=[str(file)], failures=[])
+        return result
+    client.search, client.batch = search_montages, batch_montages
     phases = []
     result, fingerprints = pipeline.build(client, str(root), record, tmp_path / "output", "Character01",
         lambda phase, *_: phases.append(phase), threading.Event())
     assert result["bones"] == 2 and result["imported"] == result["secondary"] == result["clips"] == 1
     assert result["skipped"] == 0 and fingerprints
     assert phases[:3] == ["search", "rig", "animations"]
+    assert result["sequences"] == 1 and result["skipped_sequences"] == 0 and result["sequence_error"] is None
+    library = json.loads((tmp_path / "output/Animation/manifest.json").read_text())
+    (sequence,) = library["sequences"]
+    clip_id = library["clips"][0]["id"]
+    assert [(step["clip"], step["start"], step["leave"], step["fade"]) for step in sequence["steps"]] == [
+        (clip_id, 0, 0.2, 0), (clip_id, 0.2, 1, 0)]
     data = (tmp_path / "output/Animation/Clip01.bin").read_bytes()
     assert list(struct.iter_unpack("<7f", data)) == [rows[0], rows[1], rows[2], (1, 2, 3, 0, 0, 1, 0)]
     rig = validate_rig(json.loads((tmp_path / "output/Rig.json").read_text()))

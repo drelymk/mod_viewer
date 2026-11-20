@@ -10,6 +10,7 @@ import shutil
 from app.assets.animation_conversion import ReferencePoseMismatch, convert_clip, merge_reference_layer, reference_layer_timing
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
+from . import montage_sequences
 from .native import capture, make_rig, match_components, read_mesh, read_limited
 from .runtime import ExtractionCancelled, check_cancelled, list_packages
 from .morphs import export_morphs, sample_curves
@@ -586,7 +587,41 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         read_clip(str(library), entry, rig, validated_morphs=validated_morphs)
     if sum(file.stat().st_size for file in library.rglob("*") if file.is_file()) > 2 * 1024 ** 3:
         raise ValueError("The extracted animation library exceeds its size limit.")
-    manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()))
+    converted = {item["source"]: (item["id"], entries[item["id"]]["duration"]) for item in provenance}
+    sequences, skipped_sequences, sequence_error = [], [], None
+    try:
+        montages = sorted(list_packages(client, "AnimMontage", character_root, cancel))[:montage_sequences.MAX_MONTAGES]
+        montage_dir = client.work / "montage-metadata"
+        files = client.batch("json", montages, montage_dir) if montages else {}
+        loaded = []
+        for package in montages:
+            check_cancelled(cancel)
+            file = exported_file(files.get(package), montage_dir, ".json")
+            exports = document(file, 4 * 1024 * 1024) if file else None
+            found = [item for item in exports if isinstance(item, dict) and item.get("Type") == "AnimMontage"] if isinstance(exports, list) else []
+            properties = found[0].get("Properties") if len(found) == 1 else None
+            if not isinstance(properties, dict) or package_name((properties.get("Skeleton") or {}).get("ObjectPath")) != skeleton:
+                skipped_sequences.append(dict(source=package, reason="The montage metadata is unavailable or uses another skeleton."))
+                continue
+            loaded.append((package, properties))
+        sequences, rejected = montage_sequences.sequences(loaded, converted, character_root)
+        skipped_sequences += rejected
+    except ExtractionCancelled:
+        raise
+    except (ValueError, KeyError, TypeError) as error:
+        # Sequences are optional: discovery failures never block the clips.
+        sequences, sequence_error = [], str(error) if isinstance(error, ValueError) else "Montage metadata is incomplete."
+    # Start/Loop/End clip sets chained by gameplay code get labeled name-ordered previews
+    # after the authored montage timelines, within the same sequence bounds.
+    named = montage_sequences.name_sequences(converted, {item["id"] for item in sequences})
+    total, name_sequences = sum(len(item["steps"]) for item in sequences), 0
+    for item in named:
+        if len(sequences) == montage_sequences.MAX_SEQUENCES or total + len(item["steps"]) > montage_sequences.MAX_SEQUENCE_TOTAL_STEPS:
+            break
+        sequences.append(item)
+        total += len(item["steps"])
+        name_sequences += 1
+    manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()), sequences=sequences)
     write_document(library / "manifest.json", manifest, 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="wuwa", mesh=mesh_package,
@@ -594,6 +629,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                   companion_meshes=sorted({package for package, _ in companions.values()}), animations=provenance,
                   bones=len(rig["bones"]), clips=len(entries), imported=imported, secondary=secondary,
                   skipped=len(skipped_items), skipped_layers=sum(item["kind"] == "layer" for item in skipped_items.values()),
-                  skipped_details=list(skipped_items.values()))
+                  skipped_details=list(skipped_items.values()),
+                  sequences=len(sequences), name_sequences=name_sequences, skipped_sequences=len(skipped_sequences),
+                  skipped_sequence_details=skipped_sequences, sequence_error=sequence_error)
     (output / "RigExtraction.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report, fingerprints

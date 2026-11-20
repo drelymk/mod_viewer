@@ -76,3 +76,83 @@ export function sampleMorphWeights(clip, values, time) {
   }
   return morphs;
 }
+
+const TARGET_ROW_BYTES = 28;
+
+function sameBytes(left, right) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++) if (left[index] !== right[index]) return false;
+  return true;
+}
+
+// One facial source for the clips of a sequence. Rebinding a mesh's morphs
+// rebuilds its sparse records and GPU deformation, which stalls playback, so the
+// clips' sparse targets merge once by component and name and each clip's
+// weights map onto the union. Clips disagreeing on a shared target cannot merge.
+export function mergeClipMorphs(clips) {
+  const sources = clips.map((clip) => clip.morphs).filter(Boolean);
+  if (!sources.length) return null;
+  const names = [];
+  const nameIndex = new Map();
+  const components = new Map();
+  const maps = new Map();
+  const chunks = [];
+  let length = 0;
+  for (const morphs of sources) {
+    if (maps.has(morphs)) continue;
+    const map = new Int32Array(morphs.names.length);
+    morphs.names.forEach((name, index) => {
+      if (!nameIndex.has(name)) {
+        nameIndex.set(name, names.length);
+        names.push(name);
+      }
+      map[index] = nameIndex.get(name);
+    });
+    maps.set(morphs, map);
+    const bytes = new Uint8Array(morphs.buffer);
+    for (const component of morphs.components) {
+      const key = `${component.vertex_sha256}:${component.index_sha256}`;
+      if (!components.has(key)) components.set(key, { component: { ...component, targets: [] }, rows: new Map() });
+      const merged = components.get(key);
+      for (const target of component.targets) {
+        const chunk = bytes.subarray(target.offset, target.offset + target.count * TARGET_ROW_BYTES);
+        if (chunk.length !== target.count * TARGET_ROW_BYTES) return null;
+        const existing = merged.rows.get(target.name);
+        if (existing) {
+          if (!sameBytes(existing, chunk)) return null;
+          continue;
+        }
+        merged.rows.set(target.name, chunk);
+        merged.component.targets.push({ name: target.name, offset: length, count: target.count });
+        chunks.push(chunk);
+        length += chunk.length;
+      }
+    }
+  }
+  const buffer = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return {
+    names,
+    components: [...components.values()].map((entry) => entry.component),
+    buffer: buffer.buffer,
+    weights: new Float32Array(names.length),
+    maps,
+  };
+}
+
+// Weighted sum of several clips' facial weights in a merged source. Channels a
+// clip does not animate contribute zero, i.e. its captured expression.
+export function sampleMergedMorphWeights(merged, layers) {
+  merged.weights.fill(0);
+  for (const [clip, values, time, factor] of layers) {
+    const morphs = factor > 0 ? sampleMorphWeights(clip, values, time) : null;
+    const map = morphs && merged.maps.get(morphs);
+    if (!map) continue;
+    for (let index = 0; index < map.length; index++) merged.weights[map[index]] += morphs.weights[index] * factor;
+  }
+  return merged;
+}

@@ -23,6 +23,8 @@ export default {
   'weightRig.animationRest': 'レストポーズ',
   'weightRig.animationLoading': 'アニメーションを読み込み中…',
   'weightRig.animationEmpty': '互換性のあるアセットアニメーションはありません。',
+  'weightRig.animationSequences': 'シーケンス',
+  'weightRig.animationSequenceStep': 'ステップ {step} / {count}',
   'rigExtract.title': 'リグ・アニメーションを抽出',
   'rigExtract.asset': 'アセットの保存先',
   'rigExtract.game': 'ゲームフォルダー',

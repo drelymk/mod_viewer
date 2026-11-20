@@ -23,6 +23,8 @@ export default {
   'weightRig.animationRest': '기본 포즈',
   'weightRig.animationLoading': '애니메이션 로딩 중…',
   'weightRig.animationEmpty': '호환되는 에셋 애니메이션이 없습니다.',
+  'weightRig.animationSequences': '시퀀스',
+  'weightRig.animationSequenceStep': '단계 {step} / {count}',
   'rigExtract.title': '리그/애니메이션 추출',
   'rigExtract.asset': '에셋 저장 위치',
   'rigExtract.game': '게임 폴더',

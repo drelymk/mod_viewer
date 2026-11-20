@@ -5,8 +5,8 @@ parser revision previously exercised through CUE4Parse-MCP 1.2.0:
 `cb909733773daea9015a67f6955d6f2ec24d3629`. Replacing the wrapper does not upgrade
 the parser. No upstream MCP or hosting code is built, invoked or downloaded.
 
-The private protocol supports only WuWa package search (`SkeletalMesh` and
-`AnimSequence`), child folders, property JSON, highest-detail UEFormat skeletal
+The private protocol supports only WuWa package search (`SkeletalMesh`,
+`AnimSequence` and `AnimMontage`, whose property JSON export feeds authored sequences), child folders, property JSON, highest-detail UEFormat skeletal
 meshes with morph targets and ActorX animations. Mesh exports disable materials
 and textures; property exports retain decoded animation curves. One provider remains mounted until the extraction job finishes; closing
 or cancelling the job terminates the process before staging cleanup. Responses

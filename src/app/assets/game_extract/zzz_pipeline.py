@@ -9,7 +9,7 @@ import numpy as np
 
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
-from . import zzz_animation, zzz_index, zzz_morphs
+from . import animator_sequences, zzz_animation, zzz_index, zzz_morphs
 from .native import humanoid_controls
 from .pipeline import clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
 from .runtime import ExtractionCancelled, check_cancelled
@@ -249,6 +249,87 @@ def adopt_rig(asset, chosen, captured, label="ZZZ"):
     return rig, previous
 
 
+MAX_CONTROLLERS = 16
+
+
+def _controller_label(family, name):
+    """The suffix naming a character controller (``""`` for battle), or None for another character's.
+
+    Controller names drop the family's internal underscores (``Name_Variant`` clips use
+    ``NameVariant_Controller``), so names are compared without them, ending on a token
+    boundary. Names only pick candidates; clips still bind through converted pointers.
+    """
+    compact, position = family.replace("_", ""), 0
+    for matched, character in enumerate(name):
+        if position == len(compact):
+            break
+        if character != "_":
+            if character != compact[position]:
+                return None
+            position += 1
+    else:
+        matched = len(name)
+    tokens = name[matched:].split("_")
+    if position != len(compact) or tokens[0] or "Controller" not in tokens:
+        return None
+    return "_".join(token for token in tokens if token and token != "Controller")
+
+
+def _sequences(client, index, family, clips, converted, cancel):
+    """Authored sequences of the character's controllers (battle, then suffixed ones).
+
+    Index copies of one controller (the same CAB and PathID in several blocks) are one
+    object; different objects sharing a name are never guessed between. Leaves bind
+    by pointer to converted clips, whose copies dedupe to one clip key.
+    """
+    named = {}
+    for row in index:
+        label = _controller_label(family, row["name"]) if row["type"] == "AnimatorController" else None
+        if label is not None:
+            named.setdefault((label, row["name"]), []).append(row)
+    pointers = {}
+    for row in clips:
+        if zzz_index.identity(row) in converted:
+            pointers.setdefault((row["cab"].casefold(), row["path_id"]), set()).add(converted[zzz_index.identity(row)])
+    result, seen, total = [], set(), 0
+    for label, name in sorted(named)[:MAX_CONTROLLERS]:
+        rows = sorted(named[(label, name)], key=zzz_index.identity)
+        if len({(row["cab"].casefold(), row["path_id"]) for row in rows}) != 1:
+            continue
+        check_cancelled(cancel)
+        try:
+            controller = client.read(rows[0])
+        except ExtractionCancelled:
+            raise
+        except (ValueError, KeyError, TypeError):
+            continue
+        states = controller.get("states") if isinstance(controller, dict) else None
+        steps = {}
+        for number, state in enumerate(states if isinstance(states, list) else []):
+            motions = state.get("motions") if isinstance(state, dict) else None
+            body = motions[0] if isinstance(motions, list) and motions else None
+            leaves = body.get("leaves") if isinstance(body, dict) else None
+            if (not isinstance(state, dict) or state.get("mirror") or state.get("mirror_param")
+                    or not isinstance(leaves, list) or len(leaves) != 1):
+                continue
+            leaf = leaves[0]
+            if not isinstance(leaf, dict) or not isinstance(leaf.get("cab"), str) or type(leaf.get("path_id")) is not int:
+                continue
+            found = pointers.get((leaf["cab"].casefold(), leaf["path_id"]), set())
+            if len(found) == 1:
+                steps[number] = next(iter(found))
+        for item in animator_sequences.derive(controller, steps, animator_sequences.FRAME_COUNT,
+                                              f"{label} · " if label else ""):
+            if item["id"] in seen or total + len(item["steps"]) > animator_sequences.MAX_SEQUENCE_TOTAL_STEPS:
+                continue
+            seen.add(item["id"])
+            total += len(item["steps"])
+            result.append(item)
+            if len(result) == animator_sequences.MAX_SEQUENCES:
+                return result
+    return result
+
+
 def build(client, root, record, output, query, progress, cancel, index=None):
     captured, fingerprints = capture(root, record)
     if index is None:
@@ -268,7 +349,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     clips = [row for row in index if row["type"] == "AnimationClip" and row["name"].startswith(chosen["family"] + "_Ani_")]
     if not clips or len(clips) > 4096:
         raise ValueError("No bounded character animation set was found for the verified ZZZ Avatar.")
-    imported, skipped, provenance, seen = 0, [], [], set()
+    imported, skipped, provenance, seen, converted = 0, [], [], {}, {}
     for number, row in enumerate(clips):
         progress("convert", number, len(clips))
         check_cancelled(cancel)
@@ -291,8 +372,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         digest = hashlib.sha256(binary).hexdigest()
         duplicate = row["name"], digest
         if duplicate in seen:
+            converted[source] = seen[duplicate]
             continue
-        seen.add(duplicate)
         key = reusable_clip_key(entries, existing, source, row["name"], {digest})
         if key is None:
             key = clip_id(row["name"], source, set(entries))
@@ -309,6 +390,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         entry = dict(id=key, name=row["name"][:128], file=key + ".json", duration=duration)
         read_clip(str(library), entry, rig, validated_morphs=validated_morphs)
         entries[key], existing[key] = entry, metadata
+        seen[duplicate] = converted[source] = (key, duration)
         provenance.append(dict(id=key, source=source, omitted_non_transform_channels=unsupported,
                                facial_glb=metadata.get("morphs", {}).get("file")))
         imported += 1
@@ -316,11 +398,13 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             raise ValueError("The extracted animation library exceeds its size limit.")
     if not imported:
         raise ValueError("No compatible ZZZ animation clips could be converted. Existing Asset files were preserved.")
-    write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values())), 1024 * 1024)
+    sequences = _sequences(client, index, chosen["family"], clips, converted, cancel)
+    write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
+                                                   clips=list(entries.values()), sequences=sequences), 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="zzz", skeleton_id=rig["id"], skeleton=chosen["source"],
                   meshes=chosen["meshes"], proven_components=len(chosen["matched"]), unmatched_components=len(captured) - len(chosen["matched"]),
-                  bones=len(rig["bones"]), clips=len(entries), imported=imported, secondary=0, skipped=len(skipped),
+                  bones=len(rig["bones"]), clips=len(entries), imported=imported, secondary=0, sequences=len(sequences), skipped=len(skipped),
                   skipped_details=skipped, animations=provenance)
     write_document(output / "RigExtraction.json", report, 4 * 1024 * 1024)
     return report, fingerprints

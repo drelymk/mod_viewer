@@ -17,6 +17,68 @@ _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _MAX_BYTES = 128 * 1024 * 1024
 
 
+_SEQUENCE_SLACK = 1e-6
+
+
+def _sequence_number(value):
+    if type(value) not in (int, float) or not math.isfinite(value):
+        raise ValueError("Invalid animation sequence number.")
+    return float(value)
+
+
+def _sequences(raw_sequences, entries):
+    """Return cleaned sequences, or [] when the key is absent or any sequence is invalid."""
+    try:
+        if not isinstance(raw_sequences, list) or len(raw_sequences) > 256:
+            return []
+        seen = set()
+        sequences = []
+        for raw in raw_sequences:
+            if not isinstance(raw, dict):
+                raise ValueError("Invalid animation sequence.")
+            key = raw.get("id")
+            name, cyclic, steps = raw.get("name"), raw.get("cyclic"), raw.get("steps")
+            if (not isinstance(key, str) or not _ID.fullmatch(key) or key in seen or key in entries
+                    or not isinstance(name, str) or not 1 <= len(name) <= 128
+                    or type(cyclic) is not bool or not isinstance(steps, list) or not 2 <= len(steps) <= 64):
+                raise ValueError("Invalid animation sequence.")
+            restart = _sequence_number(raw.get("restart"))
+            if restart < 0:
+                raise ValueError("Invalid animation sequence restart.")
+            cleaned = []
+            for step in steps:
+                if not isinstance(step, dict):
+                    raise ValueError("Invalid animation sequence step.")
+                clip = step.get("clip")
+                if not isinstance(clip, str) or clip not in entries:
+                    raise ValueError("Invalid animation sequence clip.")
+                duration = _sequence_number(entries[clip]["duration"])
+                start = _sequence_number(step.get("start"))
+                leave = _sequence_number(step.get("leave"))
+                fade = _sequence_number(step.get("fade"))
+                if (not 0 <= start < leave or leave > duration + _SEQUENCE_SLACK
+                        or fade < 0 or fade > duration - leave + _SEQUENCE_SLACK):
+                    raise ValueError("Invalid animation sequence step timing.")
+                cleaned.append({"clip": clip, "start": start, "leave": leave, "fade": fade})
+            if restart >= _sequence_number(entries[cleaned[0]["clip"]]["duration"]):
+                raise ValueError("Invalid animation sequence restart.")
+            # Playback crossfades into the following step (the head after the last step), so a fade
+            # may never outlast that step's own leave; a cyclic restart must precede the head's leave.
+            for number, step in enumerate(cleaned):
+                wraps = number == len(cleaned) - 1
+                following = cleaned[0] if wraps else cleaned[number + 1]
+                following_start = restart if wraps and cyclic else following["start"]
+                if step["fade"] > following["leave"] - following_start + _SEQUENCE_SLACK:
+                    raise ValueError("Invalid animation sequence fade.")
+            if cyclic and restart >= cleaned[0]["leave"]:
+                raise ValueError("Invalid animation sequence restart.")
+            seen.add(key)
+            sequences.append({"id": key, "name": name, "cyclic": cyclic, "restart": restart, "steps": cleaned})
+        return sequences
+    except (ValueError, TypeError, KeyError):
+        return []
+
+
 def _json(file, limit=1024 * 1024):
     if not file:
         raise ValueError("Animation metadata is unavailable.")
@@ -128,7 +190,7 @@ class AnimationSessions:
 
     def catalog(self, root, asset, rig, is_current):
         """Issue opaque clip IDs only after the caller proved its loaded rig."""
-        empty = {"animations": [], "animation_session": None}
+        empty = {"animations": [], "animation_session": None, "animation_sequences": []}
         try:
             directory = paths.safe_asset_dir(root, asset)
             animation_dir = paths.safe_asset_dir(directory, "Animation") if directory else None
@@ -151,6 +213,7 @@ class AnimationSessions:
                 entries[key] = dict(entry)
             if not entries or not is_current():
                 return empty
+            sequences = _sequences(raw.get("sequences"), entries)
             token = uuid.uuid4().hex
             with self._lock:
                 if len(self._sessions) >= 32:
@@ -161,7 +224,8 @@ class AnimationSessions:
                                               is_current=is_current, urls=set())
             return {"animation_session": token,
                     "animations": [{"id": e["id"], "name": e["name"], "duration": e["duration"]}
-                                   for e in entries.values()]}
+                                   for e in entries.values()],
+                    "animation_sequences": sequences}
         except (OSError, ValueError, TypeError, KeyError, RecursionError):
             return empty
 

@@ -141,7 +141,7 @@ internal sealed class GameSession(string paks, string work) : IDisposable
     private object Search(JObject request)
     {
         var kind = (string?)request["type"];
-        if (kind is not ("SkeletalMesh" or "AnimSequence")) throw new InvalidDataException();
+        if (kind is not ("SkeletalMesh" or "AnimSequence" or "AnimMontage")) throw new InvalidDataException();
         var prefix = Contract.Package((string?)request["under"]) + "/";
         var recursive = (bool?)request["recursive"] ?? true;
         var terms = ((string?)request["query"] ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);

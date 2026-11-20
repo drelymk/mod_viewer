@@ -41,7 +41,7 @@ def valid_rows(rows):
     seen = set()
     for row in rows:
         if (not isinstance(row, dict) or not isinstance(row.get("name"), str) or len(row["name"]) > 1024
-                or row.get("type") not in ("Mesh", "Avatar", "AnimationClip", "SkinnedMeshRenderer")
+                or row.get("type") not in ("Mesh", "Avatar", "AnimationClip", "AnimatorController", "SkinnedMeshRenderer")
                 or not isinstance(row.get("block"), str) or len(row["block"]) > 1024
                 or not isinstance(row.get("cab"), str) or len(row["cab"]) > 256
                 or any(type(row.get(key)) is not int for key in ("offset", "file_ordinal", "path_id"))

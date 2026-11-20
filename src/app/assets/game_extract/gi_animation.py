@@ -95,8 +95,11 @@ def state_pairs(controller, rows):
                 # clearer than a blend-tree leaf label, so it takes precedence.
                 if len(leaves) == 1 and not seen[key]["plain"]:
                     seen[key].update(state=label, plain=True)
+                if len(leaves) == 1:
+                    seen[key]["state_indices"].append(number)
                 continue
-            seen[key] = dict(state=label, body=body_row, streamer=streamer_row, plain=len(leaves) == 1)
+            seen[key] = dict(state=label, body=body_row, streamer=streamer_row, plain=len(leaves) == 1,
+                             state_indices=[number] if len(leaves) == 1 else [])
             pairs.append(seen[key])
     return [{key: value for key, value in pair.items() if key != "plain"} for pair in pairs], skipped
 
