@@ -283,9 +283,11 @@ separate worktree on a new branch from `origin/main`
 ## 9. ZZZ and WuWa (implemented)
 
 - ZZZ: the native reader indexes and reads AnimatorControllers in both games (ZZZ index
-  version bumped, clip runtime `zzz-7`). `zzz_pipeline` derives sequences from
-  `<family>_Controller` and `<family>_Controller_*` controllers, maps leaf clips through
-  the converted clip identities, and skips a name with several indexed copies.
+  version bumped, clip runtime `zzz-7`). `zzz_pipeline` derives sequences from the
+  family's controllers, matching names without the family's internal underscores
+  (`Name_Variant` clips use `NameVariant_Controller`) on a token boundary. Index copies
+  of one CAB and PathID are one controller; different objects sharing a name are
+  skipped. Leaf clips bind by pointer to converted clips.
 - ZZZ windows are `FrameCount` (60 Hz frames since the step start); Genshin keeps
   `NormalizedTime`. Sequence names carry the controller suffix.
 - WuWa: the native helper searches and exports `AnimMontage` JSON (direct-4). Each

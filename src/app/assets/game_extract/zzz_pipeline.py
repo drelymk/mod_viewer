@@ -9,7 +9,7 @@ import numpy as np
 
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
-from . import animator_sequences, gi_index, zzz_animation, zzz_index, zzz_morphs
+from . import animator_sequences, zzz_animation, zzz_index, zzz_morphs
 from .native import humanoid_controls
 from .pipeline import clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
 from .runtime import ExtractionCancelled, check_cancelled
@@ -252,41 +252,73 @@ def adopt_rig(asset, chosen, captured, label="ZZZ"):
 MAX_CONTROLLERS = 16
 
 
-def _sequences(client, index, family, converted, cancel):
-    """Authored sequences of the character's controllers (battle, then suffixed ones)."""
-    base = family + "_Controller"
+def _controller_label(family, name):
+    """The suffix naming a character controller (``""`` for battle), or None for another character's.
+
+    Controller names drop the family's internal underscores (``Name_Variant`` clips use
+    ``NameVariant_Controller``), so names are compared without them, ending on a token
+    boundary. Names only pick candidates; clips still bind through converted pointers.
+    """
+    compact, position = family.replace("_", ""), 0
+    for matched, character in enumerate(name):
+        if position == len(compact):
+            break
+        if character != "_":
+            if character != compact[position]:
+                return None
+            position += 1
+    else:
+        matched = len(name)
+    tokens = name[matched:].split("_")
+    if position != len(compact) or tokens[0] or "Controller" not in tokens:
+        return None
+    return "_".join(token for token in tokens if token and token != "Controller")
+
+
+def _sequences(client, index, family, clips, converted, cancel):
+    """Authored sequences of the character's controllers (battle, then suffixed ones).
+
+    Index copies of one controller (the same CAB and PathID in several blocks) are one
+    object; different objects sharing a name are never guessed between. Leaves bind
+    by pointer to converted clips, whose copies dedupe to one clip key.
+    """
     named = {}
     for row in index:
-        if row["type"] == "AnimatorController" and (row["name"] == base or row["name"].startswith(base + "_")):
-            named.setdefault(row["name"], []).append(row)
-    cabs = gi_index.by_cab(index)
+        label = _controller_label(family, row["name"]) if row["type"] == "AnimatorController" else None
+        if label is not None:
+            named.setdefault((label, row["name"]), []).append(row)
+    pointers = {}
+    for row in clips:
+        if zzz_index.identity(row) in converted:
+            pointers.setdefault((row["cab"].casefold(), row["path_id"]), set()).add(converted[zzz_index.identity(row)])
     result, seen, total = [], set(), 0
-    for name in sorted(named, key=lambda name: (name != base, name))[:MAX_CONTROLLERS]:
-        if len(named[name]) != 1:
-            continue  # Copies of one controller name are never guessed between.
+    for label, name in sorted(named)[:MAX_CONTROLLERS]:
+        rows = sorted(named[(label, name)], key=zzz_index.identity)
+        if len({(row["cab"].casefold(), row["path_id"]) for row in rows}) != 1:
+            continue
         check_cancelled(cancel)
         try:
-            controller = client.read(named[name][0])
+            controller = client.read(rows[0])
         except ExtractionCancelled:
             raise
         except (ValueError, KeyError, TypeError):
             continue
         states = controller.get("states") if isinstance(controller, dict) else None
-        clips = {}
+        steps = {}
         for number, state in enumerate(states if isinstance(states, list) else []):
             motions = state.get("motions") if isinstance(state, dict) else None
             body = motions[0] if isinstance(motions, list) and motions else None
             leaves = body.get("leaves") if isinstance(body, dict) else None
-            if not isinstance(state, dict) or state.get("mirror") or state.get("mirror_param") or not isinstance(leaves, list) or len(leaves) != 1:
+            if (not isinstance(state, dict) or state.get("mirror") or state.get("mirror_param")
+                    or not isinstance(leaves, list) or len(leaves) != 1):
                 continue
             leaf = leaves[0]
             if not isinstance(leaf, dict) or not isinstance(leaf.get("cab"), str) or type(leaf.get("path_id")) is not int:
                 continue
-            row = gi_index.resolve_pointer(cabs, leaf["cab"], leaf["path_id"])
-            if row is not None and zzz_index.identity(row) in converted:
-                clips[number] = converted[zzz_index.identity(row)]
-        label = name.removeprefix(base).lstrip("_")
-        for item in animator_sequences.derive(controller, clips, animator_sequences.FRAME_COUNT,
+            found = pointers.get((leaf["cab"].casefold(), leaf["path_id"]), set())
+            if len(found) == 1:
+                steps[number] = next(iter(found))
+        for item in animator_sequences.derive(controller, steps, animator_sequences.FRAME_COUNT,
                                               f"{label} · " if label else ""):
             if item["id"] in seen or total + len(item["steps"]) > animator_sequences.MAX_SEQUENCE_TOTAL_STEPS:
                 continue
@@ -366,7 +398,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             raise ValueError("The extracted animation library exceeds its size limit.")
     if not imported:
         raise ValueError("No compatible ZZZ animation clips could be converted. Existing Asset files were preserved.")
-    sequences = _sequences(client, index, chosen["family"], converted, cancel)
+    sequences = _sequences(client, index, chosen["family"], clips, converted, cancel)
     write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
                                                    clips=list(entries.values()), sequences=sequences), 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)

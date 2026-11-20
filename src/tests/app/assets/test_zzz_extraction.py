@@ -526,14 +526,22 @@ def test_zzz_case_only_clip_names_keep_distinct_files_and_stable_reimport_ids(tm
         dict(name="Idle", path="Base Layer.Idle", transitions=[edge(1, [("Input01", 1, 0), ("FrameCount", 9, 6)], fade=0.1)], **leaf(2)),
         dict(name="Attack", path="Base Layer.Attack", transitions=[], **leaf(50)),
     ], selectors=[], any_state=[edge(0, [("Input01", 1, 0)])])
-    rows.append({**rows[0], "name": "Avatar_Type01_Character01_Controller", "type": "AnimatorController", "path_id": 60})
-    read = client.read
+    # Controller names drop the family's internal underscores; an index copy of the same
+    # object in another block is one controller, and another variant's controller is ignored.
+    named = {**rows[0], "name": "Avatar_Type01Character01_Controller", "type": "AnimatorController", "path_id": 60}
+    rows += [named, {**named, "block": "ZenlessZoneZero_Data/StreamingAssets/Blocks/2.blk"},
+             {**named, "name": "Avatar_Type01_Character01Extra_Controller", "path_id": 61}]
+    read, controllers = client.read, []
     def read_controller(row):
-        return deepcopy(controller) if row["type"] == "AnimatorController" else read(row)
+        if row["type"] != "AnimatorController":
+            return read(row)
+        controllers.append(row["name"])
+        return deepcopy(controller)
     client.read = read_controller
     output = tmp_path / "output"
     report, _ = zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, threading.Event(), rows)
     assert report["clips"] == 2 and report["imported"] == 2 and report["sequences"] == 1
+    assert controllers == ["Avatar_Type01Character01_Controller"]
     manifest = json.loads((output / "Animation/manifest.json").read_text())
     entries = manifest["clips"]
     assert len({entry["file"].casefold() for entry in entries}) == 2

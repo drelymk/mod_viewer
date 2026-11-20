@@ -1168,9 +1168,13 @@ of documentation, comments and tests; use portable fixtures instead.
   Preserve compatible libraries and user files in the
   existing staging transaction. Extraction/indexing stays off ordinary load paths.
   ZZZ also indexes AnimatorControllers (index version `zzz-3`) and reads them with the
-  Genshin controller graph. Authored sequences come only from `<family>_Controller` and
-  `<family>_Controller_*` controllers; a name with several indexed copies is skipped,
-  never guessed, and sequence names carry the controller suffix.
+  Genshin controller graph. Authored sequences come only from the family's controllers
+  (`<family>…_Controller…`, compared without the family's internal underscores and
+  ending on a token boundary, since `Name_Variant` clips use `NameVariant_Controller`);
+  names only pick candidates. Index copies of one object (same CAB and PathID in
+  several blocks) are one controller; different objects sharing a name are skipped,
+  never guessed. Leaves bind by pointer to converted clips whose copies share one clip
+  key, and sequence names carry the controller suffix.
 - Genshin Impact (GIMI) extraction runs the same pinned reader in `--gi` mode with the
   database ACL decoder rebuilt from the same unmodified source. Accept only the
   global `GenshinImpact_Data` layout; the effective block set is
