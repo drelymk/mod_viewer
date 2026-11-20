@@ -7,7 +7,7 @@ from app.assets import animation_keys
 from app.assets.animations import read_clip
 from . import animator_sequences, gi_animation, gi_index, zzz_morphs, zzz_native, zzz_pipeline
 from .mecanim import HumanSolver
-from .pipeline import clip_id, preserve_library, reusable_clip_key, write_document
+from .pipeline import clip_id, document, preserve_library, reusable_clip_key, write_document
 from .runtime import ExtractionCancelled, check_cancelled
 
 LABEL = "Genshin Impact"
@@ -79,7 +79,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     library.mkdir(parents=True)
     validated_morphs = set()
     entries = preserve_library(asset, library, rig, previous, validated_morphs=validated_morphs)
-    existing = {key: read_clip(str(library), entry, rig, validated_morphs=validated_morphs)[0] for key, entry in entries.items()}
+    existing = {key: document(library / entry["file"]) for key, entry in entries.items()}
     controller_row = gi_animation.controller_row(index, chosen["family"])
     controller = client.read(controller_row)
     _base, streamer_layer = gi_animation.layers(controller)

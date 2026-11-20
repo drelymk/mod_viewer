@@ -513,7 +513,8 @@ def test_optional_morph_extraction_validation_and_runtime_publication(tmp_path, 
     with patch("app.assets.animations.read_morphs", wraps=read_morphs) as reader:
         if change == "valid":
             with patch("app.assets.animations.hashlib.sha256", side_effect=AssertionError("Unexpected checksum scan")), \
-                    patch("app.assets.animations.struct.iter_unpack", side_effect=AssertionError("Unexpected sample scan")):
+                    patch("app.assets.animations._valid_transforms", side_effect=AssertionError("Unexpected sample scan")), \
+                    patch("app.assets.animations.bounded", side_effect=AssertionError("Unexpected sample scan")):
                 response = sessions.load(token, "clip01")
         else:
             response = sessions.load(token, "clip01")

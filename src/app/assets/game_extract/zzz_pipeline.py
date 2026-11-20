@@ -382,7 +382,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     rig, previous = adopt_rig(asset, chosen, captured)
     validated_morphs = set()
     entries = preserve_library(asset, library, rig, previous, validated_morphs=validated_morphs)
-    existing = {key: read_clip(str(library), entry, rig, validated_morphs=validated_morphs)[0] for key, entry in entries.items()}
+    existing = {key: document(library / entry["file"]) for key, entry in entries.items()}
     facial = zzz_morphs.prepare(chosen, captured, index)
     clips = [row for row in index if row["type"] == "AnimationClip" and row["name"].startswith(chosen["family"] + "_Ani_")]
     if not clips or len(clips) > 4096:

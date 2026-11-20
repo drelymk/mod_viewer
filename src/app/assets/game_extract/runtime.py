@@ -1,5 +1,6 @@
 """Bundled, pinned direct CUE4Parse helper and one bounded extraction session."""
 
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -97,6 +98,12 @@ class Client:
     def command(self):
         return [str(self.executable), "--paks", str(self.paks), "--work", str(self.work)]
 
+    def clone(self, work, cancel):
+        """Another helper process for the same validated installation, with its own work directory."""
+        other = copy.copy(self)
+        other.work, other.cancel, other.serial, other.process = Path(work), cancel, 0, None
+        return other
+
     def close(self):
         process, self.process = self.process, None
         if process is not None:
@@ -137,6 +144,8 @@ class Client:
             self.process.stdin.write(request)
             self.process.stdin.flush()
             deadline = time.monotonic() + timeout
+            # Most reads answer in milliseconds; back off to the coarse interval for long exports.
+            delay = .001
             while not output.is_file():
                 check_cancelled(self.cancel)
                 self._check_output_budget()
@@ -144,7 +153,8 @@ class Client:
                     raise ValueError("The game extraction helper stopped unexpectedly.")
                 if time.monotonic() > deadline:
                     raise ValueError("The game extraction tool timed out.")
-                time.sleep(.05)
+                time.sleep(delay)
+                delay = min(delay * 2, .05)
             check_cancelled(self.cancel)
             self._check_output_budget()
             if output.stat().st_size > MAX_RESPONSE:

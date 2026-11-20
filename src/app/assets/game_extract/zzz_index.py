@@ -1,9 +1,14 @@
 """Complete, versioned ZZZ metadata index; native reads still prove each binding."""
 
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from itertools import islice
 import hashlib
 import json
 import os
 from pathlib import Path
+import queue
+import threading
 
 from app.settings import config, paths
 from .runtime import check_cancelled
@@ -15,6 +20,9 @@ MAX_BONE_PATHS = 1000000
 MAX_BONE_PATH_LENGTH = 128 * 1024
 FORMAT = 4
 LOCATOR_KEYS = ("block", "offset", "cab", "file_ordinal", "path_id")
+SCAN_BATCH = 16
+# Block scans are CPU-bound per process; more helpers than this stop scaling on typical disks.
+MAX_SCAN_WORKERS = 4
 
 
 def identity(row):
@@ -159,16 +167,81 @@ def remove(folder):
         pass
 
 
+class _Stop:
+    """Cancellation for scan helpers: the job's own cancel or an abandoned scan."""
+
+    def __init__(self, cancel):
+        self.cancel, self.event = cancel, threading.Event()
+
+    def is_set(self):
+        return self.event.is_set() or self.cancel.is_set()
+
+    def set(self):
+        self.event.set()
+
+
+def scan_batches(client, files, progress, cancel, consume):
+    """Pass each batch's scanned rows to consume, in archive order.
+
+    Separate helper processes scan up to four batches at once; results are still
+    consumed in order, so the index stays deterministic. Any failure or
+    cancellation stops every helper before the error propagates.
+    """
+    batches = [files[number:number + SCAN_BATCH] for number in range(0, len(files), SCAN_BATCH)]
+    workers = min(len(batches), MAX_SCAN_WORKERS, max(1, (os.cpu_count() or 1) // 2))
+    clone = getattr(client, "clone", None)
+    if workers <= 1 or clone is None:
+        for number, batch in enumerate(batches):
+            progress("index", number * SCAN_BATCH, len(files))
+            check_cancelled(cancel)
+            consume(client.scan_many(batch))
+        return
+    stop = _Stop(cancel)
+    idle = queue.SimpleQueue()
+    helpers = []
+
+    def run(batch):
+        helper = idle.get()
+        try:
+            return helper.scan_many(batch)
+        finally:
+            idle.put(helper)
+
+    try:
+        for number in range(workers):
+            work = client.work / f"scan-{number}"
+            work.mkdir(exist_ok=True)
+            helpers.append(clone(work, stop))
+            idle.put(helpers[-1])
+        with ThreadPoolExecutor(workers) as pool:
+            todo = iter(batches)
+            # Keep two batches per helper queued so helpers never wait on consume.
+            pending = deque(pool.submit(run, batch) for batch in islice(todo, 2 * workers))
+            try:
+                for number in range(len(batches)):
+                    progress("index", number * SCAN_BATCH, len(files))
+                    check_cancelled(cancel)
+                    future = pending.popleft()
+                    pending.extend(pool.submit(run, batch) for batch in islice(todo, 1))
+                    consume(future.result())
+            finally:
+                stop.set()
+                for future in pending:
+                    future.cancel()
+    finally:
+        for helper in helpers:
+            helper.close()
+
+
 def scan(client, folder, progress, cancel):
     root = validate_folder(folder)
     files = archives(root)
     rows = []
     strings = {}
     references = 0
-    for number in range(0, len(files), 16):
-        progress("index", number, len(files))
-        check_cancelled(cancel)
-        batch = client.scan_many(files[number:number + 16])
+
+    def consume(batch):
+        nonlocal references
         for renderer, bones in _bone_lists(batch):
             references += len(bones)
             if references > MAX_BONE_REFERENCES:
@@ -177,6 +250,8 @@ def scan(client, folder, progress, cancel):
             if len(strings) > MAX_BONE_PATHS:
                 raise ValueError("The ZZZ renderer bone paths exceed their limits.")
         rows.extend(batch)
+
+    scan_batches(client, files, progress, cancel, consume)
     progress("index", len(files), len(files))
     if not valid_rows(rows):
         raise ValueError("The ZZZ metadata index is incomplete or ambiguous.")
