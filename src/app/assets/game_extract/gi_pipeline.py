@@ -3,6 +3,7 @@
 import hashlib
 from pathlib import Path
 
+from app.assets import animation_keys
 from app.assets.animations import read_clip
 from . import animator_sequences, gi_animation, gi_index, zzz_morphs, zzz_native, zzz_pipeline
 from .mecanim import HumanSolver
@@ -95,7 +96,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             streamer = client.read(pair["streamer"]) if pair["streamer"] else None
             if streamer is not None and not gi_animation.has_curves(streamer):
                 streamer = None  # An empty streamer clip leaves the body motion unchanged.
-            binary, frames, duration, omitted, goals, morph = gi_animation.convert_state(
+            binary, frames, duration, omitted, goals, morph, keyed = gi_animation.convert_state(
                 body, streamer, client.work, rig, avatar, solver, mask, facial)
         except ExtractionCancelled:
             raise
@@ -123,7 +124,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         metadata = dict(format="mod-viewer-animation", version=2, coordinate_space="asset", layout="frame-major-tqs-f32le",
                         skeleton_id=rig["id"], frame_count=frames, bone_count=len(rig["bones"]), duration=duration,
                         data_file=key + ".bin", sha256=digest, source=source,
-                        omitted_non_transform_channels=omitted["non_transform"] + omitted["translation_dof"], layers=layers)
+                        omitted_non_transform_channels=omitted["non_transform"] + omitted["translation_dof"], layers=layers,
+                        keyed_bones=keyed)
         if morph:
             metadata["morphs"] = zzz_morphs.export_glb(facial, morph, frames, duration, library)
             # The captured weight of each target, so a procedural blink can crossfade from it.
@@ -145,7 +147,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         raise ValueError("No compatible Genshin Impact animation clips could be converted. Existing Asset files were preserved.")
     sequences = animator_sequences.derive(controller, state_clips, animator_sequences.NORMALIZED_TIME)
     write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
-                                                   clips=list(entries.values()), sequences=sequences), 1024 * 1024)
+                                                   clips=list(entries.values()), sequences=sequences,
+                                                   runtime_bones=animation_keys.runtime_bones(rig, existing.values())), 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="gi", skeleton_id=rig["id"], skeleton=chosen["source"],
                   meshes=chosen["meshes"], proven_components=len(chosen["matched"]),

@@ -2,6 +2,7 @@ import { Matrix4, Quaternion, Vector3 } from 'three';
 import { getLocale, t } from '../i18n/index.js';
 import { mergeClipMorphs, sampleMergedMorphWeights, sampleMorphWeights } from './animation-morphs.js';
 import { createIdleBlink, sampleIdleBlink } from './idle-blink.js';
+import { createSecondaryMotion, intersectSecondaryMasks, secondaryBoneMask } from './secondary-motion.js';
 
 // The locale-aware natural name order every animation picker shares.
 export function sortRigAnimations(items) {
@@ -160,6 +161,10 @@ export function createRigAnimation({
   let idleTime = 0;
   let frame = null;
   let last = 0;
+  // Spring-bone chains the clips leave at rest are simulated on top of playback;
+  // `elapsed` is the playback time the next pose should advance them by.
+  const secondary = createSecondaryMotion();
+  let elapsedForPose = 0;
   // A sequence downloads its distinct step clips once, within a byte budget, so
   // step changes never wait for a download; combo steps can leave a fraction of a
   // second after they start. Steps beyond the budget load one handoff ahead.
@@ -208,12 +213,15 @@ export function createRigAnimation({
     if (!clip || !values || rig?.id !== clip.skeleton_id) return;
     let transforms;
     let morphs;
+    const elapsed = elapsedForPose;
+    elapsedForPose = 0;
     if (outgoing && fadeDuration > 0) {
       const weight = Math.min(1, fadeElapsed / fadeDuration);
       const [from, to, blended] = bindPose(rig).locals;
       sampleLocalPose(rig, outgoing.clip, outgoing.values, outgoing.time, from);
       sampleLocalPose(rig, clip, values, time, to);
-      transforms = composePose(rig, blendLocalPose(from, to, weight, blended));
+      const mask = intersectSecondaryMasks(secondaryBoneMask(rig, outgoing.clip), secondaryBoneMask(rig, clip));
+      transforms = composePose(rig, secondary.apply(rig, blendLocalPose(from, to, weight, blended), mask, elapsed));
       if (faces) {
         morphs = sampleMergedMorphWeights(faces, [
           [outgoing.clip, outgoing.values, outgoing.time, 1 - weight],
@@ -228,7 +236,8 @@ export function createRigAnimation({
             : sampleMorphWeights(clip, values, time);
       }
     } else {
-      transforms = sampleAnimation(rig, clip, values, time);
+      const locals = sampleLocalPose(rig, clip, values, time, bindPose(rig).locals[0]);
+      transforms = composePose(rig, secondary.apply(rig, locals, secondaryBoneMask(rig, clip), elapsed));
       morphs = faces
         ? sampleMergedMorphWeights(faces, [[clip, values, time, 1]])
         : sampleMorphWeights(clip, values, time);
@@ -257,6 +266,7 @@ export function createRigAnimation({
     values = null;
     idle = null;
     time = 0;
+    secondary.reset();
     clearSequence();
     applyPose(null);
     suspendPhysics(false);
@@ -315,6 +325,7 @@ export function createRigAnimation({
       fadeElapsed = 0;
       fadeDuration = 0;
       last = performance.now();
+      secondary.reset();
       preload(current);
       pose();
       changed();
@@ -370,6 +381,7 @@ export function createRigAnimation({
       else time = (time + elapsed) % clip.duration;
       idleTime += elapsed;
       last = now;
+      elapsedForPose = elapsed;
       pose();
       changed();
     }
@@ -397,6 +409,7 @@ export function createRigAnimation({
     idleTime = 0;
     error = null;
     errorKey = null;
+    secondary.reset();
     clearSequence();
     applyPose(null);
     suspendPhysics(false);
@@ -522,6 +535,7 @@ export function createRigAnimation({
       time = chosen ? chosen.steps[0].start : 0;
       idleTime = 0;
       loading = false;
+      secondary.reset();
       prepare();
       suspendPhysics(true);
       pose({ finalize: false });
@@ -544,6 +558,7 @@ export function createRigAnimation({
       }
       time = Math.max(0, Math.min(clip.duration, Number(value) || 0));
       last = performance.now();
+      secondary.reset();
       pose();
       changed();
     },

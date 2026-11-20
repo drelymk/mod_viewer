@@ -7,6 +7,7 @@ from copy import deepcopy
 
 import pytest
 
+from app.assets import animation_keys
 from app.assets.animations import AnimationSessions
 from app.assets.animation_conversion import reference_layer_timing
 from app.assets.skinning import capture_skinning, decode_captured_skinning
@@ -315,6 +316,92 @@ def test_animation_library_containment_integrity_and_session_lifecycle(tmp_path,
     manifest["skeleton_id"] = "b" * 64
     (directory / "manifest.json").write_text(json.dumps(manifest))
     assert sessions.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animations"] == []
+
+
+# Root, Spine, Arm, Twist, a Chain (with a child) and an unskinned helper.
+_RUNTIME_CORE = {0, 1, 2, 3}
+_RUNTIME_SKINNED = {0, 1, 2, 3, 4, 5}
+
+
+def _runtime_rig(skinned):
+    names, parents = ["Root", "Spine", "Arm", "Twist", "Chain01", "Chain02", "Helper"], [-1, 0, 1, 2, 1, 4, 1]
+    return dict(id="c" * 64, bones=[dict(name=name, parent=parent) for name, parent in zip(names, parents)],
+                components=[dict(bone_map=sorted(skinned))])
+
+
+@pytest.mark.parametrize("keyed_sets, skinned, expected", [
+    # The twist is keyed in every clip, so it stays authored; the unkeyed chain and its child run.
+    pytest.param([_RUNTIME_CORE] * 10, _RUNTIME_SKINNED, [4, 5], id="never-keyed-chain-and-child"),
+    pytest.param([_RUNTIME_CORE] * 29 + [_RUNTIME_CORE | {4}], _RUNTIME_SKINNED, [4, 5], id="chain-keyed-in-one-of-thirty"),
+    pytest.param([_RUNTIME_CORE | {4}] * 5 + [_RUNTIME_CORE] * 5, _RUNTIME_SKINNED, [5], id="chain-keyed-in-half"),
+    pytest.param([_RUNTIME_CORE] * 10, {0, 1, 2, 3}, [], id="unskinned-chain-dropped"),
+    pytest.param([], _RUNTIME_SKINNED, [], id="no-keyed-clips"),
+])
+def test_runtime_bones_follow_keyed_evidence_and_skinning(keyed_sets, skinned, expected):
+    clips = [dict(keyed_bones=sorted(keyed)) for keyed in keyed_sets] + [dict(keyed_bones=[True])]
+    assert animation_keys.runtime_bones(_runtime_rig(skinned), clips) == expected
+
+
+@pytest.mark.parametrize("value, expected", [
+    ([1, 0], [0, 1]),
+    ([], []),
+    (None, None),
+    ("01", None),
+    ((0,), None),
+    ({0: 0}, None),
+    ([0, 1, 2], None),
+    ([1, 1], None),
+    ([2], None),
+    ([-1], None),
+    ([True], None),
+    ([0.0], None),
+    (["0"], None),
+])
+def test_bone_list_accepts_only_unique_in_range_int_lists(value, expected):
+    assert animation_keys.bone_list(value, 2) == expected
+
+
+def test_runtime_and_keyed_evidence_gate_secondary_bones_per_clip(tmp_path, monkeypatch):
+    rig, source = sample()
+    _, data = converter()(source, rig, 1)
+    directory = tmp_path / "Asset01" / "Animation"
+    directory.mkdir(parents=True)
+    (directory / "Clip01.bin").write_bytes(data)
+    metadata = dict(format="mod-viewer-animation", version=1, coordinate_space="asset",
+                    layout="frame-major-tq-f32le", skeleton_id=rig["id"], frame_count=2,
+                    bone_count=2, duration=1, data_file="Clip01.bin", sha256=hashlib.sha256(data).hexdigest(),
+                    keyed_bones=[0])
+    manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
+                    clips=[dict(id="clip01", name="Clip 01", file="Clip01.json", duration=1)],
+                    runtime_bones=[0, 1])
+
+    def write():
+        (directory / "Clip01.json").write_text(json.dumps(metadata))
+        (directory / "manifest.json").write_text(json.dumps(manifest))
+
+    write()
+    monkeypatch.setattr("app.assets.animations.server.publish_geometry",
+                        lambda blob, **_: f"/geometry/{len(blob)}")
+    monkeypatch.setattr("app.assets.animations.server.release_geometry", lambda url: None)
+    sessions = AnimationSessions()
+
+    def load_clip():
+        catalog = sessions.catalog(str(tmp_path), "Asset01", rig, lambda: True)
+        result = sessions.load(catalog["animation_session"], "clip01")
+        assert result["status"] == "ok"
+        return result["clip"]
+
+    # Runtime bones the clip does not key are simulated.
+    assert load_clip()["secondary_bones"] == [1]
+    # An invalid runtime list is ignored without failing the clip.
+    manifest["runtime_bones"] = [5]
+    write()
+    assert "secondary_bones" not in load_clip()
+    # So is a clip without keyed evidence.
+    manifest["runtime_bones"] = [0, 1]
+    del metadata["keyed_bones"]
+    write()
+    assert "secondary_bones" not in load_clip()
 
 
 def test_captured_weights_follow_geometry_vertex_compaction(tmp_path):

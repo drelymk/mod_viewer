@@ -1,3 +1,4 @@
+import math
 import pytest
 import struct
 
@@ -1078,3 +1079,146 @@ def test_idle_blink_schedule_and_clips_without_facial_curves(module_page):
     assert result['closed'] == pytest.approx(1)
     # Mismatched scales drop the blink rather than playing a partial one.
     assert result['unscaled'] is None
+
+
+def test_secondary_motion_simulates_only_listed_secondary_bones(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three');
+      const {sampleLocalPose} = await import('./js/weight-rig/rig-animation.js');
+      const {createSecondaryMotion,secondaryBoneMask} = await import('./js/weight-rig/secondary-motion.js');
+      const bone = (name,parent,translation=[0,0,0]) => ({name,parent,translation,rotation:[0,0,0,1],scale:[1,1,1]});
+      const rig = {id:'rig01',bones:[
+        bone('Root',-1),bone('Rig/Chain_A_01',0),bone('Rig/Chain_A_02',1,[-.1,0,0]),
+        bone('Rig/Strand_B_01',0),bone('Rig/Spine',0),
+        bone('Rig/Helper_01',0),bone('Rig/Chain_C_01',0),
+      ]};
+      const count = rig.bones.length;
+      // The root slides along +Y while the unlisted Strand bone turns. The clip
+      // lists Chain_A and Chain_C (and an out-of-range index) as secondary bones;
+      // the unlisted Strand, Spine and Helper keep their authored pose.
+      const frame = (y,angle) => rig.bones.flatMap((item,index) => [
+        item.translation[0], index === 0 ? y : item.translation[1], item.translation[2],
+        0, 0, index === 3 ? Math.sin(angle / 2) : 0, index === 3 ? Math.cos(angle / 2) : 1,
+        1, 1, 1,
+      ]);
+      const clip = {skeleton_id:'rig01',layout:'frame-major-tqs-f32le',version:2,duration:1,frame_count:2,bone_count:count,
+        secondary_bones:[1,2,6,6,99]};
+      const values = new Float32Array([...frame(0,0), ...frame(4,1)]);
+      const mask = secondaryBoneMask(rig, clip);
+      const bare = {...clip};
+      delete bare.secondary_bones;
+      const unlisted = secondaryBoneMask(rig, bare);
+      const motion = createSecondaryMotion();
+      const locals = new Float64Array(count * 10);
+      const pose = (time, elapsed) => motion.apply(rig, sampleLocalPose(rig, clip, values, time, locals), mask, elapsed);
+      const rotation = (index) => Array.from(locals.slice(index * 10 + 3, index * 10 + 7));
+      const identity = new T.Quaternion();
+      pose(0, 0);
+      const rest = {skirt:rotation(1), tip:rotation(2)};
+      let peak = 0;
+      for (let step = 1; step <= 30; step++) {
+        pose(step / 60, 1 / 60);
+        for (const index of [1, 2]) peak = Math.max(peak, new T.Quaternion(...rotation(index)).angleTo(identity));
+      }
+      const moved = {hair:rotation(3), spine:rotation(4)};
+      sampleLocalPose(rig, clip, values, 30 / 60, locals);
+      const authoredHair = Array.from(locals.slice(33, 37));
+      motion.reset();
+      pose(30 / 60, 0);
+      const reseeded = {skirt:rotation(1), tip:rotation(2)};
+      // A stalled frame clamps its step instead of exploding.
+      pose(30 / 60, 1000);
+      const clamped = Array.from(locals).every(Number.isFinite);
+      return {mask:Array.from(mask), unlisted, rest, peak, moved, authoredHair, reseeded, clamped};
+    }''')
+    assert result['mask'] == [0, 1, 1, 0, 0, 0, 1]
+    assert result['unlisted'] is None
+    assert result['rest']['skirt'] == pytest.approx([0, 0, 0, 1])
+    # The chain lags the sliding body, within the 35 degree per-joint bend limit.
+    assert 0.02 < result['peak'] <= math.radians(35) + 1e-6
+    # Bones the clip does not list keep their authored pose.
+    assert result['moved']['hair'] == pytest.approx(result['authoredHair'])
+    assert result['moved']['spine'] == pytest.approx([0, 0, 0, 1])
+    assert result['reseeded']['skirt'] == pytest.approx([0, 0, 0, 1], abs=1e-9)
+    assert result['reseeded']['tip'] == pytest.approx([0, 0, 0, 1], abs=1e-9)
+    assert result['clamped']
+
+
+def test_secondary_motion_hangs_under_gravity_and_clears_leg_capsules(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three');
+      const {sampleLocalPose} = await import('./js/weight-rig/rig-animation.js');
+      const {createSecondaryMotion,secondaryBoneMask} = await import('./js/weight-rig/secondary-motion.js');
+      const bone = (name,parent,translation) => ({name,parent,translation,rotation:[0,0,0,1],scale:[1,1,1]});
+      // A Z-up humanoid; the authored head and feet give its up axis and the
+      // hips, knees and feet its leg capsules. The skirt hangs in front.
+      const rig = {id:'rig02',bones:[
+        bone('Root',-1,[0,0,0]),bone('Rig/Pelvis',0,[0,0,1]),bone('Rig/Spine',1,[0,0,.1]),bone('Rig/Head',2,[0,0,.6]),
+        bone('Rig/L_Thigh',1,[.1,0,0]),bone('Rig/L_Calf',4,[0,0,-.45]),bone('Rig/L_Foot',5,[0,0,-.45]),
+        bone('Rig/R_Thigh',1,[-.1,0,0]),bone('Rig/R_Calf',7,[0,0,-.45]),bone('Rig/R_Foot',8,[0,0,-.45]),
+        bone('Rig/Chain_A_01',2,[.1,-.12,-.05]),bone('Rig/Chain_A_02',10,[0,0,-.15]),
+      ],humanoid_controls:{pelvis:1,head:3,leftHip:4,leftKnee:5,leftFoot:6,rightHip:7,rightKnee:8,rightFoot:9}};
+      const count = rig.bones.length;
+      const turn = (axis,angle) => new T.Quaternion().setFromAxisAngle(new T.Vector3(...axis),angle).toArray();
+      // A two-frame clip; each argument maps bone index to its local quaternion.
+      const clip = (first, last) => {
+        const frame = (rotations) => rig.bones.flatMap((item,index) => [...item.translation, ...(rotations[index] || [0,0,0,1]), 1,1,1]);
+        return {clip:{skeleton_id:'rig02',layout:'frame-major-tqs-f32le',version:2,duration:1,frame_count:2,bone_count:count,
+                  secondary_bones:[10,11]},
+                values:new Float32Array([...frame(first), ...frame(last)])};
+      };
+      const worlds = (locals) => {
+        const out = [];
+        rig.bones.forEach((item,index) => {
+          const m = new T.Matrix4().compose(new T.Vector3().fromArray(locals,index*10),
+            new T.Quaternion().fromArray(locals,index*10+3),new T.Vector3(1,1,1));
+          out.push(item.parent >= 0 ? m.premultiply(out[item.parent]) : m);
+        });
+        return out;
+      };
+      // Skirt points: the first link's tail (the chain-end bone's head, its
+      // only particle) and the far end of that rigidly following end bone.
+      const particles = (locals) => {
+        const w = worlds(locals);
+        return [new T.Vector3().setFromMatrixPosition(w[11]), new T.Vector3(0,0,-.15).applyMatrix4(w[11])];
+      };
+      // Start at the clip's first frame, then play its last frame for 2 s.
+      const run = ({clip,values}) => {
+        const mask = secondaryBoneMask(rig, clip);
+        const motion = createSecondaryMotion();
+        const locals = new Float64Array(count * 10);
+        motion.apply(rig, sampleLocalPose(rig, clip, values, 0, locals), mask, 0);
+        const animated = particles(sampleLocalPose(rig, clip, values, 1, locals));
+        for (let step = 1; step <= 120; step++) motion.apply(rig, sampleLocalPose(rig, clip, values, 1, locals), mask, 1 / 60);
+        return {mask:Array.from(mask), animated, simulated:particles(locals), locals:Array.from(locals)};
+      };
+      const pitched = {1:turn([1,0,0],Math.PI / 2)};
+      // A pose held from the start never moves on its own: the chain's
+      // authored hang there is its rest, whatever its orientation.
+      const held = run(clip(pitched, pitched));
+      // The body pitching forward onto its front during playback: the clip
+      // keeps the skirt along the torso, gravity pulls its tip back down.
+      const leaning = run(clip({}, pitched));
+      // The left thigh kicking forward into the skirt.
+      const kicked = run(clip({}, {4:turn([1,0,0],-Math.PI / 3)}));
+      const w = worlds(kicked.locals);
+      const hip = new T.Vector3().setFromMatrixPosition(w[4]);
+      const knee = new T.Vector3().setFromMatrixPosition(w[5]);
+      const line = new T.Line3(hip, knee);
+      const clearance = (point) => line.closestPointToPoint(point, true, new T.Vector3()).distanceTo(point);
+      return {
+        mask:leaning.mask,
+        still:Math.max(...held.animated.map((point, index) => point.distanceTo(held.simulated[index]))),
+        drop:leaning.animated[1].z - leaning.simulated[1].z,
+        before:clearance(kicked.animated[0]), after:clearance(kicked.simulated[0]), radius:.45 * .17,
+        finite:[...held.locals, ...leaning.locals, ...kicked.locals].every(Number.isFinite),
+      };
+    }''')
+    assert result['mask'] == [0] * 10 + [1, 1]
+    assert result['still'] < 1e-3
+    assert result['drop'] > 0.01
+    # The clip puts the skirt deep inside the kicking thigh; soft contact
+    # pushes it most of the way out (within the joint bend limit).
+    assert result['before'] < result['radius'] - 0.04
+    assert result['after'] > result['before'] + 0.01
+    assert result['finite']

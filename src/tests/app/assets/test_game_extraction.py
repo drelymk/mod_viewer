@@ -553,6 +553,9 @@ def test_native_proof_and_secondary_pipeline_lifecycle(tmp_path):
     clip_id = library["clips"][0]["id"]
     assert [(step["clip"], step["start"], step["leave"], step["fade"]) for step in sequence["steps"]] == [
         (clip_id, 0, 0.2, 0), (clip_id, 0.2, 1, 0)]
+    # The authored body track keys bone 0 and the merged reference layer adds bone 1.
+    assert json.loads((tmp_path / "output/Animation/Clip01.json").read_text())["keyed_bones"] == [0, 1]
+    assert isinstance(library["runtime_bones"], list)
     data = (tmp_path / "output/Animation/Clip01.bin").read_bytes()
     assert list(struct.iter_unpack("<7f", data)) == [rows[0], rows[1], rows[2], (1, 2, 3, 0, 0, 1, 0)]
     rig = validate_rig(json.loads((tmp_path / "output/Rig.json").read_text()))

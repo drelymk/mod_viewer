@@ -187,4 +187,5 @@ def convert(metadata, work, rig, avatar, morphs=None):
         binary += weights.tobytes()
     if len(binary) > 128 * 1024 * 1024:
         raise ValueError("Native animation exceeds playback limits.")
-    return binary, frames, duration, unsupported, morph
+    keyed = sorted({bone for bone, _attribute in written})
+    return binary, frames, duration, unsupported, morph, keyed

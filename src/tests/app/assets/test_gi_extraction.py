@@ -545,6 +545,8 @@ def test_gi_build_layers_controller_states_and_keeps_clip_identity(tmp_path):
     frames = np.frombuffer(data, dtype="<f4").reshape(metadata["frame_count"], len(rig["bones"]), 10)
     names = [bone["name"] for bone in rig["bones"]]
     hair, accessory = names.index("Root/Joint01"), names.index("Root/Joint02")
+    assert isinstance(metadata["keyed_bones"], list) and hair in metadata["keyed_bones"]
+    assert isinstance(manifest["runtime_bones"], list)
     # The 2 s streamer follows the 1 s body's normalized time.
     middle = metadata["frame_count"] // 2
     assert np.allclose(frames[[0, middle, -1], hair, 0], [0, 1, 2], atol=1e-5)

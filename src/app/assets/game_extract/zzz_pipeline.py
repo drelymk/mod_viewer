@@ -7,6 +7,7 @@ import re
 
 import numpy as np
 
+from app.assets import animation_keys
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
 from . import animator_sequences, zzz_animation, zzz_index, zzz_morphs
@@ -92,6 +93,51 @@ def exact_shape(shape):
 def index_shape(shape):
     """Overlapping submesh vertex ranges leave only the index count comparable."""
     return None, shape[1]
+
+
+def _unified_candidate(candidates):
+    """The largest candidate when every other one is a proven equivalent sub-skeleton, else None."""
+    largest = min(candidates, key=lambda item: (-len(item["rig"]["bones"]), item["source"]))
+    for item in candidates:
+        mapping = sub_skeleton_map(largest["rig"], item["rig"], affine=True)
+        if mapping is None:
+            return None
+        primary = largest["matched"]
+        if set(item["matched"]) != set(primary) or any(
+                {key: mapping[value] for key, value in palette["bone_map"].items()} != primary[number]["bone_map"]
+                for number, palette in item["matched"].items()):
+            return None
+    # Equal native copies can differ by float serialization noise. The existing
+    # hierarchy/world/palette proof establishes equivalence; exact JSON equality
+    # would reject equivalent copies. Animation family ownership must still agree.
+    return largest if len({item["family"] for item in candidates}) == 1 else None
+
+
+def _newest_block_version(root, candidates, avatar_rows):
+    """Keep the candidate whose copy lives in the most recently written block of one Avatar object.
+
+    Returns None unless every copy is the same Avatar object (CAB and path id), each block time is
+    readable, and exactly one candidate holds the newest block."""
+    if root is None:
+        return None
+    objects, newest = set(), []
+    for item in candidates:
+        times = []
+        for identity in item["avatar_copies"]:
+            row = avatar_rows[identity]
+            block = Path(row["block"])
+            if block.is_absolute() or ".." in block.parts:
+                return None
+            objects.add((row["cab"], row["path_id"]))
+            try:
+                times.append((Path(root) / block).stat().st_mtime_ns)
+            except OSError:
+                return None
+        newest.append(max(times))
+    best = max(newest, default=None)
+    if len(objects) != 1 or newest.count(best) != 1:
+        return None
+    return [item for item, time in zip(candidates, newest) if time == best]
 
 
 def verify_candidates(client, captured, rows, query, cancel, *,
@@ -188,23 +234,15 @@ def verify_candidates(client, captured, rows, query, cancel, *,
         raise ValueError(f"No {label} mesh could be verified against the captured triangles, UVs, weights and Avatar inverse binds.")
     best = max(item["score"] for item in candidates)
     best_candidates = [item for item in candidates if item["score"] == best]
-    largest = min(best_candidates, key=lambda item: (-len(item["rig"]["bones"]), item["source"]))
-    compatible = True
-    for item in best_candidates:
-        mapping = sub_skeleton_map(largest["rig"], item["rig"], affine=True)
-        if mapping is None:
-            compatible = False
-            break
-        primary = largest["matched"]
-        if set(item["matched"]) != set(primary) or any(
-                {key: mapping[value] for key, value in palette["bone_map"].items()} != primary[number]["bone_map"]
-                for number, palette in item["matched"].items()):
-            compatible = False
-            break
-    # Equal native copies can differ by float serialization noise. The existing
-    # hierarchy/world/palette proof establishes equivalence; exact JSON equality
-    # would reject equivalent copies. Animation family ownership must still agree.
-    if not compatible or len({item["family"] for item in best_candidates}) != 1:
+    largest = _unified_candidate(best_candidates)
+    if largest is None:
+        # An install can keep an outdated block beside the current one, so one Avatar object has
+        # several native versions. Only the most recently written block's version is current.
+        current = _newest_block_version(getattr(client, "root", None), best_candidates, {
+            zzz_index.identity(row): row for row in avatars})
+        largest = _unified_candidate(current) if current else None
+        best_candidates = current or best_candidates
+    if largest is None:
         raise ValueError(f"The matching {label} skeleton is ambiguous. Existing Asset files were preserved.")
     largest["avatar_sources"] = set().union(*(item["avatar_copies"] for item in best_candidates))
     return largest
@@ -356,7 +394,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         source = zzz_index.identity(row)
         try:
             metadata = client.read(row)
-            binary, frames, duration, unsupported, morph = zzz_animation.convert(
+            binary, frames, duration, unsupported, morph, keyed = zzz_animation.convert(
                 metadata, client.work, rig, avatar, facial["bindings"])
         except ExtractionCancelled:
             raise
@@ -381,7 +419,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                 raise ValueError("Extracted clips conflict with preserved user files.")
         metadata = dict(format="mod-viewer-animation", version=2, coordinate_space="asset", layout="frame-major-tqs-f32le",
                         skeleton_id=rig["id"], frame_count=frames, bone_count=len(rig["bones"]), duration=duration,
-                        data_file=key + ".bin", sha256=digest, source=source, omitted_non_transform_channels=unsupported)
+                        data_file=key + ".bin", sha256=digest, source=source, omitted_non_transform_channels=unsupported,
+                        keyed_bones=keyed)
         if morph:
             metadata["morphs"] = zzz_morphs.export_glb(facial, morph, frames, duration, library)
             metadata["blend_shape_clamp"] = morph["clamp"]
@@ -400,7 +439,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         raise ValueError("No compatible ZZZ animation clips could be converted. Existing Asset files were preserved.")
     sequences = _sequences(client, index, chosen["family"], clips, converted, cancel)
     write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
-                                                   clips=list(entries.values()), sequences=sequences), 1024 * 1024)
+                                                   clips=list(entries.values()), sequences=sequences,
+                                                   runtime_bones=animation_keys.runtime_bones(rig, existing.values())), 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="zzz", skeleton_id=rig["id"], skeleton=chosen["source"],
                   meshes=chosen["meshes"], proven_components=len(chosen["matched"]), unmatched_components=len(captured) - len(chosen["matched"]),
