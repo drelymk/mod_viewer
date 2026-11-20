@@ -81,7 +81,9 @@ source runs enable all features. See
    Drag the light marker in the viewport to move it across the view; hold Shift
    when starting the drag to move it toward or away from the camera.
 7. Use the top-bar environment menu to choose `Default`, `Studio`, `Indoor`,
-   `Outdoor`, or `Sunset`. Open `Settings` to adjust `Panel opacity` for panels,
+   `Outdoor`, or `Sunset`. Studio stands the model on polished tile, Indoor on
+   varnished wood boards, and Outdoor and Sunset on packed dirt. Open
+   `Settings` to adjust `Panel opacity` for panels,
    dialogs, menus, and button backgrounds without fading text or texture previews.
    Language, environment, panel opacity, and viewport tool preferences persist
    between launches; camera and model orientation do not.

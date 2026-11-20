@@ -62,14 +62,28 @@ def test_uncompressed_dds_pixels_mips_and_texture_lifecycle(
         texture = loadDDSTexture('/fixture.dds',resolve,reject);
         texture.colorSpace = T.NoColorSpace;
       });
+      const held = () => texture.mipmaps.every(m => m.data?.length > 0) && !!texture.onUpdate;
+      const loaded = held();
+      // Three.js calls onUpdate once writeTexture has copied every level.
+      texture.onUpdate(texture);
+      const released = {held:held(), data:texture.mipmaps.map(m => m.data),
+        sizes:texture.mipmaps.map(m => [m.width,m.height]), image:texture.image};
+      // A later upload request refetches instead of uploading released levels.
+      const version = texture.version;
+      texture.needsUpdate = true;
+      const deferred = texture.version === version;
+      for (let i = 0; i < 100 && !held(); i++) await new Promise(r => setTimeout(r, 10));
+      const restored = held() && texture.version > version;
+      texture.onUpdate(texture);
       await reloadDDSTexture(texture,'/fixture.dds');
+      const uploads = {loaded, released, deferred, restored, reloaded:held()};
       const state = {data:texture.isDataTexture,compressed:texture.isCompressedTexture,
         flipY:texture.flipY,repeat:texture.repeat.toArray(),offset:texture.offset.toArray(),
         colorSpace:texture.colorSpace,filter:texture.minFilter===T.LinearMipmapLinearFilter,
         generateMipmaps:texture.generateMipmaps,mipCount:texture.mipmaps.length};
       texture.dispose();
       return {format:parsed.formatId,compressed:parsed.compressed,requiresBC:parsed.requiresBC,
-        mips:parsed.mipmaps.map(m=>[m.width,m.height,[...m.data]]),unchanged,rejected,state};
+        mips:parsed.mipmaps.map(m=>[m.width,m.height,[...m.data]]),unchanged,rejected,state,uploads};
     }''', list(data))
     expected_mips = []
     for width, height, pixel in [(3, 5, [11, 47, 193, 7]), (1, 2, [31, 61, 101, 127]), (1, 1, [5, 9, 13, 23])]:
@@ -84,6 +98,11 @@ def test_uncompressed_dds_pixels_mips_and_texture_lifecycle(
         'state': {'data': True, 'compressed': False, 'flipY': False,
                   'repeat': [1, -1], 'offset': [0, 1], 'colorSpace': '',
                   'filter': True, 'generateMipmaps': False, 'mipCount': 3},
+        # Uploaded levels free the fetched file but keep their sizes; a later
+        # upload request or reload restores fresh bytes before uploading.
+        'uploads': {'loaded': True, 'deferred': True, 'restored': True, 'reloaded': True, 'released': {
+            'held': False, 'data': [None] * 3, 'sizes': [[3, 5], [1, 2], [1, 1]],
+            'image': {'width': 3, 'height': 5}}},
     }
 
 
@@ -776,8 +795,17 @@ def test_key_light_projection_and_locked_floor_survive_mesh_changes(module_page)
       mesh.visible = true;
       shadow.invalidateVisibility(); shadow.update();
       clearedFloors.push(grid.position.y);
+      // An applied clip seats the floor on its own ground; an unusable anchor
+      // and a stopped clip fall back to the rest base, and reset forgets it.
+      const anchoredFloors = [];
+      const seat = anchor => { shadow.setGroundAnchor(anchor); shadow.update(); anchoredFloors.push(grid.position.y); };
+      seat(() => 1.25); seat(() => null); seat(() => 1.25); seat(null);
+      const anchoredState = shadow.getDebugState().groundAnchored;
+      shadow.setGroundAnchor(() => 1.25);
       shadow.reset(); clearedFloors.push(grid.position.y);
-      return {before, after, depths, floors, clearedFloors, parallel: light.shadow.camera.isOrthographicCamera};
+      shadow.setMeshes([mesh]); shadow.update(); anchoredFloors.push(grid.position.y);
+      return {before, after, depths, floors, clearedFloors, anchoredFloors, anchoredState,
+        parallel: light.shadow.camera.isOrthographicCamera};
     }""")
     assert result['after'] == result['before']
     assert result['parallel']
@@ -787,6 +815,32 @@ def test_key_light_projection_and_locked_floor_survive_mesh_changes(module_page)
         assert floor['grid'] == expected
         assert expected - 0.01 < floor['ground'] < expected
     assert result['clearedFloors'] == [2, 2, 0]
+    assert result['anchoredFloors'] == [1.25, 2, 1.25, 2, 2]
+    assert result['anchoredState'] is False
+
+
+def test_game_rig_ground_maps_the_avatar_plane_through_mesh_space(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {rigGroundAnchor} = await import('./js/weight-rig/rig-ground.js');
+      const half = Math.SQRT1_2;
+      // Avatar y-up stored as mesh z-up, with the Avatar origin 0.3 above the mesh origin.
+      const rig = {bones: [{name: 'mesh-space', parent: -1, translation: [0, 0, 0.3], rotation: [half, 0, 0, half]},
+                           {name: 'root', parent: 0, translation: [0, 0, 0], rotation: [0, 0, 0, 1]}]};
+      const scene = new THREE.Scene();
+      const mesh = new THREE.Mesh(); mesh.rotation.x = -Math.PI / 2; mesh.position.y = 1;
+      const detached = new THREE.Mesh();
+      scene.add(mesh);
+      const level = rigGroundAnchor(rig, [detached, mesh]);
+      const outside = rigGroundAnchor(rig, [detached]);
+      const seated = level();
+      mesh.rotation.x = 0;
+      const tilted = level();
+      const plain = rigGroundAnchor({bones: rig.bones.slice(1)}, [mesh]);
+      return {seated, tilted, outside: outside(), plain};
+    }""")
+    assert result['seated'] == pytest.approx(1.3)
+    assert result == {'seated': result['seated'], 'tilted': None, 'outside': None, 'plain': None}
 
 
 def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(module_page):

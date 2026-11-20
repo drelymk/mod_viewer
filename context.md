@@ -338,7 +338,10 @@ of documentation, comments and tests; use portable fixtures instead.
   by published URL, resolution and aspect policy; invalidate changed sources
   and clear on model replacement. Open UV views also compare replacement
   identity so same-URL republications cannot retain stale images.
-  Borrow ready model textures without disposing them. Preserve WebGPU readback
+  Borrow ready model textures without disposing them. Release parsed DDS levels
+  once Three.js reports the upload; a later upload request refetches the URL
+  (never uploads released levels) and must not override a newer reload.
+  Disposed DDS textures are evicted, not reused. Preserve WebGPU readback
   row alignment when packing display-sized previews.
 
 ## Animation reconstruction
@@ -1282,10 +1285,15 @@ of documentation, comments and tests; use portable fixtures instead.
   material reinterpretation. Preset floors are composited in the background
   node, never as scene geometry, and cached IBL captures the floorless sky;
   preset ambient/hemisphere tints derive from the same palette as the backdrop.
+  Procedural floor surfaces (tile, wood, dirt) only modulate that palette floor
+  around its mean and fade detail by pixel footprint, so tints still match.
   The floor, grid and shadow receiver share one ground frame locked from the
   visible rest-pose base (never padded animation bounds) at fit/load and
-  re-anchored only by quarter turns or Reset View; posing, physics, animation,
-  visibility and translation never move it. Shadow frustums grow in
+  re-anchored only by quarter turns or Reset View; posing, physics, animation
+  frames, visibility and translation never move it. Selecting a game-rig clip
+  seats only its height once on the Avatar ground (y = 0 through the extracted
+  `mesh-space` root), since bind-pose feet may sink below it; stopping the clip
+  restores the rest base. Shadow frustums grow in
   model-scaled steps and snap to texels. Outlines use child inverted hulls
   sharing geometry; wireframe/debug suppression retains the user's preference.
   Both normal and selection hulls need slope-aware raster depth bias scaled to

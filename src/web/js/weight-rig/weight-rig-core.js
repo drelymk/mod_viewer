@@ -9,7 +9,9 @@ import {
   getModelTransformState,
   invalidateCharacterShadowGeometry,
   renderer,
+  setCharacterGroundAnchor,
 } from '../scene/scene.js';
+import { rigGroundAnchor } from './rig-ground.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { rebuildModelRestFrames, rebuildSourceRigRestFrames } from './weight-rig-frames.js';
 import { buildModelRigCooperative, sourceBoneKey } from './weight-rig-reconcile.js';
@@ -326,12 +328,19 @@ const rigAnimation = createRigAnimation({
   prepare: () => {
     humanoidRigEditSession.cancel();
     rigPoseRuntime.resetPose({ request: false });
-    animationMeshes.prepare(getAnimationBinding(), { deform: !modelSkinningRig?.gameRig });
+    const binding = getAnimationBinding();
+    animationMeshes.prepare(binding, { deform: !modelSkinningRig?.gameRig });
+    // Clips stand on the game's ground, not on the bind pose's lowest point.
+    const rig = binding?.rig || modelSkinningRig?.gameRig;
+    setCharacterGroundAnchor(rigGroundAnchor(rig, binding?.meshes.keys() || knownMeshes));
   },
   suspendPhysics: (value) => rigPoseRuntime.setHumanoidEditPhysicsSuspended(value),
   applyPose: (transforms, { finalize = false, morphs = null } = {}) => {
     animationMeshes.setMorphs(getAnimationBinding(), morphs);
-    if (!transforms) animationMeshes.stop();
+    if (!transforms) {
+      animationMeshes.stop();
+      setCharacterGroundAnchor(null);
+    }
     if (transforms) {
       animationMeshes.apply(transforms, { finalize });
       if (!modelSkinningRig?.gameRig) return;
