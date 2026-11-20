@@ -8,6 +8,7 @@ import re
 import shutil
 
 from app.assets.animation_conversion import ReferencePoseMismatch, convert_clip, merge_reference_layer, reference_layer_timing
+from app.assets import animation_keys
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
 from . import montage_sequences
@@ -535,6 +536,13 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             reasons[reason] += 1
             continue
         base_hash = hashlib.sha256(binary).hexdigest()
+        # Bones the authored body track table keys; unknown tables record no evidence.
+        table = item["Properties"].get("TrackToSkeletonMapTable")
+        keyed = None
+        if isinstance(table, list) and all(isinstance(row, dict) for row in table):
+            ids = [row.get("BoneTreeIndex") for row in table]
+            if all(type(i) is int and 0 <= i < len(rig["bones"]) for i in ids):
+                keyed = set(ids)
         layer_info = None
         if package in pairs:
             layer_path, mask, timing = pairs[package]
@@ -549,6 +557,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                     raise ValueError("Secondary clip frame count differs from its sequence metadata.")
                 binary = merge_reference_layer(binary, layer_binary, rig, mask, duration=duration, layer_duration=layer_duration)
                 layer_info = dict(source=layer_path, sha256=hashlib.sha256(layer_data).hexdigest(), bone_ids=mask, timing=timing)
+                if keyed is not None:
+                    keyed.update(mask)
                 secondary += 1
             except (ValueError, KeyError) as error:
                 reject("layer", layer_path, str(error) if isinstance(error, ValueError) else "Secondary clip data is incomplete.", package)
@@ -570,6 +580,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             metadata["morphs"] = {**morph_targets, "names": morph_weights["names"]}
         if layer_info:
             metadata["reference_layer"] = layer_info
+        if keyed is not None:
+            metadata["keyed_bones"] = sorted(keyed)
         (library / (key + ".bin")).write_bytes(binary)
         write_document(library / (key + ".json"), metadata, 1024 * 1024)
         label = item["Name"]
@@ -621,7 +633,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         sequences.append(item)
         total += len(item["steps"])
         name_sequences += 1
-    manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()), sequences=sequences)
+    manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()), sequences=sequences,
+                    runtime_bones=animation_keys.runtime_bones(rig, existing.values()))
     write_document(library / "manifest.json", manifest, 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="wuwa", mesh=mesh_package,

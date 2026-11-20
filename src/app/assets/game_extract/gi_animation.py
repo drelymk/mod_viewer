@@ -195,7 +195,8 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
     """Convert one state's body (and optional streamer) clips to version-2 TQS data.
 
     ``facial`` (from ``zzz_morphs.prepare``) routes blend-shape curves to proven
-    captured targets. Returns ``(binary, frames, duration, omitted, goal_errors, morph)``.
+    captured targets. Returns ``(binary, frames, duration, omitted, goal_errors, morph, keyed)``,
+    where ``keyed`` is the sorted rig bone indices the clip keys (Humanoid-driven bones included).
     """
     start, stop = _timing(body)
     duration = stop - start
@@ -217,7 +218,7 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
     poses = np.array([[*b["translation"], *b["rotation"], *b["scale"]] for b in rig["bones"]], dtype=float)
     output = np.broadcast_to(poses, (frames, *poses.shape)).copy()
     omitted = dict(non_transform=0, translation_dof=0, humanoid_owned=0, unbound=0, masked=0)
-    written, channels, morph_columns, policies = set(), {}, {}, set()
+    written, layer_written, channels, morph_columns, policies = set(), set(), {}, {}, set()
     for binding, channel in _bindings(body, sample_channels(body, work, targets, reserved, QUATERNION_TOLERANCE)):
         morph = _morph_column(binding, channel, facial)
         if morph is not None:
@@ -260,7 +261,7 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
         s_start, s_stop = _timing(streamer)
         # Synced layers follow the base state's normalized time.
         layer_targets = s_start + (targets - start) / duration * (s_stop - s_start)
-        layer_written, layer_morphs = set(), set()
+        layer_morphs = set()
         for binding, channel in _bindings(streamer, sample_channels(streamer, work, layer_targets, reserved, QUATERNION_TOLERANCE)):
             morph = _morph_column(binding, channel, facial)
             if morph is not None:
@@ -295,7 +296,10 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
     goal_errors = None
     if errors:
         goal_errors = dict(hand=hand_error, foot=max((float(errors[name].max()) for name in ("LeftFoot", "RightFoot") if name in errors), default=None))
-    return binary, frames, duration, omitted, goal_errors, morph
+    keyed = {bone for bone, _attribute in written | layer_written}
+    if channels:
+        keyed.update(avatar_node + 1 for avatar_node in human)
+    return binary, frames, duration, omitted, goal_errors, morph, sorted(keyed)
 
 
 def streamer_mask(layer):

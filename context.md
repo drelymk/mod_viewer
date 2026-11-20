@@ -935,6 +935,25 @@ of documentation, comments and tests; use portable fixtures instead.
   Catalogs and clips use opaque loaded-session IDs, contained paths and lazy blob
   transport; clear publications on replacement and reject stale loads. Playback
   owns the pose and suspends Weight physics; manual posing/editing stops it.
+  Game clips leave runtime spring chains at a constant rest pose. Extraction records
+  each clip's `keyed_bones` and the manifest's `runtime_bones` (bones keyed by at most
+  5% of the clips that key their nearest authored ancestor, kept only where they or
+  runtime descendants are skinned); the catalog serves a clip's `secondary_bones` =
+  runtime minus that clip's keys, and `secondary-motion.js` simulates exactly those,
+  rewriting only their local rotations. Never select by bone names; libraries without
+  this evidence get no secondary motion until re-extracted. A bone aims at the child
+  with the most simulated descendants (the chain, not a dangling pendant); chain ends
+  follow their parent rigidly. Tails spring toward their clip pose under the simulated
+  parent, damped relative to that moving target (less damping makes long chains whip),
+  feel only part of the anchor's travel, and keep link length and per-joint and
+  whole-chain bend cones. Gravity and leg capsules come only from authored humanoid
+  controls. A held pose must never move on its own: gravity acts only as the anchor
+  turns from its orientation when the chain (re)started (bind A-pose arms would sag
+  sleeves), restarted chains settle before display, and leg contact is a soft force
+  (hard projections snap links across a leg) against capsules no larger than each
+  tail's bind-pose distance (fitted dresses sit inside them). Anchor jumps faster than
+  a body can move (clip loops) reseed the chains. Seeking, selecting and stopping
+  reset it; paused poses never step it.
   Stop restores baseline geometry and model disposal cancels pending loads/frames.
   Switching clips freezes the displayed pose until the replacement is ready, then
   starts it at zero. Keep only the active and incoming clip during that handoff;
@@ -1119,6 +1138,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Equally supported incompatible placements
   remain ambiguous. A larger animation Avatar may replace a model Avatar only
   with identical induced ancestry, reference worlds and remapped palettes.
+  When incompatible equally supported Avatars are versions of one Avatar object (same
+  CAB and path id) in different blocks, the most recently written block wins; an
+  unreadable or tied block time stays ambiguous.
   Accept legacy and short Unity mesh names only as candidate-discovery hints.
   Include legacy meshes named for child prop/variant families when scoring a
   body Avatar; a prop-only name match must not exclude the body before proof.

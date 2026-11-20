@@ -382,6 +382,8 @@ def test_zzz_extraction_rejects_uvless_candidate_and_keeps_verified_rig_and_clip
     entry = json.loads((output / "Animation/manifest.json").read_text())["clips"][0]
     metadata, data = read_clip(str(output / "Animation"), entry, rig)
     assert metadata["frame_count"] == 61 and data
+    assert isinstance(metadata["keyed_bones"], list) and metadata["keyed_bones"]
+    assert isinstance(json.loads((output / "Animation/manifest.json").read_text())["runtime_bones"], list)
     assert before == {file.name: file.read_bytes() for file in asset.iterdir()}
     # Without a UV-verifiable mesh, fail with the ordinary proof diagnostic.
     captured, _ = zzz_native.capture(root, record)
@@ -506,6 +508,44 @@ def test_zzz_equivalent_native_avatar_copies_and_genuine_ambiguity(tmp_path, dif
         reordered = zzz_pipeline.verify_candidates(client, captured, list(reversed(candidates)), "Character01", threading.Event())
         assert len(chosen["matched"]) == 1 and chosen["rig"]["id"] == reordered["rig"]["id"]
         assert chosen["source"] == min(zzz_index.identity(row) for row in (rows[0], duplicate_row))
+    else:
+        with pytest.raises(ValueError, match="ambiguous"):
+            zzz_pipeline.verify_candidates(client, captured, candidates, "Character01", threading.Event())
+
+
+@pytest.mark.parametrize("case", ["copy_newer", "original_newer", "tied", "missing_block", "different_object"])
+def test_zzz_stale_block_version_of_one_avatar_yields_to_the_newest_block(tmp_path, case):
+    root, _asset, record, avatar, mesh, rows, client = fixture(tmp_path)
+    mesh["name"] = rows[1]["name"] = "Character01_Body"
+    rows[1]["shape"] = [[3, 3]]
+    avatar["bones"].append(dict(path="Root/Unused01", hash=200, parent=0,
+        translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
+    version = deepcopy(avatar)
+    version["bones"][-1]["translation"][0] = .01
+    other_block = "ZenlessZoneZero_Data/StreamingAssets/Blocks/2.blk"
+    version_row = {**rows[0], "block": other_block, **({"path_id": 50} if case == "different_object" else {})}
+    original_read = client.read
+    def read(row):
+        return deepcopy(version) if row["block"] == other_block else original_read(row)
+    client.read = read
+    game = tmp_path / "game"
+    client.root = game
+    for row, stamp in ((rows[0], 1_000), (version_row, 1_000 if case == "tied" else 2_000 if case == "copy_newer" else 500)):
+        file = game / row["block"]
+        if case == "missing_block" and row is version_row:
+            continue
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(b"block")
+        os.utime(file, ns=(stamp * 10**9, stamp * 10**9))
+    captured, _files = zzz_native.capture(root, record)
+    candidates = [*rows, version_row]
+    if case in ("copy_newer", "original_newer"):
+        newest = version_row if case == "copy_newer" else rows[0]
+        for ordered in (candidates, list(reversed(candidates))):
+            chosen = zzz_pipeline.verify_candidates(client, captured, ordered, "Character01", threading.Event())
+            assert chosen["source"] == zzz_index.identity(newest)
+            assert chosen["avatar_sources"] == {zzz_index.identity(newest)}
+            assert chosen["rig"]["bones"][-1]["translation"][0] == pytest.approx(.01 if case == "copy_newer" else 0, abs=1e-6)
     else:
         with pytest.raises(ValueError, match="ambiguous"):
             zzz_pipeline.verify_candidates(client, captured, candidates, "Character01", threading.Event())
@@ -695,9 +735,11 @@ def test_zzz_mixed_streamed_dense_constant_tracks_without_acl(tmp_path, step, tr
             dict(index=i, value=time if i == 0 else 0, incoming=0, outgoing="Infinity" if step else 0)
             for i in range(3)]) for time in (0, 1)])
     rig = dict(bones=[dict(translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])] * 3)
-    data, frames, duration, omitted, morph = zzz_animation.convert(metadata, client.work, rig, avatar)
+    data, frames, duration, omitted, morph, keyed = zzz_animation.convert(metadata, client.work, rig, avatar)
     samples = np.frombuffer(data, dtype="<f4").reshape(frames, 3, 10)
     assert duration == 1 and omitted == 0 and morph is None
+    # The only transform track targets avatar bone hash 100, the rig's bone 2.
+    assert keyed == [2]
     assert samples[15, 2, 0] == pytest.approx(translation)
     assert samples[15, 2, 3:7] == pytest.approx([0, 0, np.sin(np.pi / 8), np.cos(np.pi / 8)])
     assert samples[-1, 2, 0] == 1 and list(samples[-1, 2, 7:]) == [1, 2, 1]
@@ -751,7 +793,8 @@ def test_zzz_facial_weights_follow_verified_player_policy(tmp_path, policy):
         with pytest.raises(ValueError, match="weight policy is unavailable"):
             zzz_animation.convert(metadata, client.work, rig, avatar, {(0, 123): ("Shape01", 100)})
         return
-    raw, frames, _duration, _omitted, morph = zzz_animation.convert(metadata, client.work, rig, avatar, {(0, 123): ("Shape01", 100)})
+    raw, frames, _duration, _omitted, morph, keyed = zzz_animation.convert(metadata, client.work, rig, avatar, {(0, 123): ("Shape01", 100)})
+    assert keyed == [2]
     weights = np.frombuffer(raw, dtype="<f4")[-frames:]
     assert weights[[0, -1]] == pytest.approx([0, 1] if policy else [-.25, 1.5])
     assert weights[30] == pytest.approx(.625)

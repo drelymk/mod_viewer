@@ -9,7 +9,7 @@ import uuid
 from threading import RLock
 
 from app.runtime import server
-from . import paths
+from . import animation_keys, paths
 from .animation_morphs import idle_blink, morph_names, read_morphs
 
 
@@ -214,6 +214,7 @@ class AnimationSessions:
             if not entries or not is_current():
                 return empty
             sequences = _sequences(raw.get("sequences"), entries)
+            runtime = animation_keys.bone_list(raw.get("runtime_bones"), len(rig["bones"]))
             token = uuid.uuid4().hex
             with self._lock:
                 if len(self._sessions) >= 32:
@@ -221,7 +222,7 @@ class AnimationSessions:
                     for url in old["urls"]:
                         server.release_geometry(url)
                 self._sessions[token] = dict(directory=animation_dir, entries=entries, rig=rig,
-                                              is_current=is_current, urls=set())
+                                              is_current=is_current, urls=set(), runtime=runtime)
             return {"animation_session": token,
                     "animations": [{"id": e["id"], "name": e["name"], "duration": e["duration"]}
                                    for e in entries.values()],
@@ -260,6 +261,12 @@ class AnimationSessions:
                     "version": raw["version"], "layout": raw["layout"],
                     "frame_count": raw["frame_count"], "bone_count": raw["bone_count"], "duration": raw["duration"],
                     "data": {"url": url, "length": len(data)}}
+            # Bones the game leaves to runtime physics that this clip does not key.
+            keyed = animation_keys.bone_list(raw.get("keyed_bones"), raw["bone_count"])
+            if session["runtime"] and keyed is not None:
+                secondary = sorted(set(session["runtime"]) - set(keyed))
+                if secondary:
+                    clip["secondary_bones"] = secondary
             if morph_data is not None:
                 clip["morphs"] = {"names": raw["morphs"]["names"], "components": raw["morphs"]["components"],
                                   "data": {"url": morph_url, "length": len(morph_data)}}
