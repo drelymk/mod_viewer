@@ -53,6 +53,15 @@
   <symbol id="icon-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8Z"/></symbol>
   <symbol id="icon-pause" viewBox="0 0 24 24"><path d="M7 4h3v16H7zM14 4h3v16h-3z"/></symbol>
   <symbol id="icon-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+  <symbol id="icon-skip-previous" viewBox="0 0 24 24"><path d="M6 5v14M18 5l-9 7 9 7Z"/></symbol>
+  <symbol id="icon-skip-next" viewBox="0 0 24 24"><path d="M18 5v14M6 5l9 7-9 7Z"/></symbol>
+  <symbol id="icon-animation" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7.5 5v14M16.5 5v14M3 9.5h4.5M3 14.5h4.5M16.5 9.5H21M16.5 14.5H21"/></symbol>
+  <symbol id="icon-clip" viewBox="0 0 24 24"><path d="m9 8.5 6 3.5-6 3.5Z"/><rect x="3" y="4" width="18" height="16" rx="2.5"/></symbol>
+  <symbol id="icon-sequence" viewBox="0 0 24 24"><rect x="2.5" y="7" width="5" height="10" rx="1.2"/><rect x="9.5" y="7" width="5" height="10" rx="1.2"/><rect x="16.5" y="7" width="5" height="10" rx="1.2"/></symbol>
+  <symbol id="icon-rest-pose" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><path d="M4 9.5h16M12 9.5v5.5M12 15l-3 6M12 15l3 6"/></symbol>
+  <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></symbol>
+  <symbol id="icon-chevron-up" viewBox="0 0 24 24"><path d="m5 15 7-7 7 7"/></symbol>
   <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m5 9 7 7 7-7"/></symbol>
   <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="m14 5-7 7 7 7"/></symbol>
   <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
@@ -273,22 +282,54 @@
 
   <div id="animation-playback" class="animation-playback" role="group"
        aria-label="Animation playback" data-i18n-aria-label="animation.playback" hidden>
-    <div id="animation-clip-controls" class="animation-clip-controls" hidden>
-      <button id="animation-previous" class="tool-btn" type="button" data-i18n-title="animation.previous" data-i18n-aria-label="animation.previous">
-        <svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-left"></use></svg>
+    <div id="animation-clip-controls" class="animation-head" hidden>
+      <button id="animation-clip" class="animation-picker-trigger" type="button"
+              aria-haspopup="listbox" aria-expanded="false" aria-controls="animation-picker">
+        <svg class="ui-icon animation-kind-icon" aria-hidden="true"><use href="#icon-rest-pose"></use></svg>
+        <span class="animation-picker-name"></span>
+        <span class="animation-picker-meta"></span>
+        <svg class="ui-icon animation-picker-chevron" aria-hidden="true"><use href="#icon-chevron-up"></use></svg>
       </button>
-      <select id="animation-clip" data-i18n-aria-label="animation.select"></select>
-      <button id="animation-next" class="tool-btn" type="button" data-i18n-title="animation.next" data-i18n-aria-label="animation.next">
-        <svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+      <button id="animation-previous" class="animation-icon-btn" type="button" title="Previous animation" aria-label="Previous animation" data-i18n-title="animation.previous" data-i18n-aria-label="animation.previous">
+        <svg class="ui-icon" aria-hidden="true"><use href="#icon-skip-previous"></use></svg>
+      </button>
+      <button id="animation-next" class="animation-icon-btn" type="button" title="Next animation" aria-label="Next animation" data-i18n-title="animation.next" data-i18n-aria-label="animation.next">
+        <svg class="ui-icon" aria-hidden="true"><use href="#icon-skip-next"></use></svg>
       </button>
     </div>
-    <button id="animation-play-pause" class="tool-btn" type="button"
-            aria-label="Pause animation" title="Pause animation" hidden>
-      <svg class="ui-icon" aria-hidden="true"><use href="#icon-pause"></use></svg>
-    </button>
-    <input id="animation-frame" class="range-control-slider" type="range" step="1"
-           aria-label="Animation frame" data-i18n-aria-label="animation.frame" hidden/>
-    <output id="animation-frame-counter" for="animation-frame" hidden></output>
+    <div id="animation-transport" class="animation-transport">
+      <button id="animation-play-pause" class="tool-btn animation-play" type="button"
+              aria-label="Pause animation" title="Pause animation" hidden>
+        <svg class="ui-icon" aria-hidden="true"><use href="#icon-pause"></use></svg>
+      </button>
+      <button id="animation-stop" class="animation-icon-btn" type="button" title="Stop" aria-label="Stop"
+              data-i18n-title="animation.stop" data-i18n-aria-label="animation.stop">
+        <svg class="ui-icon animation-stop-icon" aria-hidden="true"><use href="#icon-stop"></use></svg>
+      </button>
+      <div class="animation-timeline">
+        <div id="animation-steps" class="animation-steps" aria-hidden="true" hidden></div>
+        <input id="animation-frame" class="animation-slider" type="range" step="1"
+               aria-label="Animation frame" data-i18n-aria-label="animation.frame" hidden/>
+      </div>
+      <output id="animation-frame-counter" class="animation-readout" for="animation-frame" hidden></output>
+    </div>
+    <div id="animation-message" class="animation-message" role="status" hidden></div>
+  </div>
+  <div id="animation-picker" class="ui-popover animation-picker" hidden>
+    <div class="animation-search">
+      <svg class="ui-icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+      <input id="animation-search" type="search" autocomplete="off" spellcheck="false"
+             role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="animation-options"
+             placeholder="Search animations" data-i18n-placeholder="animation.search"
+             aria-label="Search animations" data-i18n-aria-label="animation.search"/>
+    </div>
+    <div class="animation-filters" role="group" aria-label="Animation type" data-i18n-aria-label="animation.type">
+      <button type="button" class="animation-filter" data-filter="all" aria-pressed="true"><span data-i18n="animation.filterAll">All</span><span class="animation-filter-count"></span></button>
+      <button type="button" class="animation-filter" data-filter="clips" aria-pressed="false"><span data-i18n="animation.filterClips">Clips</span><span class="animation-filter-count"></span></button>
+      <button type="button" class="animation-filter" data-filter="sequences" aria-pressed="false"><span data-i18n="weightRig.animationSequences">Sequences</span><span class="animation-filter-count"></span></button>
+    </div>
+    <ul id="animation-options" class="animation-options" role="listbox" aria-label="Select animation" data-i18n-aria-label="animation.select"></ul>
+    <div id="animation-options-empty" class="animation-options-empty" data-i18n="animation.noMatches" hidden>No matching animations</div>
   </div>
   <div id="tool-panel" class="viewport-toolbar">
     <div id="viewport-camera-buttons" class="viewport-camera-buttons" aria-label="Viewport orientation"></div>
@@ -311,6 +352,12 @@
           <path class="nav-x" d="M12 12L20 15"/><path class="nav-y" d="M12 12V3"/><path class="nav-z" d="M12 12L5 18"/>
           <circle class="nav-x" cx="20" cy="15" r="2"/><circle class="nav-y" cx="12" cy="3" r="2"/><circle class="nav-z" cx="5" cy="18" r="2"/>
         </svg>
+      </button>
+    </div>
+    <div id="animation-tools" class="viewport-animation-buttons" hidden>
+      <button id="animation-toggle-btn" class="tool-btn active" type="button" aria-pressed="true"
+              title="Hide animation controls" aria-label="Hide animation controls">
+        <svg class="ui-icon" aria-hidden="true"><use href="#icon-animation"></use></svg>
       </button>
     </div>
   </div>
@@ -377,34 +424,36 @@
     <div id="menu-list"></div>
   </div>
   </div>
-  <div id="texture-popover" class="ui-popover tool-popover" role="menu" aria-label="Texture display options" data-i18n-aria-label="render.textureOptions" hidden></div>
-  <div id="light-popover" class="ui-popover tool-popover range-popover" role="dialog"
-       aria-label="Key light" data-i18n-aria-label="render.keyLight" hidden>
-    <div class="range-control-row">
-      <label for="light-slider" data-i18n="render.keyLight">Key light</label>
-      <output id="light-value" class="range-control-value" for="light-slider">67%</output>
-    </div>
-    <input id="light-slider" class="range-control-slider" type="range"
-           min="0" max="100" step="1" value="67"/>
+</div>
+
+<!-- Toolbar popovers stay at body level so viewport docks never cover them. -->
+<div id="texture-popover" class="ui-popover tool-popover" role="menu" aria-label="Texture display options" data-i18n-aria-label="render.textureOptions" hidden></div>
+<div id="light-popover" class="ui-popover tool-popover range-popover" role="dialog"
+     aria-label="Key light" data-i18n-aria-label="render.keyLight" hidden>
+  <div class="range-control-row">
+    <label for="light-slider" data-i18n="render.keyLight">Key light</label>
+    <output id="light-value" class="range-control-value" for="light-slider">67%</output>
   </div>
-  <div id="glossy-popover" class="ui-popover tool-popover range-popover" role="dialog"
-       aria-label="Glossy materials" data-i18n-aria-label="render.glossyLabel" hidden>
-    <div class="range-control-row">
-      <label for="glossy-slider" data-i18n="render.glossyLabel">Glossy materials</label>
-      <output id="glossy-value" class="range-control-value" for="glossy-slider">0%</output>
-    </div>
-    <input id="glossy-slider" class="range-control-slider" type="range"
-           min="0" max="100" step="1" value="0"/>
+  <input id="light-slider" class="range-control-slider" type="range"
+         min="0" max="100" step="1" value="67"/>
+</div>
+<div id="glossy-popover" class="ui-popover tool-popover range-popover" role="dialog"
+     aria-label="Glossy materials" data-i18n-aria-label="render.glossyLabel" hidden>
+  <div class="range-control-row">
+    <label for="glossy-slider" data-i18n="render.glossyLabel">Glossy materials</label>
+    <output id="glossy-value" class="range-control-value" for="glossy-slider">0%</output>
   </div>
-  <div id="ao-popover" class="ui-popover tool-popover range-popover" role="dialog"
-       aria-label="Ambient occlusion" data-i18n-aria-label="render.ambientOcclusionLabel" hidden>
-    <div class="range-control-row">
-      <label for="ao-slider" data-i18n="render.ambientOcclusionLabel">Ambient occlusion</label>
-      <output id="ao-value" class="range-control-value" for="ao-slider">0%</output>
-    </div>
-    <input id="ao-slider" class="range-control-slider" type="range"
-           min="0" max="100" step="1" value="0"/>
+  <input id="glossy-slider" class="range-control-slider" type="range"
+         min="0" max="100" step="1" value="0"/>
+</div>
+<div id="ao-popover" class="ui-popover tool-popover range-popover" role="dialog"
+     aria-label="Ambient occlusion" data-i18n-aria-label="render.ambientOcclusionLabel" hidden>
+  <div class="range-control-row">
+    <label for="ao-slider" data-i18n="render.ambientOcclusionLabel">Ambient occlusion</label>
+    <output id="ao-value" class="range-control-value" for="ao-slider">0%</output>
   </div>
+  <input id="ao-slider" class="range-control-slider" type="range"
+         min="0" max="100" step="1" value="0"/>
 </div>
 
 <div id="asset-extract-backdrop" class="modal-backdrop">

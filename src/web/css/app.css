@@ -1445,23 +1445,170 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .tool-popover {
   position: fixed; top: auto; right: auto; bottom: auto; left: auto;
   min-width: 170px; max-width: calc(100vw - 16px);
+  /* Popovers overlay the playback dock; blur keeps their content legible. */
+  backdrop-filter: blur(calc(var(--panel-blur) + 6px));
 }
 
+/* ── animation playback dock ─────────────────────────────────────────────── */
 .animation-playback {
-  position: fixed; left: 50%; bottom: calc(var(--footer-height) + 64px);
+  position: fixed; left: 50%; bottom: calc(var(--footer-height) + 62px);
   transform: translateX(-50%); z-index: 200;
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 5px 8px;
-  box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-md);
+  display: flex; flex-direction: column; gap: 6px; padding: 7px 8px;
+  min-width: min(380px, calc(100vw - 16px)); max-width: calc(100vw - 16px);
+  border: 1px solid rgba(139,148,158,.45); border-radius: var(--radius-md);
   background: var(--panel-background); backdrop-filter: blur(var(--panel-blur));
+  box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
 }
 .animation-playback[hidden] { display: none; }
-.animation-clip-controls { display: flex; align-items: center; gap: 8px; width: 100%; }
-.animation-clip-controls[hidden] { display: none; }
-.animation-clip-controls select { flex: 1; min-width: 0; width: 0; }
-.animation-playback .tool-btn { width: 30px; height: 30px; min-width: 30px; }
-.animation-playback .ui-icon { width: 17px; height: 17px; }
-.animation-playback .range-control-slider { flex: 1; min-width: 0; width: auto; }
-.animation-playback output { font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.animation-head { display: flex; align-items: center; gap: 2px; }
+.animation-head[hidden] { display: none; }
+.animation-picker-trigger {
+  flex: 1; min-width: 0; height: 30px; margin-right: 4px; padding: 0 8px 0 9px;
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text); font: inherit; font-size: 12px; text-align: left;
+  background: var(--panel-fill-control); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.animation-picker-trigger:hover:not(:disabled),
+.animation-picker-trigger[aria-expanded="true"] { background: var(--panel-fill-hover); border-color: #485363; }
+.animation-picker-trigger:disabled { opacity: .5; cursor: default; }
+.animation-picker-trigger .ui-icon { width: 15px; height: 15px; color: var(--text-muted); }
+.animation-picker-trigger[data-kind="clip"] .animation-kind-icon,
+.animation-option[data-kind="clip"] .ui-icon { color: var(--accent-soft); }
+.animation-picker-trigger[data-kind="sequence"] .animation-kind-icon,
+.animation-option[data-kind="sequence"] .ui-icon { color: #d2a8ff; }
+.animation-picker-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;
+}
+.animation-picker-meta, .animation-option-meta {
+  color: var(--text-muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.animation-picker-chevron { transition: transform .15s; }
+.animation-picker-trigger[aria-expanded="true"] .animation-picker-chevron { transform: rotate(180deg); }
+.animation-icon-btn {
+  width: 30px; height: 30px; flex: 0 0 auto; padding: 0; display: grid; place-items: center;
+  color: #c9d1d9; background: transparent; border: 1px solid transparent;
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.animation-icon-btn:hover:not(:disabled) { color: var(--text); background: var(--panel-fill-hover); border-color: var(--border); }
+.animation-icon-btn:disabled { opacity: .35; cursor: default; }
+.animation-icon-btn .ui-icon { width: 16px; height: 16px; fill: currentColor; }
+.animation-transport { display: flex; align-items: center; gap: 4px; }
+.animation-playback .animation-play {
+  width: 34px; height: 34px; min-width: 34px; margin-right: 2px; border-radius: 50%;
+  color: #fff; background: var(--accent); border-color: transparent;
+}
+.animation-playback .animation-play:hover:not(:disabled) { background: var(--accent-hover); }
+.animation-play:disabled { opacity: .5; cursor: default; }
+.animation-play .ui-icon { fill: currentColor; stroke-width: 1.2; }
+.animation-playback .animation-play .ui-icon { width: 15px; height: 15px; }
+.animation-timeline {
+  position: relative; flex: 1; min-width: 0; height: 24px; margin: 0 6px; display: flex; align-items: center;
+}
+/* Sequences scrub over their step bar; the 6px inset keeps the thumb centre on the
+ * position it seeks. */
+.animation-timeline.sequence .animation-steps {
+  position: absolute; left: 6px; right: 6px; top: 50%; transform: translateY(-50%); pointer-events: none;
+}
+.animation-timeline.sequence .animation-slider { position: relative; }
+.animation-timeline.sequence .animation-slider::-webkit-slider-runnable-track { background: transparent; }
+.animation-timeline.sequence .animation-slider:not(:disabled)::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(163,113,247,.4), 0 1px 3px rgba(0,0,0,.5);
+}
+.animation-slider {
+  --progress: 0%;
+  width: 100%; height: 18px; margin: 0; background: transparent; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+}
+.animation-slider[hidden] { display: none; }
+.animation-slider::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 4px;
+  background: linear-gradient(to right, var(--accent-soft) var(--progress), rgba(139,148,158,.32) var(--progress));
+}
+.animation-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -4px;
+  border: 0; border-radius: 50%; background: #fff;
+  box-shadow: 0 0 0 3px rgba(31,111,235,.35), 0 1px 3px rgba(0,0,0,.5); transition: transform .1s;
+}
+.animation-slider:hover:not(:disabled)::-webkit-slider-thumb { transform: scale(1.18); }
+.animation-slider:focus-visible { box-shadow: none; }
+.animation-slider:focus-visible::-webkit-slider-thumb { box-shadow: var(--focus-ring); }
+.animation-slider:disabled { cursor: default; }
+.animation-slider:disabled::-webkit-slider-thumb { background: var(--text-muted); box-shadow: none; }
+.animation-steps { flex: 1; min-width: 0; height: 8px; display: flex; gap: 3px; }
+.animation-steps[hidden] { display: none; }
+.animation-step {
+  --fill: 0;
+  position: relative; flex: 1 1 0; min-width: 6px; overflow: hidden;
+  border-radius: 3px; background: rgba(139,148,158,.28);
+}
+.animation-step::after {
+  content: ''; position: absolute; inset: 0; background: #a371f7;
+  transform: scaleX(var(--fill)); transform-origin: left;
+}
+.animation-step.active { box-shadow: 0 0 0 1px rgba(210,168,255,.75); }
+.animation-readout {
+  min-width: 88px; text-align: right; font-size: 11px; color: var(--text-muted);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.animation-readout[hidden] { display: none; }
+.animation-message { padding: 0 2px; font-size: 11px; line-height: 1.35; color: var(--danger); overflow-wrap: anywhere; }
+.animation-message[hidden] { display: none; }
+
+.ui-popover.animation-picker {
+  position: fixed; top: auto; right: auto; z-index: 260;
+  gap: 7px; min-width: 0; padding: 8px; overflow: hidden;
+  border-color: rgba(139,148,158,.45); backdrop-filter: blur(var(--panel-blur));
+}
+.animation-search {
+  height: 32px; padding: 0 9px; display: flex; align-items: center; gap: 7px; flex: 0 0 auto;
+  color: var(--text-muted); background: var(--panel-fill-inset);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.animation-search:focus-within { border-color: var(--accent-soft); }
+.animation-search .ui-icon { width: 15px; height: 15px; }
+.animation-search input {
+  flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0;
+  color: var(--text); background: transparent; font: inherit; font-size: 12px; user-select: text;
+}
+.animation-search input::placeholder { color: var(--text-muted); }
+.animation-search input:focus-visible { box-shadow: none; }
+.animation-filters { display: flex; gap: 4px; flex: 0 0 auto; }
+.animation-filters[hidden] { display: none; }
+.animation-filter {
+  height: 26px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px;
+  color: var(--text-muted); background: transparent; font: inherit; font-size: 11px; font-weight: 600;
+  border: 1px solid var(--border); border-radius: 999px; cursor: pointer;
+}
+.animation-filter:hover { color: var(--text); background: var(--panel-fill-hover); }
+.animation-filter[aria-pressed="true"] { color: #fff; background: var(--accent); border-color: transparent; }
+.animation-filter-count { font-weight: 500; opacity: .75; font-variant-numeric: tabular-nums; }
+.animation-options {
+  flex: 1 1 auto; min-height: 0; margin: 0 -4px; padding: 0 4px;
+  list-style: none; overflow-y: auto; overscroll-behavior: contain;
+}
+.animation-option-group {
+  display: flex; justify-content: space-between; padding: 8px 8px 4px;
+  color: var(--text-muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+}
+.animation-option {
+  min-height: 30px; padding: 0 8px; display: flex; align-items: center; gap: 8px;
+  color: var(--text); font-size: 12px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.animation-option .ui-icon { width: 15px; height: 15px; color: var(--text-muted); }
+.animation-option.active { background: var(--surface-active); }
+.animation-option[aria-selected="true"] {
+  color: var(--accent-soft); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent-soft);
+}
+.animation-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.animation-options-empty { padding: 18px 8px; text-align: center; font-size: 12px; color: var(--text-muted); }
+.animation-options-empty[hidden] { display: none; }
+#tool-panel.viewport-toolbar .viewport-animation-buttons {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 4px;
+  padding: 0 0 0 6px; margin: 0 0 0 6px; border-left: 1px solid var(--border);
+}
+#tool-panel.viewport-toolbar .viewport-animation-buttons[hidden] { display: none; }
+#animation-toggle-btn.active { background: var(--accent); }
 
 @media (max-width: 760px) {
   #toolbar { gap: 8px; padding: 0 10px; }

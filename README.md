@@ -118,16 +118,23 @@ differ from the game.
 
 #### Pause animation or inspect a frame
 
-1. While a supported animation is active, click `Pause animation` to freeze
-   playback, or `Play animation` to resume it. The button appears in the
-   viewport toolbar or alongside the frame slider when one is available.
-2. For baked animations sharing one synchronized timeline, drag the
-   `Animation frame` slider to inspect a specific frame. Seeking pauses
+1. While a supported animation is active, click `Pause animation` (or press
+   Space while the viewport has focus) to freeze playback, and `Play animation`
+   to resume it. `Stop` pauses and returns to the first frame.
+2. For baked animations sharing one synchronized timeline, the playback dock
+   above the viewport toolbar shows the `Animation frame` slider. Seeking pauses
    playback and shows the current frame counter; click `Play animation` to
-   continue from that frame.
-3. Compute animations and independent timelines provide Play/Pause without
-   frame seeking. Playback controls appear only for visible animated geometry
-   that is not currently controlled by Rig or Physics.
+   continue from that frame. The film-strip button at the end of the toolbar
+   hides or shows the dock; while it is hidden, Play/Pause stays beside it.
+3. Compute animations and independent timelines provide Play/Pause in the
+   toolbar without frame seeking. Playback controls appear only for visible
+   animated geometry that is not currently controlled by Rig or Physics.
+4. With a rig animation library loaded, click the animation name in the dock to
+   open a searchable list. Type any part of a name, filter `Clips` or
+   `Sequences`, use the arrow keys and Enter to choose, or pick `Rest pose`.
+   Previous/Next step through the current kind in list order. A sequence's time
+   slider runs over its step bar, so you can drag or click anywhere across all
+   of its steps. Play after `Stop` resumes the last choice.
 
 Pausing and seeking affect only the preview. They do not change the mod's
 control values or write animation data.

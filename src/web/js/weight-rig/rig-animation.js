@@ -3,16 +3,19 @@ import { getLocale, t } from '../i18n/index.js';
 import { mergeClipMorphs, sampleMergedMorphWeights, sampleMorphWeights } from './animation-morphs.js';
 import { createIdleBlink, sampleIdleBlink } from './idle-blink.js';
 
+// The locale-aware natural name order every animation picker shares.
+export function sortRigAnimations(items) {
+  const locale = getLocale();
+  return [...items].sort((left, right) =>
+    left.name.localeCompare(right.name, locale, { numeric: true, sensitivity: 'base' }),
+  );
+}
+
 // Every clip picker shows the same locale-sorted order after the Rest option;
 // authored sequences follow in their own group. Returns the combined order.
 export function fillRigClipSelect(select, clips, sequences = []) {
-  const locale = getLocale();
-  const order = (items) =>
-    [...items].sort((left, right) =>
-      left.name.localeCompare(right.name, locale, { numeric: true, sensitivity: 'base' }),
-    );
-  const sorted = order(clips);
-  const sortedSequences = order(sequences);
+  const sorted = sortRigAnimations(clips);
+  const sortedSequences = sortRigAnimations(sequences);
   select.replaceChildren(new Option(t('weightRig.animationRest'), ''));
   sorted.forEach((clip) => select.add(new Option(clip.name, clip.id)));
   if (sortedSequences.length) {
@@ -170,8 +173,20 @@ export function createRigAnimation({
   let outgoing = null;
   let fadeElapsed = 0;
   let fadeDuration = 0;
+  // Backend loads replace the previous publication, so step downloads never overlap.
+  let stepLoad = null;
   // A stable empty list keeps pickers from rebuilding on every tick.
   const sequences = () => getRig()?.animation_sequences || NO_SEQUENCES;
+  // A sequence timeline is its steps' start-to-leave spans laid end to end;
+  // crossfades overlap the next step's start, so they add no length.
+  const span = (entry) => Math.max(0, entry.leave - entry.start);
+  const sequenceDuration = () => sequence.steps.reduce((total, entry) => total + span(entry), 0);
+  const sequenceTime = () => {
+    let offset = 0;
+    for (let index = 0; index < step; index++) offset += span(sequence.steps[index]);
+    const current = sequence.steps[step];
+    return offset + Math.max(0, Math.min(span(current), time - current.start));
+  };
   const snapshot = () => ({
     clips: getRig()?.animations || [],
     sequences: sequences(),
@@ -184,6 +199,8 @@ export function createRigAnimation({
     duration: clip?.duration || 0,
     step: sequence ? step : null,
     stepCount: sequence ? sequence.steps.length : 0,
+    sequenceTime: sequence ? sequenceTime() : null,
+    sequenceDuration: sequence ? sequenceDuration() : 0,
   });
   const changed = () => notify(snapshot());
   const pose = ({ finalize = !playing } = {}) => {
@@ -256,10 +273,60 @@ export function createRigAnimation({
       next = cache.get(id) || { clip, values };
       return;
     }
-    const rig = getRig();
-    loadEntry(rig, id, current).then(
+    loadStep(id, current).then(
       (entry) => {
         if (entry && current === generation && sequence) next = entry;
+      },
+      (failure) => fail(failure, current),
+    );
+  }
+  // Queue a step download behind any in flight; superseded requests are skipped.
+  function loadStep(id, current) {
+    const rig = getRig();
+    const start = () => (current === generation ? loadEntry(rig, id, current) : null);
+    // With nothing in flight the download starts now, not a microtask later.
+    const result = stepLoad ? stepLoad.then(start) : Promise.resolve(start());
+    const settled = result.catch(() => null);
+    stepLoad = settled;
+    settled.then(() => {
+      if (stepLoad === settled) stepLoad = null;
+    });
+    return result;
+  }
+  // Seek to a position on the sequence timeline. A resident step clip applies at
+  // once; otherwise the current pose holds until that clip has downloaded.
+  function seekSequence(value) {
+    const total = sequenceDuration();
+    let remaining = Math.max(0, Math.min(total, value));
+    let index = 0;
+    while (index < sequence.steps.length - 1 && remaining >= span(sequence.steps[index])) {
+      remaining -= span(sequence.steps[index]);
+      index += 1;
+    }
+    const target = sequence.steps[index];
+    // A new generation drops downloads and handoffs queued for the old position.
+    const current = ++generation;
+    const apply = (entry) => {
+      ({ clip, values } = entry);
+      step = index;
+      time = target.start + remaining;
+      next = null;
+      outgoing = null;
+      fadeElapsed = 0;
+      fadeDuration = 0;
+      last = performance.now();
+      preload(current);
+      pose();
+      changed();
+    };
+    const resident = target.clip === clip.id ? { clip, values } : cache?.get(target.clip);
+    if (resident) {
+      apply(resident);
+      return;
+    }
+    loadStep(target.clip, current).then(
+      (entry) => {
+        if (entry && current === generation && sequence) apply(entry);
       },
       (failure) => fail(failure, current),
     );
@@ -468,9 +535,13 @@ export function createRigAnimation({
     select,
     stop,
     setPlaying,
+    // Clips seek in clip seconds; sequences seek along their whole timeline.
     seek(value) {
-      // Sequence steps are loaded one handoff at a time, so they cannot be scrubbed.
-      if (!clip || sequence) return;
+      if (!clip || loading) return;
+      if (sequence) {
+        seekSequence(Number(value) || 0);
+        return;
+      }
       time = Math.max(0, Math.min(clip.duration, Number(value) || 0));
       last = performance.now();
       pose();
