@@ -185,6 +185,9 @@
     </svg>
   </div>
 </div>
+<button id="focus-exit-btn" class="ui-button focus-exit-btn" type="button" hidden>
+  <span data-i18n="panels.showPanels">Show panels</span><kbd>\</kbd>
+</button>
 
 <div id="left-dock">
   <div id="left-dock-header">
@@ -202,6 +205,10 @@
       <svg class="ui-icon" aria-hidden="true"><use href="#icon-assets"></use></svg><span data-i18n="panels.assets">Assets</span>
     </button>
   </nav>
+  <button id="left-dock-collapse" class="dock-collapse-btn" type="button"
+          aria-controls="left-panel-container" aria-expanded="false">
+    <svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-left"></use></svg>
+  </button>
     <div id="mesh-selection-modes" class="dock-tabs mesh-selection-modes" role="toolbar" hidden></div>
   </div>
 
@@ -257,6 +264,9 @@
       </div>
       <div id="mesh-list"></div>
     </section>
+    <div id="left-dock-resizer" class="dock-resizer" role="separator" tabindex="0"
+         aria-orientation="vertical" aria-controls="left-dock"
+         aria-label="Resize left panel" data-i18n-aria-label="panels.resizeLeft"></div>
   </div>
 
   <div id="camera-panel">
@@ -353,6 +363,8 @@
           <circle class="nav-x" cx="20" cy="15" r="2"/><circle class="nav-y" cx="12" cy="3" r="2"/><circle class="nav-z" cx="5" cy="18" r="2"/>
         </svg>
       </button>
+      <button id="focus-mode-btn" class="tool-btn" type="button" aria-pressed="false"
+              title="Focus mode (\): off" aria-label="Focus mode (\): off"><svg class="ui-icon" aria-hidden="true"><use href="#icon-expand"></use></svg></button>
     </div>
     <div id="animation-tools" class="viewport-animation-buttons" hidden>
       <button id="animation-toggle-btn" class="tool-btn active" type="button" aria-pressed="true"
@@ -364,6 +376,10 @@
 </div>
 
   <div id="right-dock">
+  <div id="right-dock-resizer" class="dock-resizer" role="separator" tabindex="0"
+       aria-orientation="vertical" aria-controls="right-dock"
+       aria-label="Resize right panel" data-i18n-aria-label="panels.resizeRight"></div>
+  <div class="right-dock-header">
   <div class="right-dock-tabs" role="tablist" aria-label="Details panels" data-i18n-aria-label="panels.details">
     <button id="controls-tab" class="right-dock-tab" type="button" role="tab"
             aria-selected="false" aria-expanded="false" aria-controls="controls-panel" data-i18n="panels.controls">Controls</button>
@@ -371,6 +387,10 @@
             aria-selected="false" aria-expanded="false" aria-controls="inspector-panel" data-i18n="panels.inspector">Inspector</button>
     <button id="weight-rig-tab" class="right-dock-tab" type="button" role="tab"
             aria-selected="false" aria-expanded="false" aria-controls="weight-rig-panel" data-i18n="panels.weightRig">Weight/Rig</button>
+  </div>
+  <button id="right-dock-collapse" class="dock-collapse-btn" type="button" aria-expanded="false">
+    <svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+  </button>
   </div>
   <section id="inspector-panel" class="right-dock-pane" role="tabpanel" aria-labelledby="inspector-tab" hidden>
     <div class="inspector-empty" id="inspector-empty">

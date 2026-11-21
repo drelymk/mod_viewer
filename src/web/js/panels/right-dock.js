@@ -1,5 +1,6 @@
 // Right-dock navigation keeps the user's preferred tab separate from the
 // transient choice to have the dock open at all.
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const STORAGE_KEY = 'mod-viewer.right-dock-tab';
 const VALID_TABS = Object.freeze(['controls', 'inspector', 'weight-rig']);
@@ -33,6 +34,17 @@ function notifyTabChange(activeTab) {
   );
 }
 
+function syncCollapseButton(open) {
+  const button = document.getElementById('right-dock-collapse');
+  if (!button) return;
+  const label = t(open ? 'panels.hideRight' : 'panels.showRight');
+  button.setAttribute('aria-expanded', String(open));
+  button.setAttribute('aria-controls', `${selectedTab}-panel`);
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  button.querySelector('use')?.setAttribute('href', open ? '#icon-chevron-right' : '#icon-chevron-left');
+}
+
 function renderRightDock() {
   const { tabs, panes, dock } = elements();
   const activeTab = dockEnabled && validTab(openTab) ? openTab : null;
@@ -46,6 +58,7 @@ function renderRightDock() {
   dock?.classList.toggle('ui-visible', dockEnabled);
   document.body?.classList.toggle('right-dock-mounted', dockEnabled);
   document.body?.classList.toggle('right-dock-visible', !!activeTab);
+  syncCollapseButton(!!activeTab);
   notifyTabChange(activeTab);
 }
 
@@ -91,6 +104,18 @@ export function isRightDockOpen() {
   return dockEnabled && validTab(openTab);
 }
 
+export function toggleRightDock() {
+  if (!dockEnabled) return false;
+  userHasChosenDockState = true;
+  openTab = validTab(openTab) ? null : selectedTab;
+  renderRightDock();
+  return isRightDockOpen();
+}
+
+export function openRightDock() {
+  return isRightDockOpen() || toggleRightDock();
+}
+
 export function setRightDockEnabled(enabled) {
   dockEnabled = !!enabled;
   if (dockEnabled && !userHasChosenDockState && !openTab) openTab = selectedTab;
@@ -112,6 +137,8 @@ export function initRightDock() {
     } catch {
       /* private mode */
     }
+    document.getElementById('right-dock-collapse')?.addEventListener('click', () => toggleRightDock());
+    window.addEventListener(LANGUAGE_CHANGED, renderRightDock);
     ready = true;
   }
   renderRightDock();

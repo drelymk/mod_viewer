@@ -30,6 +30,7 @@ import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-prof
 import { requestRender } from './scene/render-scheduler.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
+import { initDockLayout } from './ui/dock-layout.js';
 import { getLoadedWeightRigFeature, loadWeightRigFeature } from './weight-rig/weight-rig-feature.js';
 import { alertDialog } from './ui/dialogs.js';
 import { LANGUAGE_CHANGED, t } from './i18n/index.js';
@@ -352,6 +353,7 @@ rendererReady.then(async (ready) => {
   });
   initLeftDock();
   initRightDock();
+  initDockLayout({ onWidthChange: savePreference });
   initInspectorPanel();
   initSelection();
   const viewportCameraButtons = $('viewport-camera-buttons');

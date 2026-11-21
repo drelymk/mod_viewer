@@ -818,6 +818,121 @@ def test_panel_preference_survives_page_reload_without_loading_or_editing_source
     assert page.locator('#controls-panel').is_hidden()
 
 
+def test_dock_resize_collapse_shortcuts_and_focus_mode_preserve_layout_preferences(viewer):
+    page = viewer({'fixture-01': model_payload()}, preferences={'leftDockWidth': 360})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+
+    def width(selector):
+        return page.locator(selector).bounding_box()['width']
+
+    def saved(key):
+        return [args[0][key] for args in bridge_calls(page, 'preferencesSave') if key in args[0]]
+
+    def wait_saved(key, value):
+        page.wait_for_function(
+            '([key, value]) => window.__bridge.calls.some(c => c.name === "preferencesSave" '
+            '&& c.args[0] && c.args[0][key] === value)',
+            arg=[key, value],
+        )
+
+    def blur():
+        page.evaluate('document.activeElement.blur()')
+
+    page.wait_for_function(
+        "Math.abs(document.getElementById('left-dock').getBoundingClientRect().width - 360) <= 1")
+
+    handle = page.locator('#left-dock-resizer').bounding_box()
+    dock_left = page.locator('#left-dock').bounding_box()['x']
+    x = handle['x'] + handle['width'] / 2
+    y = handle['y'] + handle['height'] / 2
+    grab_offset = x - dock_left
+    page.mouse.move(x, y)
+    page.mouse.down()
+    for step in range(1, 4):
+        page.mouse.move(x + 20 * step, y)
+    assert saved('leftDockWidth') == []
+    page.mouse.up()
+    left_width = width('#left-dock')
+    assert abs(left_width - (grab_offset + 60)) <= 1
+    wait_saved('leftDockWidth', saved('leftDockWidth')[-1])
+    assert len(saved('leftDockWidth')) == 1
+    assert abs(saved('leftDockWidth')[0] - left_width) <= 1
+
+    if page.locator('#controls-panel').is_hidden():
+        page.locator('#controls-tab').click()
+    page.locator('#controls-panel').wait_for()
+    right_before = width('#right-dock')
+    page.locator('#right-dock-resizer').focus()
+    page.keyboard.press('ArrowLeft')
+    wait_saved('rightDockWidth', round(right_before + 16))
+    assert abs(width('#right-dock') - (right_before + 16)) <= 1
+    assert len(saved('rightDockWidth')) == 1
+
+    page.locator('#left-dock-resizer').dblclick()
+    page.wait_for_function(
+        "Math.abs(document.getElementById('left-dock').getBoundingClientRect().width - 288) <= 1")
+    wait_saved('leftDockWidth', 288)
+    assert saved('leftDockWidth')[-1] == 288
+
+    page.locator('#left-dock-collapse').click()
+    assert page.locator('#left-panel-container').is_hidden()
+    assert page.locator('#left-dock-collapse').get_attribute('aria-expanded') == 'false'
+    blur()
+    page.keyboard.press('BracketLeft')
+    assert page.locator('#left-panel-container').is_visible()
+    assert page.locator('#meshes-tab').get_attribute('aria-selected') == 'true'
+    assert page.locator('#sidebar').is_visible()
+
+    blur()
+    page.keyboard.press('BracketRight')
+    assert page.locator('#controls-panel').is_hidden()
+    blur()
+    page.keyboard.press('BracketRight')
+    assert page.locator('#controls-panel').is_visible()
+
+    blur()
+    page.keyboard.press('Backslash')
+    assert page.evaluate("document.body.classList.contains('focus-mode')")
+    assert page.locator('#right-dock').is_hidden()
+    assert page.locator('#left-dock-tabs').is_hidden()
+    assert page.locator('#tool-panel').is_visible()
+    assert page.locator('#focus-exit-btn').is_visible()
+    assert page.locator('#focus-mode-btn').get_attribute('aria-pressed') == 'true'
+    page.locator('#focus-exit-btn').click()
+    assert not page.evaluate("document.body.classList.contains('focus-mode')")
+    assert page.locator('#left-dock-tabs').is_visible()
+    assert page.locator('#right-dock').is_visible()
+    assert page.locator('#focus-exit-btn').is_hidden()
+
+    page.evaluate("""() => {
+      const input = document.createElement('input');
+      input.id = 'tmp-shortcut-input';
+      document.body.append(input);
+      input.focus();
+    }""")
+    page.keyboard.press('BracketLeft')
+    assert page.locator('#left-panel-container').is_visible()
+    page.evaluate("document.getElementById('tmp-shortcut-input').remove()")
+
+    page.set_viewport_size({'width': 900, 'height': 600})
+    page.wait_for_timeout(100)
+    rects = page.evaluate("""() => {
+      const box = id => document.getElementById(id).getBoundingClientRect();
+      const container = box('left-panel-container');
+      const tool = box('tool-panel');
+      return {
+        containerLeft: container.left, containerRight: container.right, containerBottom: container.bottom,
+        toolLeft: tool.left, toolRight: tool.right, toolTop: tool.top,
+      };
+    }""")
+    assert rects['containerLeft'] < rects['toolRight'] and rects['containerRight'] > rects['toolLeft']
+    assert rects['containerBottom'] <= rects['toolTop'] + 1
+    assert len(bridge_calls(page, 'load')) == 1
+
+    assert bridge_calls(page, 'export') == []
+
+
 def test_library_folder_context_menus_open_native_folders_without_loading(viewer):
     page = viewer({}, native={
         'folders': {'folders': [{'name': 'Library', 'path': 'root-01', 'exists': True}]},
