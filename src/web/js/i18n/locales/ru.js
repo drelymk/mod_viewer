@@ -38,6 +38,7 @@ export default {
     'Сохранено костей: {bones}, анимационных клипов: {clips} (со вторичным движением: {secondary}). Пропущено неподдерживаемых клипов или слоёв: {skipped}.',
   'rigExtract.phase.prepare': 'Подготовка извлечения…',
   'rigExtract.phase.index': 'Индексация файлов игры…',
+  'rigExtract.phase.shared': 'Извлечение общих анимаций типа тела…',
   'gameIndex.title': 'Индексировать файлы игры',
   'gameIndex.button': 'Индексировать файлы игры',
   'gameIndex.confirm':
@@ -251,6 +252,7 @@ export default {
   'animation.type': 'Тип анимации',
   'animation.filterAll': 'Все',
   'animation.filterClips': 'Клипы',
+  'animation.filterShared': 'Общие',
   'animation.noMatches': 'Нет подходящих анимаций',
   'animation.stepCount': 'Шагов: {count}',
   'animation.showControls': 'Показать управление анимацией',

@@ -12,20 +12,32 @@ export function sortRigAnimations(items) {
   );
 }
 
+// The Asset's own clips, then the game-wide shared clips it can play, each locale-sorted.
+export function splitRigClips(clips) {
+  return {
+    own: sortRigAnimations(clips.filter((clip) => !clip.shared)),
+    shared: sortRigAnimations(clips.filter((clip) => clip.shared)),
+  };
+}
+
 // Every clip picker shows the same locale-sorted order after the Rest option;
-// authored sequences follow in their own group. Returns the combined order.
+// authored sequences and then shared clips follow in their own groups. Returns the combined order.
 export function fillRigClipSelect(select, clips, sequences = []) {
-  const sorted = sortRigAnimations(clips);
+  const { own, shared } = splitRigClips(clips);
   const sortedSequences = sortRigAnimations(sequences);
   select.replaceChildren(new Option(t('weightRig.animationRest'), ''));
-  sorted.forEach((clip) => select.add(new Option(clip.name, clip.id)));
-  if (sortedSequences.length) {
+  own.forEach((clip) => select.add(new Option(clip.name, clip.id)));
+  for (const [label, items] of [
+    ['weightRig.animationSequences', sortedSequences],
+    ['animation.filterShared', shared],
+  ]) {
+    if (!items.length) continue;
     const group = document.createElement('optgroup');
-    group.label = t('weightRig.animationSequences');
-    sortedSequences.forEach((sequence) => group.appendChild(new Option(sequence.name, sequence.id)));
+    group.label = t(label);
+    items.forEach((item) => group.appendChild(new Option(item.name, item.id)));
     select.appendChild(group);
   }
-  return [...sorted, ...sortedSequences];
+  return [...own, ...sortedSequences, ...shared];
 }
 
 function animationError(key) {

@@ -70,7 +70,8 @@ def test_auto_weight_rig_load_order_and_viewport_playback_lifecycle(viewer, kind
     sequence = dict(id='sequence01', name='Sequence01', cyclic=True, restart=0,
                     steps=[dict(clip=clip, start=0, leave=.5, fade=0) for clip in ['clip01', 'clip02']])
     weights['game_rigs'] = {'rig01': dict(id='rig01', version=2, bones=bones, animation_session='session01',
-        animations=[dict(id=clip, name=clip, duration=1) for clip in ['clip01', 'clip02']],
+        animations=[dict(id=clip, name=clip, duration=1) for clip in ['clip01', 'clip02']]
+        + [dict(id='shared01', name='Set01 / Shared01', duration=1, shared=True)],
         animation_sequences=[sequence])}
     weights['meshes']['mesh-00'].update(game_rig_id='rig01', game_bone_map={'0': 0, '1': 1})
     page = viewer({'model01': payload, 'model02': model_payload(), 'fixture-weights': weights},
@@ -144,13 +145,15 @@ def test_auto_weight_rig_load_order_and_viewport_playback_lifecycle(viewer, kind
     assert page.evaluate('!window.__autoRig.getRigAnimationState().playing')
     page.locator('#animation-frame').evaluate("node=>{node.value='0.5';node.dispatchEvent(new Event('input'));}")
     assert page.evaluate('window.__autoRig.getRigAnimationState().time') == .5
-    # The picker lists Rest, then clips and sequences in labelled groups; the
-    # query matches every term and Enter picks the highlighted match.
+    # The picker lists Rest, then clips, sequences and shared clips in labelled groups;
+    # the query matches every term and Enter picks the highlighted match.
     picker = page.locator('#animation-picker')
     names = "[...document.querySelectorAll('#animation-options .animation-option-name')].map(node=>node.textContent)"
     page.locator('#animation-clip').click()
     assert picker.is_visible()
-    assert page.evaluate(names) == ['Rest pose', 'clip01', 'clip02', 'Sequence01']
+    assert page.evaluate(names) == ['Rest pose', 'clip01', 'clip02', 'Sequence01', 'Set01 / Shared01']
+    groups = "[...document.querySelectorAll('#animation-options .animation-option-group span:first-child')]"
+    assert page.evaluate(groups + ".map(node=>node.textContent)") == ['Clips', 'Sequences', 'Shared']
     assert page.locator('.animation-option[aria-selected="true"]').get_attribute('data-value') == 'clip02'
     page.keyboard.type('CLIP 1')
     assert page.evaluate(names) == ['clip01']
@@ -159,6 +162,14 @@ def test_auto_weight_rig_load_order_and_viewport_playback_lifecycle(viewer, kind
     assert picker.is_hidden()
     assert page.evaluate("document.activeElement.id") == 'animation-clip'
     assert page.evaluate('window.__autoRig.getModelRigState().structureRevision') == revision
+    # Shared clips have their own filter, and Next stays within them.
+    page.locator('#animation-clip').click()
+    page.locator('.animation-filter[data-filter="shared"]').click()
+    assert page.evaluate(names) == ['Set01 / Shared01']
+    page.locator('.animation-option[data-value="shared01"]').click()
+    page.wait_for_function(playing, arg='shared01')
+    page.locator('#animation-next').click()
+    page.wait_for_function(playing, arg='shared01')
     # Sequences replace the scrubber with a step bar; Next stays within sequences.
     page.locator('#animation-clip').click()
     page.locator('.animation-filter[data-filter="sequences"]').click()

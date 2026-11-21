@@ -10,6 +10,7 @@ import threading
 
 from app.assets import folders as asset_folders
 from app.assets import paths as asset_paths
+from app.assets import shared_animations
 from app.settings import config, paths
 from core.geometry.identity import normalize_geometry_hash
 from app.assets.package_format import is_viewer_metadata
@@ -218,7 +219,8 @@ def _wwmi_candidates(root):
                     nested.append((grandchild, nested_direct, nested_objects))
         if nested:
             candidates.extend(nested)
-        else:
+        elif _name(child) != shared_animations.DIRECTORY.casefold():
+            # The root's game-wide animation libraries are not an Asset.
             skipped.append(child)
     return candidates, skipped
 

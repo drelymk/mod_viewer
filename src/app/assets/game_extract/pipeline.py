@@ -11,7 +11,7 @@ from app.assets.animation_conversion import ReferencePoseMismatch, convert_clip,
 from app.assets import animation_keys
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
-from . import montage_sequences
+from . import montage_sequences, shared_layers
 from .native import capture, make_rig, match_components, read_mesh, read_limited
 from .runtime import ExtractionCancelled, check_cancelled, list_packages
 from .morphs import export_morphs, sample_curves
@@ -83,6 +83,19 @@ def animation_reference(client, skeleton, rig):
     absent trailing entries have the same absolute-local behavior as Animation.
     Explicit other modes require native mesh-targeted conversion first.
     """
+    bones = source_skeleton(client, skeleton, strict_tree=True)
+    if len(bones) != len(rig["bones"]):
+        raise ValueError("The animation source skeleton requires unsupported retargeting.")
+    return validate_rig({**rig, "bones": bones})
+
+
+def source_skeleton(client, skeleton, *, strict_tree=False):
+    """Reference bones of a game Skeleton whose BoneTree uses only Animation retargeting.
+
+    ``strict_tree`` also refuses a BoneTree longer than the reference skeleton, as
+    mesh-reference playback requires; extra entries are otherwise inert because the
+    converter verifies every exported bone against this reference.
+    """
     rows = document(client.export("json", skeleton, client.work / "source-skeleton")[0])
     sources = [row for row in rows if row.get("Type") == "Skeleton"]
     if len(sources) != 1:
@@ -92,16 +105,26 @@ def animation_reference(client, skeleton, rig):
     infos, poses = reference.get("FinalRefBoneInfo"), reference.get("FinalRefBonePose")
     modes = source.get("Properties", {}).get("BoneTree")
     if (not isinstance(infos, list) or not isinstance(poses, list) or not isinstance(modes, list)
-            or len(infos) != len(rig["bones"]) or len(poses) != len(infos) or len(modes) > len(infos)
+            or len(poses) != len(infos) or (strict_tree and len(modes) > len(infos))
             or any(not isinstance(mode, dict) or mode.get("TranslationRetargetingMode") != "EBoneTranslationRetargetingMode::Animation"
                    for mode in modes)):
         raise ValueError("The animation source skeleton requires unsupported retargeting.")
-    bones = [dict(name=info["Name"], parent=info["ParentIndex"],
-                  translation=[pose["Translation"][axis] for axis in ("X", "Y", "Z")],
-                  rotation=[pose["Rotation"][axis] for axis in ("X", "Y", "Z", "W")],
-                  scale=[pose["Scale3D"][axis] for axis in ("X", "Y", "Z")])
-             for info, pose in zip(infos, poses)]
-    return validate_rig({**rig, "bones": bones})
+    return [dict(name=info["Name"], parent=info["ParentIndex"],
+                 translation=[pose["Translation"][axis] for axis in ("X", "Y", "Z")],
+                 rotation=[pose["Rotation"][axis] for axis in ("X", "Y", "Z", "W")],
+                 scale=[pose["Scale3D"][axis] for axis in ("X", "Y", "Z")])
+            for info, pose in zip(infos, poses)]
+
+
+def is_base_clip(item):
+    """A complete, non-additive clip within the viewer's frame and duration limits."""
+    properties = item["Properties"]
+    return (properties.get("AdditiveAnimType") in (None, "AAT_None")
+            and bool(properties.get("TrackToSkeletonMapTable"))
+            and type(properties.get("NumFrames")) is int
+            and 2 <= properties["NumFrames"] <= 60000
+            and type(properties.get("SequenceLength")) in (int, float)
+            and 0 < properties["SequenceLength"] <= 3600)
 
 
 def clip_id(name, package, used):
@@ -442,13 +465,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             other_skeletons.add(package)
             continue
         sequences[package] = item
-    bases = {path: item for path, item in sequences.items()
-             if item["Properties"].get("AdditiveAnimType") in (None, "AAT_None")
-             and item["Properties"].get("TrackToSkeletonMapTable")
-             and type(item["Properties"].get("NumFrames")) is int
-             and 2 <= item["Properties"]["NumFrames"] <= 60000
-             and type(item["Properties"].get("SequenceLength")) in (int, float)
-             and 0 < item["Properties"]["SequenceLength"] <= 3600}
+    bases = {path: item for path, item in sequences.items() if is_base_clip(item)}
     if not bases:
         raise ValueError("No compatible skeletal animation clips were found for the verified rig.")
     pairs = {}
@@ -597,6 +614,13 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         raise ValueError("No usable animation library could be produced within the viewer limits." + detail)
     for entry in entries.values():
         read_clip(str(library), entry, rig, validated_morphs=validated_morphs)
+    # The character's own ribbon layers for the shared body-type clips it can play.
+    layers, layer_masks, shared_layer_bones = shared_layers.extract(client, Path(root), rig, sequences, skin_root, convert,
+                                                       library, reject, cancel)
+    layer_bones = set(shared_layer_bones)
+    for item in provenance:
+        if item["secondary"]:
+            layer_bones.update(item["secondary"]["bone_ids"])
     if sum(file.stat().st_size for file in library.rglob("*") if file.is_file()) > 2 * 1024 ** 3:
         raise ValueError("The extracted animation library exceeds its size limit.")
     converted = {item["source"]: (item["id"], entries[item["id"]]["duration"]) for item in provenance}
@@ -634,7 +658,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         total += len(item["steps"])
         name_sequences += 1
     manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()), sequences=sequences,
-                    runtime_bones=animation_keys.runtime_bones(rig, existing.values()))
+                    runtime_bones=animation_keys.runtime_bones(rig, existing.values()),
+                    shared_layers=layers, shared_layer_masks=layer_masks, layer_bones=sorted(layer_bones))
     write_document(library / "manifest.json", manifest, 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="wuwa", mesh=mesh_package,
@@ -644,6 +669,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                   skipped=len(skipped_items), skipped_layers=sum(item["kind"] == "layer" for item in skipped_items.values()),
                   skipped_details=list(skipped_items.values()),
                   sequences=len(sequences), name_sequences=name_sequences, skipped_sequences=len(skipped_sequences),
-                  skipped_sequence_details=skipped_sequences, sequence_error=sequence_error)
+                  skipped_sequence_details=skipped_sequences, sequence_error=sequence_error,
+                  shared_layers=len(layers))
     (output / "RigExtraction.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report, fingerprints

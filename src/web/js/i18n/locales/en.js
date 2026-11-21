@@ -23,6 +23,7 @@ export default {
     'Saved {bones} bones and {clips} animation clips ({secondary} with secondary motion). Skipped {skipped} unsupported clips or layers.',
   'rigExtract.phase.prepare': 'Preparing extraction…',
   'rigExtract.phase.index': 'Indexing game files…',
+  'rigExtract.phase.shared': 'Extracting shared body-type animations…',
   'gameIndex.title': 'Index game files',
   'gameIndex.button': 'Index game files',
   'gameIndex.confirm':
@@ -239,6 +240,7 @@ export default {
   'animation.type': 'Animation type',
   'animation.filterAll': 'All',
   'animation.filterClips': 'Clips',
+  'animation.filterShared': 'Shared',
   'animation.noMatches': 'No matching animations',
   'animation.stepCount': '{count} steps',
   'animation.showControls': 'Show animation controls',

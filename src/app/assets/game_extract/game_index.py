@@ -2,7 +2,8 @@
 
 The index only records SkeletalMesh section shapes so mesh lookup can run locally. It is an accelerator:
 extraction still proves every mesh through native exports, and a missing, stale or invalid index falls
-back to native searches.
+back to native searches. Building it also extracts the body-type shared animation libraries into the
+given WWMI Asset Folder roots (``shared_library``), once per game version.
 """
 
 import hashlib
@@ -10,11 +11,12 @@ import json
 import os
 from pathlib import Path
 
+from app.assets import folders as asset_folders
 from app.settings import config, paths
-from . import pipeline
+from . import pipeline, shared_library
 from .runtime import VERSION, check_cancelled, find_paks, list_packages
 
-FORMAT = 1
+FORMAT = 2
 KIND = "WWMI"
 SCAN_ROOTS = (pipeline.ROLE_ROOT, "Client/Content/Aki/Character/Prop/RoleProp")
 MAX_BYTES = 64 * 1024 * 1024
@@ -96,7 +98,7 @@ def remove(game_folder):
         pass
 
 
-def build(client, game_folder, progress, cancel):
+def build(client, game_folder, progress, cancel, roots=()):
     current = fingerprint(game_folder)
     progress("index", 0, 0)
     packages = []
@@ -121,6 +123,9 @@ def build(client, game_folder, progress, cancel):
             if shapes:
                 meshes[package] = sorted([vertices, indices] for vertices, indices in shapes)
     progress("index", len(packages), len(packages))
+    # The mesh index is written only after the shared libraries, so a failed or cancelled
+    # library build leaves the index stale and the next index run retries it.
+    shared_library.build(client, roots, progress, cancel)
     payload = json.dumps(dict(format=FORMAT, fingerprint=current, meshes=meshes), separators=(",", ":")).encode("utf-8")
     if len(payload) > MAX_BYTES:
         raise ValueError("The game index exceeds its size limit.")
@@ -130,10 +135,19 @@ def build(client, game_folder, progress, cancel):
     return GameIndex(meshes), len(meshes)
 
 
-def ensure(client, game_folder, progress, cancel, rebuild=False):
+def ensure(client, game_folder, progress, cancel, rebuild=False, roots=()):
     """Return the ready index, building it first when it is missing or stale."""
     if not rebuild:
         state, index, _count = read(game_folder)
         if state == "ready":
             return index
-    return build(client, game_folder, progress, cancel)[0]
+    return build(client, game_folder, progress, cancel, roots)[0]
+
+
+def shared_roots():
+    """Enabled WWMI Asset Folder roots that receive the shared animation libraries."""
+    try:
+        entries = asset_folders.enabled_entries_for_type(asset_folders.load_registry(), KIND)
+    except ValueError:
+        return []
+    return [entry["path"] for entry in entries if os.path.isdir(entry["path"])]

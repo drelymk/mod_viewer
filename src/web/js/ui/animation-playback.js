@@ -10,7 +10,7 @@ import {
 } from '../mesh/animation-runtime.js';
 import { LANGUAGE_CHANGED, getLocale, t } from '../i18n/index.js';
 import { getLoadedWeightRigFeature } from '../weight-rig/weight-rig-feature.js';
-import { sortRigAnimations } from '../weight-rig/rig-animation.js';
+import { sortRigAnimations, splitRigClips } from '../weight-rig/rig-animation.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const ICONS = { rest: '#icon-rest-pose', clip: '#icon-clip', sequence: '#icon-sequence' };
@@ -111,17 +111,19 @@ export function initAnimationPlayback() {
     if (catalogKey?.clips === rig.clips && catalogKey.sequences === rig.sequences && catalogKey.locale === locale)
       return false;
     catalogKey = { clips: rig.clips, sequences: rig.sequences, locale };
-    const clips = sortRigAnimations(rig.clips);
+    const { own: clips, shared } = splitRigClips(rig.clips);
     const sequences = sortRigAnimations(rig.sequences);
     catalog = {
       clips,
+      shared,
       sequences,
       byId: new Map([
-        ...clips.map((item) => [item.id, { kind: 'clip', id: item.id, item }]),
-        ...sequences.map((item) => [item.id, { kind: 'sequence', id: item.id, item }]),
+        ...clips.map((item) => [item.id, { kind: 'clip', pool: 'clips', id: item.id, item }]),
+        ...shared.map((item) => [item.id, { kind: 'clip', pool: 'shared', id: item.id, item }]),
+        ...sequences.map((item) => [item.id, { kind: 'sequence', pool: 'sequences', id: item.id, item }]),
       ]),
     };
-    if (!sequences.length) filter = 'all';
+    if (!catalog[filter]?.length) filter = 'all';
     stepSequence = null;
     return true;
   }
@@ -178,18 +180,30 @@ export function initAnimationPlayback() {
     const query = search.value.trim();
     const clips = catalog.clips.filter((item) => animationMatches(item.name, query));
     const sequences = catalog.sequences.filter((item) => animationMatches(item.name, query));
-    const counts = { all: clips.length + sequences.length, clips: clips.length, sequences: sequences.length };
-    filterRow.hidden = !catalog.sequences.length;
+    const shared = catalog.shared.filter((item) => animationMatches(item.name, query));
+    const counts = {
+      all: clips.length + sequences.length + shared.length,
+      clips: clips.length,
+      sequences: sequences.length,
+      shared: shared.length,
+    };
+    // Kinds this rig has; the filter row appears only when there is more than one.
+    const present = ['clips', 'sequences', 'shared'].filter((pool) => catalog[pool].length);
+    filterRow.hidden = present.length < 2;
     for (const node of filters) {
+      node.hidden = node.dataset.filter !== 'all' && !present.includes(node.dataset.filter);
       node.setAttribute('aria-pressed', String(node.dataset.filter === filter));
       setText(node.querySelector('.animation-filter-count'), String(counts[node.dataset.filter]));
     }
-    const groups = [];
-    if (filter !== 'sequences') groups.push(['animation.filterClips', 'clip', clips]);
-    if (filter !== 'clips' && catalog.sequences.length)
-      groups.push(['weightRig.animationSequences', 'sequence', sequences]);
+    const groups = [
+      ['clips', 'animation.filterClips', 'clip', clips],
+      ['sequences', 'weightRig.animationSequences', 'sequence', sequences],
+      ['shared', 'animation.filterShared', 'clip', shared],
+    ]
+      .filter(([pool]) => (filter === 'all' || filter === pool) && catalog[pool].length)
+      .map(([, label, kind, items]) => [label, kind, items]);
     const selected = rigState()?.selected || '';
-    const labelled = filter === 'all' && catalog.sequences.length > 0;
+    const labelled = filter === 'all' && present.length > 1;
     const nodes = [];
     options = [];
     const add = (choice) => {
@@ -391,7 +405,8 @@ export function initAnimationPlayback() {
     if (state.selected && state.duration) return getRig().setRigAnimationPlaying(!state.playing);
     // Play after Stop resumes the last choice instead of jumping to the first clip.
     const id =
-      state.selected || (catalog.byId.has(lastChoice) ? lastChoice : catalog.clips[0]?.id || state.clips[0].id);
+      state.selected ||
+      (catalog.byId.has(lastChoice) ? lastChoice : catalog.clips[0]?.id || catalog.shared[0]?.id || state.clips[0].id);
     void getRig().selectRigAnimation(id);
   }
 
@@ -400,7 +415,7 @@ export function initAnimationPlayback() {
     const state = rigState();
     if (!state?.clips.length) return;
     const current = catalog.byId.get(state.selected || lastChoice);
-    const pool = current?.kind === 'sequence' ? catalog.sequences : catalog.clips;
+    const pool = catalog[current?.pool || (catalog.clips.length ? 'clips' : 'shared')];
     const index = pool.findIndex((item) => item.id === current?.id);
     const target = index < 0 ? (direction > 0 ? 0 : pool.length - 1) : (index + direction + pool.length) % pool.length;
     void getRig().selectRigAnimation(pool[target].id);
