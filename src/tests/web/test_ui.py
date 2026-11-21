@@ -629,6 +629,86 @@ def test_mesh_select_all_respects_panel_viewport_and_editing_context(viewer):
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
 
 
+def test_mesh_filter_counts_and_select_all_follow_filter_without_staging(viewer):
+    payload = model_payload(6)
+    inis = ['alpha/Part.ini'] * 3 + ['beta/Part.ini'] * 3
+    components = ['ComponentAlpha', 'ComponentAlpha', 'ComponentBeta'] + ['ComponentGamma'] * 3
+    for mesh, ini, component in zip(payload['meshes'].values(), inis, components):
+        mesh['source'] = ini.split('/')[0]
+        mesh['component'] = component
+        mesh['identity']['source'] = ini
+        mesh['identity']['component'] = component
+        mesh['sources'][0]['ini'] = ini
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 6)
+
+    def displayed():
+        return page.evaluate("""() => [...document.querySelectorAll('#mesh-list .draw-item')]
+          .filter(row => row.getBoundingClientRect().height > 0).length""")
+
+    def gamma_header():
+        return page.locator('.group-hdr', has_text='ComponentGamma')
+
+    search = page.locator('#mesh-search')
+    count = page.locator('#mesh-filter-count')
+
+    assert '6' in count.inner_text()
+    assert page.locator('.group-hdr .group-count').all_inner_texts() == ['2/2', '1/1', '3/3']
+
+    page.locator('.draw-item').nth(3).locator('.mesh-state-btn').click()
+    assert gamma_header().locator('.group-count').inner_text() == '2/3'
+    assert 'partial' in (gamma_header().locator('.group-count').get_attribute('class') or '')
+    assert page.locator('.mesh-src-hdr', has_text='beta').locator('.group-count').inner_text() == '2/3'
+
+    search.fill('gamma')
+    assert displayed() == 3
+    assert '3 of 6' in count.inner_text()
+    assert page.locator('.group-hdr', has_text='ComponentAlpha').is_hidden()
+    assert page.locator('.mesh-src-hdr', has_text='alpha').is_hidden()
+
+    search.fill('')
+    gamma_header().locator('.group-toggle').click()
+    search.fill('gamma')
+    assert displayed() == 3
+    assert gamma_header().locator('.group-toggle').is_hidden()
+    search.fill('')
+    assert displayed() == 3
+    gamma_header().locator('.group-toggle').click()
+    assert displayed() == 6
+
+    page.locator('[data-mesh-filter="hidden"]').click()
+    assert displayed() == 1
+    page.locator('[data-mesh-filter="visible"]').click()
+    assert displayed() == 5
+    page.locator('[data-mesh-filter="all"]').click()
+    assert displayed() == 6
+
+    search.fill('alpha')
+    page.evaluate('document.activeElement.blur()')
+    page.locator('#mesh-list').hover()
+    page.keyboard.press('Control+a')
+    assert page.evaluate("""() => {
+      const shown = [...document.querySelectorAll('#mesh-list .draw-item')]
+        .filter(row => row.getBoundingClientRect().height > 0);
+      const selected = [...document.querySelectorAll('#mesh-list .draw-item.selected')];
+      return shown.length === 3 && selected.length === 3 && selected.every(row => shown.includes(row));
+    }""")
+
+    search.fill('zzz-no-match')
+    assert page.locator('#mesh-filter-empty').is_visible()
+    search.fill('')
+    page.locator('[data-mesh-filter="hidden"]').click()
+    assert displayed() == 1
+
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 6)
+    assert search.input_value() == ''
+    assert page.locator('[data-mesh-filter="all"]').get_attribute('aria-pressed') == 'true'
+    assert displayed() == 6
+    assert bridge_calls(page, 'record') == bridge_calls(page, 'export') == []
+
+
 def test_toggle_visibility_changes_only_wired_meshes(viewer):
     payload = controlled_payload(4)
     payload['controls']['toggles']['KeyFixture02'] = {

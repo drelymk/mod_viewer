@@ -360,7 +360,6 @@ rendererReady.then(async (ready) => {
   const cameraButtons = $('camera-buttons');
   if (viewportCameraButtons && cameraButtons) viewportCameraButtons.append(cameraButtons);
   syncViewportControlPlacement();
-  initPanelCollapse($('sidebar'), 'mesh-list');
   updateAssetFillButton();
   initPanelCollapse($('present-panel'), 'present-list');
   initPanelCollapse($('toggle-panel'), 'toggle-list');

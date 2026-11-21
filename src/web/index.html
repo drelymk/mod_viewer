@@ -251,9 +251,14 @@
     </section>
 
     <section id="sidebar" class="left-dock-panel" role="tabpanel" aria-labelledby="meshes-tab" hidden>
-      <div class="panel-hdr">
-        <button type="button" class="group-toggle" aria-expanded="true" aria-controls="mesh-list"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
-        <h3 data-i18n="panels.meshes">Meshes</h3>
+      <div class="panel-hdr mesh-filter-hdr">
+        <label class="mesh-search">
+          <svg class="ui-icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+          <input id="mesh-search" type="search" autocomplete="off" spellcheck="false"
+                 placeholder="Filter meshes" data-i18n-placeholder="mesh.filterPlaceholder"
+                 aria-label="Filter meshes by name" data-i18n-aria-label="mesh.filterLabel"
+                 aria-controls="mesh-list"/>
+        </label>
         <div class="panel-hdr-actions">
           <button id="exit-isolation-btn" class="icon-btn" type="button" hidden title="Exit Isolation" aria-label="Exit Isolation" data-i18n-title="mesh.exitIsolation" data-i18n-aria-label="mesh.exitIsolation"><svg class="ui-icon" aria-hidden="true"><use href="#icon-exit-isolation"></use></svg></button>
           <button id="asset-fill-btn" class="icon-btn asset-fill-btn" type="button" disabled
@@ -262,7 +267,17 @@
           <button id="reset-state-btn" class="icon-btn" title="Reset mesh visibility" data-i18n-title="mesh.resetVisibility" aria-label="Reset mesh visibility" data-i18n-aria-label="mesh.resetVisibility"><svg class="ui-icon" aria-hidden="true"><use href="#icon-reset"></use></svg></button>
         </div>
       </div>
+      <div class="mesh-filter-row">
+        <div id="mesh-visibility-filter" class="mesh-visibility-filter" role="group"
+             aria-label="Show meshes" data-i18n-aria-label="mesh.filterVisibility">
+          <button type="button" data-mesh-filter="all" aria-pressed="true" data-i18n="mesh.filterAll">All</button>
+          <button type="button" data-mesh-filter="visible" aria-pressed="false" data-i18n="mesh.filterVisible">Visible</button>
+          <button type="button" data-mesh-filter="hidden" aria-pressed="false" data-i18n="mesh.filterHidden">Hidden</button>
+        </div>
+        <span id="mesh-filter-count" class="mesh-filter-count" role="status" aria-live="polite"></span>
+      </div>
       <div id="mesh-list"></div>
+      <div id="mesh-filter-empty" class="mesh-filter-empty" data-i18n="mesh.filterEmpty" hidden>No meshes match the filter.</div>
     </section>
     <div id="left-dock-resizer" class="dock-resizer" role="separator" tabindex="0"
          aria-orientation="vertical" aria-controls="left-dock"

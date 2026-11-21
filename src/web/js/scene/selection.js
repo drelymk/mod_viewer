@@ -708,9 +708,15 @@ function onKeyDown(event) {
     const inPanel = target?.closest?.('#sidebar') || document.querySelector('#sidebar:hover');
     const inViewport = target === canvas || canvas.matches(':hover');
     if (!inPanel && !inViewport) return;
-    const meshes = inPanel
-      ? activeMeshes.flatMap((mesh) => (getMeshView(mesh)?.row?.isConnected ? [mesh] : getLooseParts(mesh)))
-      : modelPickTargets(activeMeshes);
+    const passes = (mesh) => {
+      const row = getMeshView(mesh)?.row;
+      return !!row?.isConnected && !row.closest('.filtered-out');
+    };
+    const panelMeshes = activeMeshes.flatMap((mesh) =>
+      getMeshView(mesh)?.row?.isConnected ? [mesh] : getLooseParts(mesh),
+    );
+    const filterActive = document.getElementById('mesh-list')?.classList.contains('filter-active');
+    const meshes = inPanel ? (filterActive ? panelMeshes.filter(passes) : panelMeshes) : modelPickTargets(activeMeshes);
     event.preventDefault();
     selectMeshes(meshes, meshes.includes(primary) ? primary : null);
     return;
