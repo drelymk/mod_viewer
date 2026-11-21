@@ -263,6 +263,13 @@ of documentation, comments and tests; use portable fixtures instead.
   does not create a draw.
 - Apply shapes only with complete recognized buffer layouts. Other slider-like
   variables remain controls; shape targets cannot leak between position buffers.
+- A WWMI sparse key whose value variable has no slider and is written only by
+  literal TextureOverride assignments is a derived shape: its writes become
+  ordered state rules (runtime-only guards count as draw evidence; their
+  else branches and mixed guards are skipped) and it never becomes a menu,
+  Present or animation control. Without `cs-t6`, the sparse base is the INI's
+  single file-backed `vb0`. Draws omit sparse targets that move none of their
+  vertices.
 - Resource identity is mod-relative, never basename-only. Texture keys are
   `role::mod-relative-path` for `diffuse`, `normal_map`, `normal_data`, `light_map`,
   `material_map` and `emission_map`. Diffuse is sRGB; auxiliary roles are non-color

@@ -1,5 +1,6 @@
 """Shape-slider discovery cases with explicit regression fixtures."""
 
+from core.ini.analysis import analyze_ini
 from core.ini.shapes import extract_shape_sliders
 from core.ini.parser import extract_resources
 from core.ini.sections import parse_sections
@@ -276,3 +277,99 @@ filename = Component01Smallshape06.buf
     secs = sections(text)
     sliders = extract_shape_sliders(secs, extract_resources(secs))
     assert (sliders == []), (f"unrelated register writes do not create shape sliders (got {sliders})")
+
+
+_DERIVED_WWMI_SHAPES = r"""
+[Constants]
+global $shapekey_vertex_offset_batch0 = 0
+global persist $outfit = 0
+global $fitShape
+global $runtimeShape
+global $mixedShape
+global $exprShape
+
+[KeyOutfit]
+key = vk_f1
+type = cycle
+$outfit = 0,1,2
+
+[Present]
+if $mod_enabled
+    run = CommandListSetShapes
+endif
+
+[CommandListSetShapes]
+$\WWMIv1\shapekey_id = 0
+$\WWMIv1\shapekey_value = $fitShape
+$\WWMIv1\shapekey_id = 1
+$\WWMIv1\shapekey_value = $runtimeShape
+$\WWMIv1\shapekey_id = 2
+$\WWMIv1\shapekey_value = $mixedShape
+$\WWMIv1\shapekey_id = 3
+$\WWMIv1\shapekey_value = $exprShape
+
+[CommandListScaleShapes]
+$exprShape = $outfit * 0.5
+
+[TextureOverrideComponent01]
+hash = 00000001
+if $mod_enabled
+    if ResourceMergedSkeleton !== null
+        vb0 = ResourcePositionBuffer
+        if ($outfit == 0 || $outfit == 1)
+            $fitShape = 1
+        else
+            $fitShape = 0
+        endif
+        $exprShape = 1
+        drawindexed = 3, 0, 0
+    endif
+else
+    $runtimeShape = 1
+endif
+if $outfit == 2 && $mod_enabled
+    $mixedShape = 1
+endif
+
+[CommandListSetupShapeKeysBatch]
+cs-t33 = ResourceShapeKeyOffsetBuffer
+[CommandListLoadShapeKeysBatch]
+cs-t0 = ResourceShapeKeyVertexIdBuffer
+cs-t1 = ResourceShapeKeyVertexOffsetBuffer
+
+[ResourcePositionBuffer]
+stride = 12
+filename = Meshes/Position.buf
+[ResourceShapeKeyOffsetBuffer]
+filename = Meshes/ShapeKeyOffset.buf
+[ResourceShapeKeyVertexIdBuffer]
+filename = Meshes/ShapeKeyVertexId.buf
+[ResourceShapeKeyVertexOffsetBuffer]
+filename = Meshes/ShapeKeyVertexOffset.buf
+"""
+
+
+def test_wwmi_shape_weights_derived_in_draw_sections_become_rule_driven_shapes():
+    analysis = analyze_ini(sections(_DERIVED_WWMI_SHAPES), var_prefix="mod::")
+    outfit_0_or_1 = [[{"var": "mod::outfit", "value": "0", "negate": False}],
+                     [{"var": "mod::outfit", "value": "1", "negate": False}]]
+    neither = [[{"var": "mod::outfit", "value": "0", "negate": True},
+                {"var": "mod::outfit", "value": "1", "negate": True}]]
+    # Runtime guards are draw evidence; an else of a runtime guard, a guard
+    # mixing runtime and control tests, and a non-literal writer are skipped.
+    assert analysis.state_rules == [
+        {"var": "mod::fitShape", "value": "1", "conditions": outfit_0_or_1},
+        {"var": "mod::fitShape", "value": "0", "conditions": neither},
+    ]
+    assert [(item["var"], item.get("derived")) for item in analysis.shapes] == [
+        ("mod::fitShape", True)]
+    # An undeclared derived weight starts at 3DMigoto's 0, not its first write.
+    assert analysis.defaults["mod::fitShape"] == "0"
+    shape = analysis.shapes[0]
+    # Without an authored cs-t6 the INI's only file-backed vb0 is the base.
+    assert (shape["base_file"], shape["stride"], shape["shape_id"],
+            shape["buffer_shape_id"], shape["ui_section"]) == (
+        "Meshes/Position.buf", 12, 0, 0, None)
+    # Standalone extraction keeps reporting authored sliders only.
+    secs = sections(_DERIVED_WWMI_SHAPES)
+    assert extract_shape_sliders(secs, extract_resources(secs)) == []

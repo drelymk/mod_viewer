@@ -274,8 +274,12 @@ def _decode_sparse_shape(shape, *, buffers, mod_dir, sparse_shape_cache,
 
 
 def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path,
-                         buffers, sparse_shape_cache, source=None):
-    """Load shape inputs; each packer owns its output allocation."""
+                         buffers, sparse_shape_cache, source=None, used=None):
+    """Load shape inputs; each packer owns its output allocation.
+
+    A sparse key that moves none of the draw's ``used`` vertices would emit an
+    all-rest target, so it is omitted for that draw.
+    """
     shape_buffers = []
     for shape in shape_sliders or []:
         resolve = source.resolve_resource if source is not None \
@@ -291,7 +295,8 @@ def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path,
             sparse = _decode_sparse_shape(
                 shape, buffers=buffers, mod_dir=mod_dir,
                 sparse_shape_cache=sparse_shape_cache, source=source)
-            if sparse is None:
+            if sparse is None or (
+                    used is not None and sparse.keys().isdisjoint(used)):
                 continue
             shape_buffers.append(_ShapeBuffer(shape, sparse, True))
         else:
@@ -380,7 +385,7 @@ def _pack_draw_geometry_python(
 
     shape_buffers = _build_shape_buffers(
         group.get("shape_sliders"), mod_dir, prepared.position_path,
-        buffers, sparse_shape_cache, source=source)
+        buffers, sparse_shape_cache, source=source, used=used)
     for item in shape_buffers:
         item.target_bytes = bytearray(len(used) * 12)
         if item.low_data is not None:

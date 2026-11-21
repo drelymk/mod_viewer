@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from .sections import ResourceTable, canonical_var_names, extract_resources
 from .toggles import (extract_toggle_keys, extract_variable_defaults)
 from .menu import extract_menu_toggles
-from .state import extract_state_rules
-from .shapes import extract_shape_sliders
+from .state import extract_draw_derived_rules, extract_state_rules
+from .shapes import extract_shape_sliders, wwmi_shape_value_vars
 from .draw_groups import build_draw_groups
 from .draw_scan import _scan_sections_for_draws
 from .dnf import build_bool_alias_map
@@ -67,11 +67,38 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     state_rules = extract_state_rules(
         sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
         condition_aliases=condition_aliases)
+    # WWMI sparse-key weights derived from controls while a component draws
+    # (no slider) are replayed as state rules and applied as hidden shapes.
+    scan_prefix = var_prefix or ""
+
+    def unprefixed(value):
+        value = str(value)
+        return (value[len(scan_prefix):]
+                if scan_prefix and value.startswith(scan_prefix) else value)
+
+    control_vars = {
+        unprefixed(var) for info in toggles.values() for var in info.get("vars", {})}
+    for info in menu.values():
+        control_vars.add(unprefixed(info["var"]))
+        control_vars.update(unprefixed(cycle["var"])
+                            for cycle in info.get("cycles", ()))
+        control_vars.update(unprefixed(effect["var"])
+                            for effect in info.get("effects", ()))
+    control_vars.update(unprefixed(rule["var"]) for rule in state_rules)
+    shape_value_vars = wwmi_shape_value_vars(sections, canonical_vars)
+    state_rules = state_rules + extract_draw_derived_rules(
+        sections, shape_value_vars, control_vars, var_prefix=var_prefix,
+        canonical_vars=canonical_vars, condition_aliases=condition_aliases)
+    shape_value_keys = {var.casefold() for var in shape_value_vars}
+    derived_shape_vars = {
+        unprefixed(rule["var"]) for rule in state_rules
+        if unprefixed(rule["var"]).casefold() in shape_value_keys}
     shapes = extract_shape_sliders(
         sections, resources, var_prefix=var_prefix, source=source,
-        canonical_vars=canonical_vars)
+        canonical_vars=canonical_vars, derived_vars=derived_shape_vars)
     defaults = extract_variable_defaults(
-        sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
+        sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
+        zero_initialized=derived_shape_vars)
     animation_analysis = discover_animation_clocks(
         sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
         qualified_vars=qualified_vars, condition_aliases=condition_aliases)
@@ -93,7 +120,6 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     # Conditions are read from the source before the per-INI namespace is
     # applied by normalize_dnf, so the scanner needs the source spellings.
     # The public analysis set remains namespaced for control/panel consumers.
-    scan_prefix = var_prefix or ""
     scan_gating_vars = {
         value[len(scan_prefix):] if scan_prefix and value.startswith(scan_prefix)
         else value

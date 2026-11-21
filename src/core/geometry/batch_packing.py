@@ -11,6 +11,26 @@ _MIN_BATCH_INDICES = 4096
 _MAX_BATCH_INDICES = 1048576
 
 
+def _sparse_endpoint(np, sparse, used, positions):
+    """Apply WWMI sparse deltas with the scalar packer's float64 addition."""
+    ids = np.fromiter(sparse.keys(), dtype=np.int64, count=len(sparse))
+    deltas = np.array(list(sparse.values()), dtype=np.float64).reshape(-1, 3)
+    order = np.argsort(ids, kind="stable")
+    ids, deltas = ids[order], deltas[order]
+    slots = np.minimum(np.searchsorted(ids, used), len(ids) - 1)
+    hit = ids[slots] == used
+    output = positions.astype(np.float64)
+    # The scalar path adds a 0.0 delta to untouched vertices, which turns
+    # -0.0 into +0.0; keep those bytes identical.
+    output[~hit] += 0.0
+    output[hit] += deltas[slots[hit]]
+    with np.errstate(over="ignore", invalid="ignore"):
+        output = output.astype("<f4")
+    if not np.isfinite(output).all():
+        raise UnsupportedLayout
+    return output.tobytes()
+
+
 def _endpoint(np, data, stride, used, positions):
     view = strided_view(np, data, stride=stride, width=3, dtype="<f4",
                         offset=packing.POSITION_OFFSET)
@@ -31,9 +51,7 @@ def try_pack_draw_geometry(
     Selection remains per draw and uses source vertex IDs, never position-based
     welding. Array working sets are bounded by the authored index range.
     """
-    if group.get("_compute_animation") or any(
-            shape.get("shape_id") is not None
-            for shape in group.get("shape_sliders", ())):
+    if group.get("_compute_animation"):
         return None
     if any(not isinstance(shape.get("stride"), int) or shape["stride"] < 12
            for shape in group.get("shape_sliders", ())):
@@ -106,9 +124,11 @@ def try_pack_draw_geometry(
         used_list = used.tolist()
         shape_buffers = packing._build_shape_buffers(
             group.get("shape_sliders"), mod_dir, position_path,
-            buffers, sparse_shape_cache, source=source)
+            buffers, sparse_shape_cache, source=source, used=used_list)
         shapes = [packing.PackedShapeTarget(
             item.shape["var"],
+            _sparse_endpoint(np, item.target_data, used, positions)
+            if item.sparse else
             _endpoint(np, item.target_data, item.shape["stride"], used, positions),
             _endpoint(np, item.low_data, item.shape["stride"], used, positions)
             if item.low_data is not None else None,

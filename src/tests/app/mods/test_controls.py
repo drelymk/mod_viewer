@@ -280,3 +280,82 @@ def test_control_state_does_not_build_geometry(
     assert result["controls"]["menu"]["Menu01"]["image"] == "/texture/test/0.dds"
     detached = load_control_state(context, active_mesh_keys={"Component01-1"})
     assert "image" not in detached["controls"]["menu"]["Menu01"]
+
+
+def test_rule_derived_wwmi_shape_keys_deform_meshes_without_menu_controls(tmp_path):
+    text = r"""
+[Constants]
+global $shapekey_vertex_offset_batch0 = 0
+global persist $outfit = 0
+global $fitShape
+global $farShape
+
+[KeyOutfit]
+key = vk_f1
+type = cycle
+$outfit = 0,1
+
+[Present]
+run = CommandListSetShapes
+
+[CommandListSetShapes]
+$\WWMIv1\shapekey_id = 0
+$\WWMIv1\shapekey_value = $fitShape
+$\WWMIv1\shapekey_id = 1
+$\WWMIv1\shapekey_value = $farShape
+
+[TextureOverrideComponent01]
+hash = 00000001
+ib = ResourceComponent01IB
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+if $outfit == 0
+    $fitShape = 1
+    $farShape = 1
+else
+    $fitShape = 0
+    $farShape = 0
+endif
+drawindexed = 3, 0, 0
+
+[CommandListSetupShapeKeysBatch]
+cs-t33 = ResourceShapeKeyOffsetBuffer
+[CommandListLoadShapeKeysBatch]
+cs-t0 = ResourceShapeKeyVertexIdBuffer
+cs-t1 = ResourceShapeKeyVertexOffsetBuffer
+
+[ResourcePosition]
+filename = position.buf
+stride = 12
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+[ResourceComponent01IB]
+filename = component01.ib
+format = R32_UINT
+[ResourceShapeKeyOffsetBuffer]
+filename = offsets.buf
+[ResourceShapeKeyVertexIdBuffer]
+filename = ids.buf
+[ResourceShapeKeyVertexOffsetBuffer]
+filename = deltas.buf
+"""
+    path = tmp_path / "mod.ini"
+    path.write_text(text, encoding="utf-8")
+    (tmp_path / "position.buf").write_bytes(
+        struct.pack("<12f", 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0))
+    (tmp_path / "texcoord.buf").write_bytes(struct.pack("<8f", *([0.] * 8)))
+    (tmp_path / "component01.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
+    # Key 0 moves drawn vertex 1; key 1 only moves the undrawn vertex 3.
+    (tmp_path / "offsets.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
+    (tmp_path / "ids.buf").write_bytes(struct.pack("<2I", 1, 3))
+    (tmp_path / "deltas.buf").write_bytes(
+        struct.pack("<3e6x3e6x", .5, .25, -.5, 1., 1., 1.))
+    full = load_mod(context=snapshot_context(str(tmp_path), [str(path)]))
+    assert not full.get("error")
+    assert full["controls"]["menu"] == {}
+    assert "fitShape" not in repr(full["controls"]["present"])
+    assert {(rule["var"], rule["value"]) for rule in full["state"]["rules"]} == {
+        ("fitShape", "1"), ("fitShape", "0"), ("farShape", "1"), ("farShape", "0")}
+    (mesh,) = full["meshes"].values()
+    assert [target["var"] for target in mesh["shape_targets"]] == ["fitShape"]

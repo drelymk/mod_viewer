@@ -25,6 +25,7 @@ _SHAPE_ID_RE = re.compile(r"^\$\\WWMIv1\\shapekey_id\s*=\s*(\d+)\s*$", re.I)
 _SHAPE_VALUE_RE = re.compile(
     r"^\$\\WWMIv1\\shapekey_value\s*=\s*\$(\w+)\s*$", re.I)
 _BIND_RE = re.compile(r"^(cs-t(?:0|1|6|33))\s*=\s*(?:copy\s+|ref\s+)?(\S+)\s*$", re.I)
+_VB0_RE = re.compile(r"^vb0\s*=\s*(?:ref\s+|copy\s+)?(\S+)$", re.I)
 _BATCH_OFFSET_RE = re.compile(
     r"^global\s+\$shapekey_vertex_offset_batch(\d+)\s*=\s*(\d+)\s*$", re.I)
 
@@ -47,9 +48,56 @@ def _writable_u5_outputs(lines):
     return outputs
 
 
+def wwmi_shape_value_vars(sections, canonical_vars=None):
+    """Return variables feeding WWMI sparse keys without an authored slider."""
+    canon = (canonical_vars if canonical_vars is not None
+             else canonical_var_names(sections))
+    values, sliders = set(), set()
+    for section, lines in sections.items():
+        is_slider = section.lower().startswith("commandlistdrawslider")
+        pending = False
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            if is_slider and (match := _SLIDER_RE.fullmatch(line)):
+                sliders.add(match.group(1).casefold())
+            if _SHAPE_ID_RE.fullmatch(line):
+                pending = True
+                continue
+            match = _SHAPE_VALUE_RE.fullmatch(line)
+            if match and pending:
+                values.add(match.group(1).casefold())
+                pending = False
+    return {canon.get(var, var) for var in values - sliders}
+
+
+def _sparse_base_binding(sections, bindings, resource):
+    """Return the authored sparse base, else the INI's only file-backed vb0.
+
+    Older WWMI exports bind the shape base at ``cs-t6``. Newer exports leave
+    the sparse apply pass to the framework, which deforms the mod's own vb0
+    positions; accept that only when one file-backed vb0 is ever bound.
+    """
+    if bindings.get("cs-t6"):
+        return bindings["cs-t6"]
+    found = {}
+    for lines in sections.values():
+        for raw in lines:
+            match = _VB0_RE.fullmatch(str(raw).split(";", 1)[0].strip())
+            if match and resource(match.group(1)).get("filename"):
+                found.setdefault(
+                    resource(match.group(1))["filename"].casefold(),
+                    match.group(1))
+    return next(iter(found.values())) if len(found) == 1 else None
+
+
 def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
-                          canonical_vars=None):
-    """Return slider descriptions for conservative two-buffer shape shaders."""
+                          canonical_vars=None, derived_vars=()):
+    """Return slider descriptions for conservative two-buffer shape shaders.
+
+    ``derived_vars`` names WWMI sparse-key value variables written by state
+    rules rather than a slider. They are returned with ``derived: True`` so
+    geometry applies them while menus and Present capture leave them alone.
+    """
     resources = ResourceTable.normalize(resources)
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
@@ -237,6 +285,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
     # command lists map each value variable to an integer key ID.
     sliders = []
     shape_ids = {}
+    shape_sources = {}
     bindings = {}
     batch_offsets = {}
     for lines in sections.values():
@@ -264,13 +313,16 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             if match and pending_id is not None:
                 var = canon.get(match.group(1).lower(), match.group(1))
                 shape_ids[var.lower()] = pending_id
+                shape_sources.setdefault(
+                    var.lower(), (var, section, first_source(lines) or {}))
                 pending_id = None
             match = _BIND_RE.fullmatch(line)
             if match:
                 bindings.setdefault(match.group(1).lower(), match.group(2))
 
+    base_binding = _sparse_base_binding(sections, bindings, resource)
     sparse_resources = {
-        "base_file": resource(bindings.get("cs-t6")).get("filename"),
+        "base_file": resource(base_binding).get("filename"),
         "offset_file": resource(bindings.get("cs-t33")).get("filename"),
         "vertex_id_file": resource(bindings.get("cs-t0")).get("filename"),
         "vertex_offset_file": resource(bindings.get("cs-t1")).get("filename"),
@@ -302,8 +354,30 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             item["shape_id"] = shape_id
             item["buffer_shape_id"] = shape_id + batch
             item["sparse_entry_offset"] = batch_offsets.get(batch, 0)
-            item["stride"] = resource(bindings.get("cs-t6")).get("stride", 12)
+            item["stride"] = resource(base_binding).get("stride", 12)
         found.append(item)
+        existing.add(full_var.lower())
+    derived_keys = {str(var).casefold() for var in derived_vars or ()}
+    for key, (variable, section, src) in shape_sources.items():
+        full_var = f"{prefix}{variable}"
+        if (key not in derived_keys or full_var.lower() in existing
+                or not sparse_ready):
+            continue
+        shape_id = shape_ids[key]
+        batch = shape_id // 127
+        found.append({
+            "kind": "shape_slider", "derived": True,
+            "name": variable, "var": full_var,
+            "authored_slider": False, "ui_section": None,
+            "min": 0.0, "max": 1.0, "step": 0.01,
+            **sparse_resources,
+            "shape_id": shape_id,
+            "buffer_shape_id": shape_id + batch,
+            "sparse_entry_offset": batch_offsets.get(batch, 0),
+            "stride": resource(base_binding).get("stride", 12),
+            "source": source, "ini_path": src.get("ini_path"),
+            "section": section,
+        })
         existing.add(full_var.lower())
 
     # Multi-target ZZMI menus bind five full buffers and two scalar inputs:

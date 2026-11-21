@@ -101,9 +101,36 @@ def test_batch_preserves_layout_ranges_and_exact_bytes(
     _equivalent(packing.pack_draw_geometry(draw, group, **options), expected)
 
 
+def test_sparse_shape_keys_pack_in_batch_and_skip_untouched_draws(tmp_path):
+    draw, group, options = _inputs(tmp_path)
+    # Key 0 moves drawn vertex 3 twice (accumulated) and undrawn vertex 30;
+    # key 1 only moves vertex 30, so it contributes nothing to this draw.
+    (tmp_path / "offsets.buf").write_bytes(struct.pack("<3I", 0, 3, 4))
+    (tmp_path / "ids.buf").write_bytes(struct.pack("<4I", 3, 3, 30, 30))
+    deltas = bytearray(4 * 12)
+    for entry, delta in enumerate(((.5, -.25, 1.), (.125, 0., 0.),
+                                   (9., 9., 9.), (7., 7., 7.))):
+        struct.pack_into("<3e", deltas, entry * 12, *delta)
+    (tmp_path / "deltas.buf").write_bytes(deltas)
+    sparse = {"base_file": "position.buf", "offset_file": "offsets.buf",
+              "vertex_id_file": "ids.buf", "vertex_offset_file": "deltas.buf",
+              "stride": 40, "sparse_entry_offset": 0}
+    group["shape_sliders"] = [
+        {**sparse, "var": "fit_shape", "shape_id": 0, "buffer_shape_id": 0},
+        {**sparse, "var": "far_shape", "shape_id": 1, "buffer_shape_id": 1}]
+    expected = packing._pack_draw_geometry_python(draw, group, **options)
+    actual = batch_packing.try_pack_draw_geometry(draw, group, **options)
+    assert actual is not None
+    _equivalent(actual, expected)
+    assert [target.var for target in actual.shape_targets] == ["fit_shape"]
+    slot = actual.used_vertices.index(3)
+    moved = struct.unpack_from("<3f", actual.shape_targets[0].positions, slot * 12)
+    assert moved == (0. + .625, -3. - .25, 0. + 1.)
+
+
 @pytest.mark.parametrize("fault", [
     "position_nan", "uv_nan", "position_truncated", "uv_truncated",
-    "negative_base", "unsupported_uv", "sparse", "compute",
+    "negative_base", "unsupported_uv", "compute",
     "shape_nan", "partial_triangle", "trailing_negative", "after_end",
 ])
 def test_unsupported_inputs_keep_the_conservative_result(tmp_path, fault):
@@ -113,10 +140,6 @@ def test_unsupported_inputs_keep_the_conservative_result(tmp_path, fault):
     elif fault == "unsupported_uv":
         options["default_streams"] = replace(
             options["default_streams"], uv_format="<2f")
-    elif fault == "sparse":
-        group["shape_sliders"] = [{
-            "var": "shape_amount", "base_file": "position.buf", "shape_id": 0,
-        }]
     elif fault == "compute":
         group["_compute_animation"] = {"track_id": "track01"}
     elif fault == "shape_nan":
