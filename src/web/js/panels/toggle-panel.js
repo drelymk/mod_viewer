@@ -8,6 +8,7 @@ import { alertDialog, confirmDialog } from '../ui/dialogs.js';
 import { registerViewSync, syncView } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import { createIcon } from '../ui/ui-icons.js';
+import { showMeshContextMenu } from './mesh-panel-context-menu.js';
 import { cyclePositionCount, cycleValueAt } from '../editing/cycle-values.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
@@ -92,8 +93,8 @@ function buildToggleItem(info, ctx) {
   const item = document.createElement('div');
   item.className = 'toggle-item';
 
-  const hdr = document.createElement('div');
-  hdr.className = 'toggle-hdr';
+  const row = document.createElement('div');
+  row.className = 'toggle-row';
 
   const left = document.createElement('span');
   left.className = 'toggle-hdr-left';
@@ -116,53 +117,49 @@ function buildToggleItem(info, ctx) {
     warnBadge.title = t('toggle.unwired');
     left.appendChild(warnBadge);
   }
-  hdr.appendChild(left);
-
-  const editBtn = document.createElement('button');
-  editBtn.className = 'toggle-icon-btn';
-  editBtn.appendChild(createIcon('edit'));
-  editBtn.title = t('toggle.edit');
-  editBtn.setAttribute('aria-label', t('toggle.edit'));
-  editBtn.addEventListener('click', () => {
-    openToggleModal({ mode: 'edit', modPath: ctx.modPath, info, onSaved: ctx.onChange });
-  });
-
-  const deleteBtn = document.createElement('button');
-  deleteBtn.className = 'toggle-icon-btn';
-  deleteBtn.appendChild(createIcon('delete'));
-  deleteBtn.title = t('toggle.delete');
-  deleteBtn.setAttribute('aria-label', t('toggle.delete'));
-  deleteBtn.addEventListener('click', () => handleDelete(info, ctx));
-
-  const recordBtn = document.createElement('button');
-  recordBtn.className = 'toggle-icon-btn';
-  recordBtn.appendChild(createIcon('record'));
-  recordBtn.title = t('toggle.record');
-  recordBtn.setAttribute('aria-label', t('toggle.recordAria'));
-
-  const actions = document.createElement('span');
-  actions.className = 'toggle-actions';
-  actions.append(editBtn, deleteBtn, recordBtn);
-  hdr.appendChild(actions);
-
-  item.appendChild(hdr);
+  row.appendChild(left);
 
   // A key can drive one or several vars; always name them so the value is
   // never ambiguous.
   const describe = () => info.vars.map((v) => `${displayName(v.var)}=${getToggleValue(v.var)}`).join(', ');
 
-  const row = document.createElement('div');
-  row.className = 'toggle-row';
+  const valSpan = document.createElement('span');
+  valSpan.className = 'toggle-value';
+  valSpan.textContent = describe();
+  valSpan.title = valSpan.textContent;
+  row.appendChild(valSpan);
+
+  let prevBtn = null;
+  if (positions > 2) {
+    prevBtn = document.createElement('button');
+    prevBtn.type = 'button';
+    prevBtn.className = 'toggle-step-btn';
+    prevBtn.appendChild(createIcon('chevron-left'));
+    prevBtn.title = t('toggle.previous');
+    prevBtn.setAttribute('aria-label', t('toggle.previous'));
+    prevBtn.addEventListener('click', () => {
+      cyclePosition = findCyclePosition(cycleVars, positions, cyclePosition);
+      const previous = cyclePosition < 0 ? positions - 1 : (cyclePosition - 1 + positions) % positions;
+      for (const v of cycleVars) {
+        setToggleValue(v.var, cycleValueAt(v, previous));
+      }
+      cyclePosition = previous;
+      refreshAll();
+    });
+    row.appendChild(prevBtn);
+  } else {
+    // Keeps cycle buttons aligned when sibling toggles have a previous-value button.
+    const spacer = document.createElement('span');
+    spacer.className = 'toggle-step-spacer';
+    spacer.setAttribute('aria-hidden', 'true');
+    row.appendChild(spacer);
+  }
 
   const btn = document.createElement('button');
   btn.className = 'toggle-cycle-btn';
   btn.appendChild(createIcon('cycle'));
   btn.title = t('toggle.cycle');
   btn.setAttribute('aria-label', t('toggle.cycle'));
-
-  const valSpan = document.createElement('span');
-  valSpan.className = 'toggle-value';
-  valSpan.textContent = describe();
 
   // A plain assignable slot (not addEventListener) so a recording session can
   // swap this button's behaviour to "advance position" and restore it again
@@ -176,16 +173,31 @@ function buildToggleItem(info, ctx) {
     cyclePosition = next;
     refreshAll();
   };
+  row.appendChild(btn);
+
   valueSyncers.push(() => {
     cyclePosition = findCyclePosition(cycleVars, positions, cyclePosition);
     valSpan.textContent = describe();
+    valSpan.title = valSpan.textContent;
   });
 
-  row.append(btn, valSpan);
+  const moreBtn = document.createElement('button');
+  moreBtn.type = 'button';
+  moreBtn.className = 'toggle-icon-btn toggle-more-btn';
+  moreBtn.appendChild(createIcon('more'));
+  moreBtn.setAttribute('aria-haspopup', 'menu');
+  moreBtn.title = t('toggle.actions');
+  moreBtn.setAttribute('aria-label', t('toggle.actions'));
+
+  const actions = document.createElement('span');
+  actions.className = 'toggle-actions';
+  actions.appendChild(moreBtn);
+  row.appendChild(actions);
+
   item.appendChild(row);
 
   // Hidden until a recording session is active on this item (see
-  // record-session.js); Save/Cancel replace Edit/Delete/Record for the
+  // record-session.js); Save/Cancel replace the row controls for the
   // duration.
   const recordRow = document.createElement('div');
   recordRow.className = 'toggle-record-row';
@@ -201,15 +213,14 @@ function buildToggleItem(info, ctx) {
   recordRow.append(saveBtn, cancelBtn);
   item.appendChild(recordRow);
 
-  recordBtn.addEventListener('click', () => {
+  const startRecording = () =>
     startRecordSession(info, ctx, {
       item,
       row,
       cycleBtn: btn,
       valSpan,
-      recordBtn,
-      editBtn,
-      deleteBtn,
+      actionsControl: actions,
+      prevBtn,
       recordRow,
       saveBtn,
       cancelBtn,
@@ -217,15 +228,37 @@ function buildToggleItem(info, ctx) {
       disableOthers: () => setOthersEnabled(false, item),
       enableOthers: () => setOthersEnabled(true, item),
     });
+
+  moreBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const rect = moreBtn.getBoundingClientRect();
+    showMeshContextMenu({ clientX: rect.left, clientY: rect.bottom + 4 }, [
+      {
+        key: 'toggle.edit',
+        className: 'toggle-context-action',
+        run: () => openToggleModal({ mode: 'edit', modPath: ctx.modPath, info, onSaved: ctx.onChange }),
+      },
+      {
+        key: 'toggle.delete',
+        className: 'toggle-context-action',
+        run: () => handleDelete(info, ctx),
+      },
+      {
+        key: 'toggle.recordAria',
+        className: 'toggle-context-action',
+        reason: 'toggle.record',
+        run: () => startRecording(),
+      },
+    ]);
   });
 
   const syncLabels = () => {
-    editBtn.title = t('toggle.edit');
-    editBtn.setAttribute('aria-label', t('toggle.edit'));
-    deleteBtn.title = t('toggle.delete');
-    deleteBtn.setAttribute('aria-label', t('toggle.delete'));
-    recordBtn.title = t('toggle.record');
-    recordBtn.setAttribute('aria-label', t('toggle.recordAria'));
+    moreBtn.title = t('toggle.actions');
+    moreBtn.setAttribute('aria-label', t('toggle.actions'));
+    if (prevBtn) {
+      prevBtn.title = t('toggle.previous');
+      prevBtn.setAttribute('aria-label', t('toggle.previous'));
+    }
     if (!item.classList.contains('recording')) {
       btn.title = t('toggle.cycle');
       btn.setAttribute('aria-label', t('toggle.cycle'));

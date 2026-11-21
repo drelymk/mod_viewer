@@ -162,9 +162,8 @@ export async function startRecordSession(info, ctx, ui) {
 
 function enterRecordingUI() {
   const { ui } = active;
-  ui.recordBtn.style.display = 'none';
-  ui.editBtn.style.display = 'none';
-  ui.deleteBtn.style.display = 'none';
+  ui.actionsControl.style.display = 'none';
+  if (ui.prevBtn) ui.prevBtn.style.display = 'none';
   ui.row.classList.add('recording');
   ui.valSpan.textContent = positionLabel();
 
@@ -188,9 +187,8 @@ function enterRecordingUI() {
 function exitRecordingUI() {
   const { ui } = active;
   ui.row.classList.remove('recording');
-  ui.recordBtn.style.display = '';
-  ui.editBtn.style.display = '';
-  ui.deleteBtn.style.display = '';
+  ui.actionsControl.style.display = '';
+  if (ui.prevBtn) ui.prevBtn.style.display = '';
   ui.recordRow.style.display = 'none';
   ui.cycleBtn.onclick = ui.originalCycleClick;
   ui.cycleBtn.title = t('record.cycleValue');

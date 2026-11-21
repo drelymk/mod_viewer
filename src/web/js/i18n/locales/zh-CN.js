@@ -348,6 +348,8 @@ export default {
   'toggle.record': '录制每个位置显示的网格',
   'toggle.recordAria': '录制切换网格可见性',
   'toggle.cycle': '循环值',
+  'toggle.previous': '上一个值',
+  'toggle.actions': '切换操作',
   'toggle.noToggles': '暂无切换——点击“添加”创建一个。',
   'toggle.addTitle': '添加切换',
   'toggle.editTitle': '编辑 {name}',

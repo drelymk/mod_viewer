@@ -359,6 +359,8 @@ export default {
   'toggle.record': 'Registrar las mallas que se muestran en cada posición',
   'toggle.recordAria': 'Registrar la visibilidad de mallas del toggle',
   'toggle.cycle': 'Cambiar valor',
+  'toggle.previous': 'Valor anterior',
+  'toggle.actions': 'Acciones del toggle',
   'toggle.noToggles': 'Aún no hay toggles. Haz clic en Añadir para crear uno.',
   'toggle.addTitle': 'Añadir toggle',
   'toggle.editTitle': 'Editar {name}',

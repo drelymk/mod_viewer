@@ -359,6 +359,8 @@ export default {
   'toggle.record': 'Записать отображаемые меши для каждой позиции',
   'toggle.recordAria': 'Записать видимость мешей переключателя',
   'toggle.cycle': 'Сменить значение',
+  'toggle.previous': 'Предыдущее значение',
+  'toggle.actions': 'Действия переключателя',
   'toggle.noToggles': 'Переключателей пока нет. Нажмите «Добавить», чтобы создать его.',
   'toggle.addTitle': 'Добавить переключатель',
   'toggle.editTitle': 'Изменить {name}',

@@ -357,6 +357,8 @@ export default {
   'toggle.record': '각 위치에 표시할 메시 기록',
   'toggle.recordAria': '토글 메시 표시 기록',
   'toggle.cycle': '값 순환',
+  'toggle.previous': '이전 값',
+  'toggle.actions': '토글 작업',
   'toggle.noToggles': '토글이 아직 없습니다. 추가를 클릭하여 만드세요.',
   'toggle.addTitle': '토글 추가',
   'toggle.editTitle': '{name} 편집',

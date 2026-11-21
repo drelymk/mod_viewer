@@ -637,7 +637,7 @@ body.focus-mode #view-gizmo { top: 12px; right: 12px; }
 #texm-close:hover { background: var(--panel-fill-border); }
 
 /* ── toggle panel (right) ────────────────────────────────────────────────── */
-#toggle-list { display: flex; flex-direction: column; gap: 10px; }
+#toggle-list { display: flex; flex-direction: column; gap: 4px; }
 #present-list { display: flex; flex-direction: column; gap: 8px; }
 .present-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .present-buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
@@ -655,15 +655,19 @@ body.focus-mode #view-gizmo { top: 12px; right: 12px; }
   display: flex; align-items: center; gap: 7px; font-size: 12px; color: #cdd9e5;
   font-weight: 600; margin-top: 6px; cursor: pointer;
 }
-.toggle-src-items { display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+.toggle-src-items { display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
 .toggle-src-items.collapsed { display: none; }
-.toggle-item { display: flex; flex-direction: column; gap: 5px; }
+.toggle-item { display: flex; flex-direction: column; gap: 4px; }
 .toggle-hdr  { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .toggle-hdr-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.toggle-name { font-size: 12px; color: #cdd9e5; font-weight: 600; }
+.toggle-row .toggle-hdr-left { flex: 0 1 auto; min-width: 0; }
+.toggle-name {
+  font-size: 12px; color: #cdd9e5; font-weight: 600;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .toggle-key  {
   font-size: 10px; color: #8b949e; background: var(--panel-fill-control); border: 1px solid #30363d;
-  border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+  border-radius: 4px; padding: 1px 6px; white-space: nowrap; flex-shrink: 0;
 }
 .toggle-unwired-badge {
   font-size: 11px; color: #e3b341; background: var(--panel-fill-warning-muted); border: 1px solid #4d3a14;
@@ -677,22 +681,38 @@ body.focus-mode #view-gizmo { top: 12px; right: 12px; }
 }
 .toggle-icon-btn:hover { background: var(--panel-fill-control); color: #e6edf3; }
 .toggle-icon-btn .ui-icon { width: 15px; height: 15px; }
+.toggle-more-btn { width: 22px; height: 22px; }
 .toggle-empty { font-size: 11px; color: #8b949e; font-style: italic; }
 .toggle-row { display: flex; align-items: center; gap: 8px; }
+#toggle-list .toggle-row {
+  gap: 6px; min-height: 30px; padding: 2px 4px; margin: 0 -4px; border-radius: 4px;
+}
+#toggle-list .toggle-row:hover { background: var(--panel-fill-hover); }
 .toggle-cycle-btn {
   background: var(--panel-fill-control); border: 1px solid #30363d; color: #e6edf3; border-radius: 4px;
   width: 28px; height: 28px; min-height: 28px; display: inline-flex; align-items: center;
   justify-content: center; cursor: pointer; flex-shrink: 0;
 }
+#toggle-list .toggle-cycle-btn { width: 26px; height: 26px; min-height: 26px; }
 .toggle-cycle-btn .ui-icon { width: 16px; height: 16px; }
 .toggle-cycle-btn:hover { background: var(--panel-fill-accent); }
+.toggle-step-btn {
+  background: var(--panel-fill-control); border: 1px solid #30363d; color: #e6edf3; border-radius: 4px;
+  width: 22px; height: 26px; min-height: 26px; display: inline-flex; align-items: center;
+  justify-content: center; cursor: pointer; flex-shrink: 0;
+}
+.toggle-step-btn .ui-icon { width: 14px; height: 14px; }
+.toggle-step-btn:hover { background: var(--panel-fill-accent); }
+.toggle-step-spacer { display: none; flex: 0 0 22px; }
+#toggle-list:has(.toggle-step-btn) .toggle-step-spacer { display: block; }
 .toggle-value { font-size: 12px; color: var(--accent-soft); font-weight: 600; flex: 1; min-width: 0; overflow-wrap: break-word; }
+#toggle-list .toggle-value {
+  flex: 1 1 auto; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* Recording session: the row being recorded gets an accent outline, and the
  * cycle button + value describe "Position N of M" instead of the live value. */
-.toggle-row.recording {
-  outline: 1px solid #58a6ff; border-radius: 4px; padding: 3px 4px; margin: -3px -4px;
-}
+.toggle-row.recording { outline: 1px solid #58a6ff; border-radius: 4px; }
 .toggle-record-row { display: flex; gap: 6px; }
 .toggle-record-save, .toggle-record-cancel {
   flex: 1; border-radius: 4px; padding: 4px 0; font-size: 12px; cursor: pointer;
@@ -707,7 +727,7 @@ body.focus-mode #view-gizmo { top: 12px; right: 12px; }
 }
 .toggle-record-cancel:hover { background: var(--panel-fill-border); }
 
-.icon-btn:disabled, .toggle-icon-btn:disabled, .toggle-cycle-btn:disabled {
+.icon-btn:disabled, .toggle-icon-btn:disabled, .toggle-cycle-btn:disabled, .toggle-step-btn:disabled {
   opacity: .35; cursor: default; background: var(--panel-fill-control);
 }
 

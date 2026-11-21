@@ -358,6 +358,8 @@ export default {
   'toggle.record': '各位置で表示するメッシュを記録',
   'toggle.recordAria': '切り替えのメッシュ表示を記録',
   'toggle.cycle': '値を切り替え',
+  'toggle.previous': '前の値',
+  'toggle.actions': '切り替え操作',
   'toggle.noToggles': '切り替えはまだありません。「追加」をクリックして作成してください。',
   'toggle.addTitle': '切り替えを追加',
   'toggle.editTitle': '{name}を編集',

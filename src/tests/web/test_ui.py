@@ -753,6 +753,70 @@ def test_toggle_visibility_changes_only_wired_meshes(viewer):
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
 
 
+def test_toggle_row_steps_both_ways_and_actions_menu_yields_to_recording(viewer):
+    payload = controlled_payload()
+    payload['controls']['toggles']['KeyFixture']['vars'][0]['values'] = ['0', '1', '2']
+    payload['controls']['toggles']['KeyFixture02'] = {
+        'name': 'control-02', 'ini': 'source-01.ini', 'section': 'KeyFixture02', 'wired': True,
+        'vars': [{'var': 'input02', 'default': '0', 'values': ['0', '1']}],
+    }
+    payload['state']['defaults']['input02'] = '0'
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    if page.locator('#controls-panel').is_hidden():
+        page.locator('#controls-tab').click()
+
+    three = page.locator('.toggle-item', has_text='control-01')
+    two = page.locator('.toggle-item', has_text='control-02')
+    three_row = three.locator('.toggle-row')
+    two_row = two.locator('.toggle-row')
+    for row in (three_row, two_row):
+        assert row.bounding_box()['height'] <= 34
+    assert three_row.locator('.toggle-step-btn').count() == 1
+    assert two_row.locator('.toggle-step-btn').count() == 0
+
+    value = three_row.locator('.toggle-value')
+
+    def expect_value(expected):
+        text = value.text_content()
+        assert f'input01={expected}' in text
+        assert value.get_attribute('title') == text
+
+    expect_value('0')
+    three_row.locator('.toggle-step-btn').click()
+    expect_value('2')
+    three_row.locator('.toggle-cycle-btn').click()
+    expect_value('0')
+    three_row.locator('.toggle-cycle-btn').click()
+    expect_value('1')
+
+    three_row.locator('.toggle-more-btn').click()
+    menu = page.locator('.mesh-context-menu')
+    assert menu.is_visible()
+    for name in ('Edit toggle', 'Delete toggle', 'Record toggle mesh visibility'):
+        assert menu.get_by_role('menuitem', name=name).is_visible()
+    page.keyboard.press('Escape')
+    assert menu.is_hidden()
+
+    three_row.locator('.toggle-more-btn').click()
+    page.get_by_role('menuitem', name='Record toggle mesh visibility').click()
+    page.locator('.toggle-row.recording').wait_for()
+    assert three_row.evaluate('row => row.classList.contains("recording")')
+    assert three.locator('.toggle-more-btn').is_hidden()
+    assert three.locator('.toggle-step-btn').is_hidden()
+    assert two.locator('.toggle-more-btn').is_disabled()
+    three.locator('.toggle-record-cancel').click()
+    assert page.locator('.toggle-row.recording').count() == 0
+    assert three.locator('.toggle-more-btn').is_visible()
+    assert three.locator('.toggle-step-btn').is_visible()
+    assert two.locator('.toggle-more-btn').is_enabled()
+
+    assert bridge_calls(page, 'record') == []
+    assert bridge_calls(page, 'export') == []
+    assert page.evaluate('!window.__bridge.pending["fixture-01"]')
+
+
 def test_component_and_ini_eyes_follow_child_visibility_without_staging(viewer):
     single = model_payload(1)
     multiple = model_payload(4)
@@ -835,7 +899,8 @@ def test_keyboard_and_inspector_visibility_record_like_meshes_eye(viewer):
     for action in ('keyboard', 'inspector', 'panel'):
         if page.locator('#controls-panel').is_hidden():
             page.locator('#controls-tab').click()
-        page.locator('#toggle-list [aria-label="Record toggle mesh visibility"]').click()
+        page.locator('#toggle-list .toggle-more-btn').first.click()
+        page.get_by_role('menuitem', name='Record toggle mesh visibility').click()
         page.locator('.toggle-row.recording').wait_for()
         page.locator('.draw-item').nth(1).click()
         point = project_mesh_points(page, [[0.25, 0.25, 0]])[0]
@@ -2311,7 +2376,8 @@ def test_mesh_create_toggle_refuses_incomplete_or_transient_selection(viewer):
     page.locator('[data-i18n="mesh.cancelSelection"]').click()
     if page.locator('#controls-panel').is_hidden():
         page.locator('#controls-tab').click()
-    page.locator('#toggle-list [aria-label="Record toggle mesh visibility"]').click()
+    page.locator('#toggle-list .toggle-more-btn').first.click()
+    page.get_by_role('menuitem', name='Record toggle mesh visibility').click()
     page.locator('.toggle-row.recording').wait_for()
     rows.nth(0).click(button='right')
     assert page.locator('.mesh-context-menu').is_hidden()

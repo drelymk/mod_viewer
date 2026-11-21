@@ -347,6 +347,8 @@ export default {
   'toggle.record': 'Record which meshes show at each position',
   'toggle.recordAria': 'Record toggle mesh visibility',
   'toggle.cycle': 'Cycle value',
+  'toggle.previous': 'Previous value',
+  'toggle.actions': 'Toggle actions',
   'toggle.noToggles': 'No toggles yet — click Add to create one.',
   'toggle.addTitle': 'Add Toggle',
   'toggle.noAutomaticKey': 'No automatic key binding available. Enter a key binding to continue.',
