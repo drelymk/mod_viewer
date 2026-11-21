@@ -1,7 +1,6 @@
 // Resizable and collapsible docks, focus mode, bottom clearance and viewer keyboard shortcuts.
 
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
-import { refreshViewportLayout } from '../scene/scene.js';
 import { isRigJointPickingActive, isRigTransformInteractionActive } from '../scene/rig-overlay-state.js';
 import { openLeftDock, toggleLeftDock } from '../panels/left-dock.js';
 import { openRightDock, toggleRightDock } from '../panels/right-dock.js';
@@ -31,7 +30,6 @@ const CLEARANCE_OVERLAYS = ['tool-panel', 'animation-playback'];
 const OBSERVED_LAYOUT_IDS = ['tool-panel', 'animation-playback', 'left-dock', 'right-dock', 'left-panel-container'];
 
 let focusMode = false;
-let viewportDirty = false;
 let layoutFrame = 0;
 let dragging = null;
 let widthChangeHandler = () => {};
@@ -75,10 +73,6 @@ function scheduleLayout() {
   layoutFrame = requestAnimationFrame(() => {
     layoutFrame = 0;
     updateClearance();
-    if (viewportDirty) {
-      viewportDirty = false;
-      refreshViewportLayout();
-    }
   });
 }
 
@@ -116,7 +110,6 @@ export function setDockWidth(side, value) {
   const width = Math.round(Math.min(spec.max, Math.max(spec.min, number)));
   document.documentElement.style.setProperty(spec.property, `${width}px`);
   syncResizerAria(side);
-  viewportDirty = true;
   scheduleLayout();
   return width;
 }
@@ -201,7 +194,6 @@ export function setFocusMode(enabled) {
   const exit = $('focus-exit-btn');
   if (exit) exit.hidden = !focusMode;
   syncFocusButton();
-  viewportDirty = true;
   scheduleLayout();
 }
 
@@ -259,12 +251,7 @@ export function initDockLayout({ onWidthChange } = {}) {
     scheduleLayout();
   });
   window.addEventListener('mod-viewer-right-dock-tab-changed', scheduleLayout);
-  const observer = new ResizeObserver((entries) => {
-    for (const entry of entries) {
-      if (entry.target.id === 'left-dock' || entry.target.id === 'right-dock') viewportDirty = true;
-    }
-    scheduleLayout();
-  });
+  const observer = new ResizeObserver(() => scheduleLayout());
   for (const id of OBSERVED_LAYOUT_IDS) {
     const element = $(id);
     if (element) observer.observe(element);

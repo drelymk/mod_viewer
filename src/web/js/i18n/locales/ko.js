@@ -180,7 +180,7 @@ export default {
   'panels.showRight': '오른쪽 패널 표시 (])',
   'panels.resizeLeft': '왼쪽 패널 크기 조절',
   'panels.resizeRight': '오른쪽 패널 크기 조절',
-  'panels.showPanels': '패널 표시',
+  'panels.showPanels': '패널 표시 (\\)',
   'empty.noMod': 'MOD가 로드되지 않음',
   'empty.openOrAdd': 'MOD 폴더를 직접 열거나 MOD 라이브러리에 폴더를 추가하세요.',
   'empty.openModFolder': 'MOD 폴더 열기',

@@ -1320,6 +1320,8 @@ def test_loose_part_apply_requires_confirmation_and_stages_complete_partition(vi
     mesh['drawindexed'] = [6,0,0]
     mesh['identity'] = {'key': 'identity-01', 'component': 'component-00'}
     page = viewer({'fixture-01': payload})
+    # Docks overlay the full-canvas view; widen it so viewport clicks miss them.
+    page.set_viewport_size({'width': 1600, 'height': 900})
     open_model(page, 'fixture-01')
     wait_loaded(page)
     page.locator('#inspector-tab').click()
@@ -1439,6 +1441,8 @@ def test_viewport_context_menu_shares_selection_and_create_toggle(viewer):
         source.update(line=10 + index, occurrence={
             'section': source['section'], 'ordinal': index, 'path': []})
     page = viewer({'fixture-01': payload})
+    # Docks overlay the full-canvas view; widen it so viewport clicks miss them.
+    page.set_viewport_size({'width': 1600, 'height': 900})
     open_model(page, 'fixture-01')
     wait_loaded(page, 3)
     page.locator('#inspector-tab').click()
@@ -1561,6 +1565,8 @@ def test_face_selection_modes_combine_clicks_and_rectangles_only_while_editing(v
         0,0,0, 1,0,0, 0,1,0, 2,0,0, 3,0,0, 2,1,0, 4,0,0, 5,0,0, 4,1,0]),
         idx=append_stream(payload, 'I', [0,1,2,3,4,5,6,7,8]), drawindexed=[9,0,0])
     page = viewer({'fixture-01': payload})
+    # Docks overlay the full-canvas view; widen it so viewport clicks miss them.
+    page.set_viewport_size({'width': 1600, 'height': 900})
     open_model(page, 'fixture-01')
     wait_loaded(page)
     page.locator('#inspector-tab').click()
@@ -1663,7 +1669,7 @@ def test_face_selection_modes_combine_clicks_and_rectangles_only_while_editing(v
         page.set_viewport_size({'width': width, 'height': 900})
         assert mode.evaluate("""toolbar => {
           const bounds = toolbar.getBoundingClientRect();
-          const tabs = document.getElementById('left-dock-tabs').getBoundingClientRect();
+          const tabs = document.getElementById('left-dock-header').getBoundingClientRect();
           return bounds.left > tabs.right && bounds.right <= innerWidth
             && Math.abs(bounds.top - tabs.top) < 1;
         }""")
@@ -1735,6 +1741,8 @@ def test_inspector_mesh_tools_preview_history_and_staging(viewer):
         payload['meshes'][f'mesh-{index:02d}']['pos'] = append_stream(
             payload, 'f', [x,0,0,x+1,0,0,x,1,0])
     page = viewer({'fixture-01': payload})
+    # Docks overlay the full-canvas view; widen it so viewport clicks miss them.
+    page.set_viewport_size({'width': 1600, 'height': 900})
     open_model(page, 'fixture-01')
     wait_loaded(page, 3)
     page.locator('#inspector-tab').click()
@@ -1901,6 +1909,8 @@ def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
         mesh['pos'] = append_stream(payload, 'f', [x,0,0,x+1,0,0,x,1,0])
     payload['metadata']['mesh_names'][payload['meshes']['mesh-00']['identity']['key']] = label.strip()
     page = viewer({'fixture-01': payload})
+    # Docks overlay the full-canvas view; widen it so viewport clicks miss them.
+    page.set_viewport_size({'width': 1600, 'height': 900})
     open_model(page, 'fixture-01')
     wait_loaded(page, 4)
     page.locator('#inspector-tab').click()

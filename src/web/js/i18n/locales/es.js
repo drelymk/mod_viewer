@@ -182,7 +182,7 @@ export default {
   'panels.showRight': 'Mostrar panel derecho (])',
   'panels.resizeLeft': 'Redimensionar panel izquierdo',
   'panels.resizeRight': 'Redimensionar panel derecho',
-  'panels.showPanels': 'Mostrar paneles',
+  'panels.showPanels': 'Mostrar paneles (\\)',
   'empty.noMod': 'No hay MOD cargado',
   'empty.openOrAdd': 'Abre directamente una carpeta de MOD o añade una carpeta a tu biblioteca de MOD.',
   'empty.openModFolder': 'Abrir carpeta de MOD',

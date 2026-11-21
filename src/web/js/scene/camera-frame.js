@@ -36,51 +36,13 @@ export function createCameraFrame({
   let modelPivot = null;
   const modelTranslation = new THREE.Vector3();
 
-  /** Aim projection at the unobstructed region while retaining the real model
-   * center as Arcball's physical orbit target. */
-  function usableViewport() {
-    const canvas = renderer.domElement.getBoundingClientRect();
-    const fullWidth = Math.max(canvas.width, 1);
-    const fullHeight = Math.max(canvas.height, 1);
-    let left = 0;
-    let right = fullWidth;
-    const gap = 14;
-
-    const leftDock = document.getElementById('left-dock');
-    const leftRect = leftDock?.getBoundingClientRect();
-    if (leftDock && leftRect.width > 1) {
-      left = Math.max(left, leftRect.right - canvas.left + gap);
-    }
-    const rightDock = document.getElementById('right-dock');
-    const rightRect = rightDock?.getBoundingClientRect();
-    if (rightDock && rightRect.width > 1) {
-      right = Math.min(right, rightRect.left - canvas.left - gap);
-    }
-    if (right - left < fullWidth * 0.25) {
-      left = 0;
-      right = fullWidth;
-    }
-    return {
-      fullWidth,
-      fullHeight,
-      width: right - left,
-      centerShiftX: (left + right - fullWidth) * 0.5,
-    };
-  }
-
+  /** Frame against the whole canvas: floating docks overlay the viewport and
+   * never shift, resize or re-centre the projection. */
   function updateViewport() {
-    const viewport = usableViewport();
+    const canvas = renderer.domElement.getBoundingClientRect();
+    const width = Math.max(canvas.width, 1);
+    const viewport = { fullWidth: width, fullHeight: Math.max(canvas.height, 1), width };
     camera.clearViewOffset();
-    if (Math.abs(viewport.centerShiftX) > 0.5) {
-      camera.setViewOffset(
-        viewport.fullWidth,
-        viewport.fullHeight,
-        -viewport.centerShiftX,
-        0,
-        viewport.fullWidth,
-        viewport.fullHeight,
-      );
-    }
     camera.updateProjectionMatrix();
     return viewport;
   }

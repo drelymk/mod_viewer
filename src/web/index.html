@@ -66,6 +66,7 @@
   <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="m14 5-7 7 7 7"/></symbol>
   <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
   <symbol id="icon-close" viewBox="0 0 24 24"><path d="m5 5 14 14M19 5 5 19"/></symbol>
+  <symbol id="icon-panels" viewBox="0 0 24 24"><path d="M3 5h18v14H3zM9 5v14M15 5v14"/></symbol>
   <symbol id="icon-expand" viewBox="0 0 24 24"><path d="M9 3H3v6M15 3h6v6M21 15v6h-6M9 21H3v-6M3 3l6 6M21 3l-6 6M21 21l-6-6M3 21l6-6"/></symbol>
   <symbol id="icon-exit-isolation" viewBox="0 0 24 24"><path d="M9 4H4v16h5M12 12h9m-4-4 4 4-4 4"/></symbol>
 </svg>
@@ -155,8 +156,10 @@
     </svg>
   </div>
 </div>
-<button id="focus-exit-btn" class="ui-button focus-exit-btn" type="button" hidden>
-  <span data-i18n="panels.showPanels">Show panels</span><kbd>\</kbd>
+<button id="focus-exit-btn" class="icon-btn focus-exit-btn" type="button" hidden
+        title="Show panels (\)" aria-label="Show panels (\)"
+        data-i18n-title="panels.showPanels" data-i18n-aria-label="panels.showPanels">
+  <svg class="ui-icon" aria-hidden="true"><use href="#icon-panels"></use></svg>
 </button>
 
 <div id="left-dock">

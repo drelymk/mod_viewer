@@ -175,7 +175,7 @@ export default {
   'panels.showRight': '显示右侧面板 (])',
   'panels.resizeLeft': '调整左侧面板大小',
   'panels.resizeRight': '调整右侧面板大小',
-  'panels.showPanels': '显示面板',
+  'panels.showPanels': '显示面板 (\\)',
   'empty.noMod': '未加载 MOD',
   'empty.openOrAdd': '直接打开 MOD 文件夹，或将文件夹添加到 MOD 库。',
   'empty.openModFolder': '打开 MOD 文件夹',

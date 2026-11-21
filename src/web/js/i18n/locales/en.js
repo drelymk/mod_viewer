@@ -162,7 +162,7 @@ export default {
   'panels.showRight': 'Show right panel (])',
   'panels.resizeLeft': 'Resize left panel',
   'panels.resizeRight': 'Resize right panel',
-  'panels.showPanels': 'Show panels',
+  'panels.showPanels': 'Show panels (\\)',
   'empty.noMod': 'No mod loaded',
   'empty.openOrAdd': 'Open a mod folder directly, or add a folder to your Mod Library.',
   'empty.openModFolder': 'Open Mod Folder',

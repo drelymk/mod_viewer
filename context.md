@@ -1487,6 +1487,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Reset retains the base transform; removed meshes leave the reset baseline.
   Direct Asset previews use the backend's authoritative game metadata for this
   orientation, sharing mod rules without transforming stored Asset geometry.
+- Docks float over the viewport. Camera framing and projection use the whole
+  canvas; opening, closing, resizing or focus-hiding docks never shifts,
+  re-centres or refits the view.
 
 ## Manager capture integration
 

@@ -218,11 +218,6 @@ new ResizeObserver(() => {
   requestRender();
 }).observe(container);
 
-export function refreshViewportLayout() {
-  cameraFrame.resize(container.clientWidth, container.clientHeight);
-  requestRender();
-}
-
 let renderCount = 0;
 
 function renderFrame() {

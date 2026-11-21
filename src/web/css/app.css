@@ -1720,22 +1720,38 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 
 /* Dock navigation and shared registry panels.  The tab row remains mounted
  * while its selected panel is hidden, so a second click is a true close. */
+/* The icon rail and the open panel form one surface: the rail carries the
+ * left corners and the panel's left border is the divider between them. */
 #left-dock {
-  display: flex; flex-direction: row; align-items: flex-start; gap: 6px;
+  display: flex; flex-direction: row; align-items: stretch; gap: 0;
   width: var(--left-dock-size); max-width: min(var(--left-dock-size), calc(50vw - 36px));
 }
-#left-dock:not(.ui-visible) { width: auto; }
+#left-dock:not(.ui-visible) { width: auto; align-items: flex-start; }
 #left-dock-header {
-  position: relative; flex: 0 0 auto; width: auto; display: flex; flex-direction: column;
-  align-items: stretch; gap: 4px;
+  position: relative; flex: 0 0 auto; width: 46px; display: flex; flex-direction: column;
+  align-items: center; gap: 4px; padding: 4px;
+  background: var(--panel-background); border: 1px solid rgba(139,148,158,.45); border-right: 0;
+  border-radius: 8px 0 0 8px; backdrop-filter: blur(var(--panel-blur));
 }
-#left-dock-tabs { flex: 0 0 auto; width: 44px; }
+#left-dock:not(.ui-visible) #left-dock-header {
+  border-right: 1px solid rgba(139,148,158,.45); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
+}
+#left-dock-tabs {
+  flex: 0 0 auto; width: auto; padding: 0; gap: 4px;
+  background: transparent; border: 0; border-radius: 0; backdrop-filter: none; box-shadow: none;
+}
 #left-dock-tabs .dock-tab { width: 36px; min-height: 36px; padding: 0; }
 #left-dock-tabs .dock-tab .ui-icon { width: 18px; height: 18px; }
 .dock-tab-label {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
-#left-dock-collapse { flex: 0 0 auto; width: 44px; min-height: 32px; }
+#left-dock-collapse {
+  flex: 0 0 auto; width: 36px; min-height: 32px; margin-top: auto;
+  background: transparent; border: 0; border-radius: var(--radius-sm); backdrop-filter: none; box-shadow: none;
+}
+#left-dock-collapse:focus-visible { box-shadow: var(--focus-ring); }
+#left-dock.ui-visible .left-dock-panel { border-radius: 0 8px 8px 0; }
 .right-dock-header { display: flex; align-items: stretch; gap: 4px; }
 .right-dock-header > .right-dock-tabs { flex: 1; min-width: 0; }
 .dock-collapse-btn {
@@ -1769,15 +1785,17 @@ body.dock-resizing, body.dock-resizing * { cursor: col-resize !important; user-s
 body.focus-mode #left-dock { width: 0; }
 body.focus-mode #left-dock-header, body.focus-mode #left-dock-tabs, body.focus-mode #left-dock-collapse,
 body.focus-mode #left-panel-container, body.focus-mode #right-dock { display: none !important; }
+/* In focus mode the rail collapses into this single icon at the rail's position. */
 .focus-exit-btn {
-  position: fixed; top: calc(var(--toolbar-height) + 8px); left: 12px; z-index: 120;
-  display: inline-flex; align-items: center; gap: 6px;
+  position: fixed; top: calc(var(--toolbar-height) + 4px); left: 12px; z-index: 120;
+  display: grid; place-items: center; width: 46px; height: 44px; padding: 0;
+  color: var(--text-muted); background: var(--panel-background);
+  border: 1px solid rgba(139,148,158,.45); border-radius: 8px; backdrop-filter: blur(var(--panel-blur));
+  box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
 }
+.focus-exit-btn:hover { color: var(--text); background: var(--panel-fill-hover); }
+.focus-exit-btn .ui-icon { width: 18px; height: 18px; }
 .focus-exit-btn[hidden] { display: none; }
-.focus-exit-btn kbd {
-  font: inherit; font-size: 10px; padding: 0 5px; border-radius: 4px;
-  border: 1px solid var(--border); color: var(--text-muted);
-}
 .dock-tabs {
   display: grid; gap: 3px; padding: 3px;
   background: var(--panel-background);

@@ -181,7 +181,7 @@ export default {
   'panels.showRight': '右パネルを表示 (])',
   'panels.resizeLeft': '左パネルの幅を変更',
   'panels.resizeRight': '右パネルの幅を変更',
-  'panels.showPanels': 'パネルを表示',
+  'panels.showPanels': 'パネルを表示 (\\)',
   'empty.noMod': 'MOD未読み込み',
   'empty.openOrAdd': 'MODフォルダーを直接開くか、MODライブラリにフォルダーを追加してください。',
   'empty.openModFolder': 'MODフォルダーを開く',

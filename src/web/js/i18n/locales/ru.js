@@ -181,7 +181,7 @@ export default {
   'panels.showRight': 'Показать правую панель (])',
   'panels.resizeLeft': 'Изменить ширину левой панели',
   'panels.resizeRight': 'Изменить ширину правой панели',
-  'panels.showPanels': 'Показать панели',
+  'panels.showPanels': 'Показать панели (\\)',
   'empty.noMod': 'MOD не загружен',
   'empty.openOrAdd': 'Откройте папку MOD напрямую или добавьте её в библиотеку MOD.',
   'empty.openModFolder': 'Открыть папку MOD',
