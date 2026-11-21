@@ -354,7 +354,8 @@ filename = deltas.buf
     full = load_mod(context=snapshot_context(str(tmp_path), [str(path)]))
     assert not full.get("error")
     assert full["controls"]["menu"] == {}
-    assert "fitShape" not in repr(full["controls"]["present"])
+    assert [source["vars"] for source in
+            full["controls"]["present"]["target_inis"]] == [["outfit"]]
     assert {(rule["var"], rule["value"]) for rule in full["state"]["rules"]} == {
         ("fitShape", "1"), ("fitShape", "0"), ("farShape", "1"), ("farShape", "0")}
     (mesh,) = full["meshes"].values()

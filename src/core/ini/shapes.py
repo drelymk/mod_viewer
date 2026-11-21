@@ -48,28 +48,6 @@ def _writable_u5_outputs(lines):
     return outputs
 
 
-def wwmi_shape_value_vars(sections, canonical_vars=None):
-    """Return variables feeding WWMI sparse keys without an authored slider."""
-    canon = (canonical_vars if canonical_vars is not None
-             else canonical_var_names(sections))
-    values, sliders = set(), set()
-    for section, lines in sections.items():
-        is_slider = section.lower().startswith("commandlistdrawslider")
-        pending = False
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            if is_slider and (match := _SLIDER_RE.fullmatch(line)):
-                sliders.add(match.group(1).casefold())
-            if _SHAPE_ID_RE.fullmatch(line):
-                pending = True
-                continue
-            match = _SHAPE_VALUE_RE.fullmatch(line)
-            if match and pending:
-                values.add(match.group(1).casefold())
-                pending = False
-    return {canon.get(var, var) for var in values - sliders}
-
-
 def _sparse_base_binding(sections, bindings, resource):
     """Return the authored sparse base, else the INI's only file-backed vb0.
 
@@ -83,20 +61,18 @@ def _sparse_base_binding(sections, bindings, resource):
     for lines in sections.values():
         for raw in lines:
             match = _VB0_RE.fullmatch(str(raw).split(";", 1)[0].strip())
-            if match and resource(match.group(1)).get("filename"):
-                found.setdefault(
-                    resource(match.group(1))["filename"].casefold(),
-                    match.group(1))
+            filename = match and resource(match.group(1)).get("filename")
+            if filename:
+                found.setdefault(filename.casefold(), match.group(1))
     return next(iter(found.values())) if len(found) == 1 else None
 
 
 def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
-                          canonical_vars=None, derived_vars=()):
+                          canonical_vars=None, include_derived=False):
     """Return slider descriptions for conservative two-buffer shape shaders.
 
-    ``derived_vars`` names WWMI sparse-key value variables written by state
-    rules rather than a slider. They are returned with ``derived: True`` so
-    geometry applies them while menus and Present capture leave them alone.
+    ``include_derived`` also returns slider-less WWMI sparse keys with
+    ``derived: True``; the caller keeps those whose value state rules drive.
     """
     resources = ResourceTable.normalize(resources)
     canon = (canonical_vars if canonical_vars is not None
@@ -357,10 +333,9 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             item["stride"] = resource(base_binding).get("stride", 12)
         found.append(item)
         existing.add(full_var.lower())
-    derived_keys = {str(var).casefold() for var in derived_vars or ()}
     for key, (variable, section, src) in shape_sources.items():
         full_var = f"{prefix}{variable}"
-        if (key not in derived_keys or full_var.lower() in existing
+        if (not include_derived or full_var.lower() in existing
                 or not sparse_ready):
             continue
         shape_id = shape_ids[key]

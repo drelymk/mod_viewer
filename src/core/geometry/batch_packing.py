@@ -15,7 +15,7 @@ def _sparse_endpoint(np, sparse, used, positions):
     """Apply WWMI sparse deltas with the scalar packer's float64 addition."""
     ids = np.fromiter(sparse.keys(), dtype=np.int64, count=len(sparse))
     deltas = np.array(list(sparse.values()), dtype=np.float64).reshape(-1, 3)
-    order = np.argsort(ids, kind="stable")
+    order = np.argsort(ids)
     ids, deltas = ids[order], deltas[order]
     slots = np.minimum(np.searchsorted(ids, used), len(ids) - 1)
     hit = ids[slots] == used
@@ -24,8 +24,7 @@ def _sparse_endpoint(np, sparse, used, positions):
     # -0.0 into +0.0; keep those bytes identical.
     output[~hit] += 0.0
     output[hit] += deltas[slots[hit]]
-    with np.errstate(over="ignore", invalid="ignore"):
-        output = output.astype("<f4")
+    output = output.astype("<f4")
     if not np.isfinite(output).all():
         raise UnsupportedLayout
     return output.tobytes()
