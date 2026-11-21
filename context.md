@@ -1199,7 +1199,8 @@ of documentation, comments and tests; use portable fixtures instead.
   weapon models to battle sockets. The weapon is a `CDT_ModelConfig` weapon model whose
   developer description tags it as the signature weapon (`<name>专武`; skin and
   deprecated variants excluded) of a name that a model row under the verified
-  character folder carries exactly. Intentional exception to name-free proof, since
+  character folder carries exactly, or that leads a skin row's description
+  (`<name>…皮肤…`, as when the base row uses another name). Intentional exception to name-free proof, since
   no game data links a character to its signature weapon: without a match, a
   mesh-seeded deterministic five-star weapon of the character's type is used. The
   type comes only from `db_role` roleinfo rows whose model is one of the verified
@@ -1208,17 +1209,49 @@ of documentation, comments and tests; use portable fixtures instead.
   contain the item), else the paired model at id + 100000. Model i attaches to
   battle socket i; all of the verified mesh's model rows with sockets must agree on
   that prefix, and the socket must be a unique rig bone. Each material section is one
-  rigid prop at the socket's rest world, fully weighted to that bone (the weapon's own
-  skeleton never animates), with native normals, UVs and triangle order (reversed for
-  a mirrored socket). Textures try the HD tier, then UHD; material parameters are
+  rigid prop at the socket's rest world, fully weighted to that bone, with native
+  normals and triangle order (reversed for a mirrored socket) and V flipped like every
+  mesh the viewer draws, captured parts included. The weapon rests in the first frame
+  of the one sequence its anim blueprint (`动画蓝图`) plays directly, on the weapon's
+  skeleton (such as a closed blade with its strings folded); without exactly one such
+  sequence, or when it cannot be read, it keeps its bind pose. Textures try the HD tier, then UHD; material parameters are
   learned per extraction as for ZZZ (a parameter takes a role only when its top mip is
   byte-identical to a captured texture of that role on a proven body section, with no
   competing parameter or role) and read from each weapon section's own material; the
   top mip is written unchanged as a single-mip DX10 DDS. ConfigDB FlatBuffer rows are
   read by fixed field numbers with bounds checks (roleinfo 23/42/43, weaponconf 7); a
   changed layout yields no type or the id + 100000 pairing, never an unchecked value.
-  Prop failures never block clips (`prop_error`, `skipped_props`, per-prop
-  `texture_error`); the report's `weapon` records the choice, models, sockets and tier.
+  A character with blueprint props fights with them, so its regular weapon is then
+  left out (the report's `weapon` says `hidden`). Weapon and blueprint props fail
+  independently; failures never block clips
+  (`prop_error`, `skipped_props`, per-prop `texture_error`); the report's `weapon`
+  records the choice, models, sockets and tier. A prop's id covers its geometry and
+  its animation fields, so equal geometry moving differently stays two props.
+  Game data is not a reason to hide the regular weapon: `weaponhideconfig` only lists
+  gameplay states (climbing, dodging, sprinting…) during which it hides.
+- WuWa blueprint props are animated: a character blueprint's construction-script
+  component (`SCS_Node` under `CharacterMesh0` with an `AttachToName` socket, its mesh
+  from the most derived component template; weapon cases excluded; no relative offset)
+  that the character's notifies show while the game plays the prop's own animation
+  (such as a character's scissors). Its geometry keeps its own skin (joints index its
+  own skeleton, ≤ 256 bones) placed at the socket's rest world. The prop's animation
+  for a clip is the sequence in the prop mesh's folder on the prop's skeleton named
+  after the clip exactly or with a `_<suffix>` (longest clip name wins), at the same
+  frame interval and no longer than the clip; it pairs with every same-named clip it
+  fits (a skin folder may convert a name again), and a clip paired twice is never
+  guessed between. Intentional exception to name-free proof, like `Rib_` layers: the
+  game pairs them in its animation blueprints. Each pair is baked into a
+  `prop-track-v1` track: per frame and prop bone, the asset-space transform (xyz
+  translation, xyzw quaternion) relative to the socket's rest pose, which must be
+  rigid. A prop sequence on another reference pose plays its authored tracks over
+  its skeleton's reference, as clips do. Manifest props then carry `socket`, `bone_count` and `tracks` (clip id ->
+  file, sha256, frame_count, duration). Serving checks every track and publishes one
+  fresh single-use blob of the session's clips per load; a prop without a track for
+  any session clip is left out. Playback applies the socket's clip transform on top of
+  the track sampled at the clip time (a crossfade hands over halfway) and shows the
+  prop only while its paired animation runs: other clips, past the track's end, at
+  rest, in manual posing and after Stop hide it. An abandoned or failed prop load
+  disposes what it already built.
 - ZZZ uses a separate minimal native reader built from pinned original AnimeStudio
   source and its rebuilt ZZZ V2 ACL decoder, plus the same pinned Oodle decoder as
   WuWa. No GUI, Ultimate fork, media exporters or updater is bundled. The shared

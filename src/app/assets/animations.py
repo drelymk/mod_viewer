@@ -232,6 +232,15 @@ _PROP_TEXTURE_FILE = re.compile(r"Props/[0-9a-f]{32}\.dds")
 # Roles the viewer's game material binds; extraction maps the game's texture slots onto them.
 _PROP_TEXTURE_ROLES = ("diffuse", "light_map", "material_map", "normal_map")
 _MAX_PROP_TEXTURE_BYTES = 96 * 1024 * 1024
+# Animated props carry their own skeleton: per paired clip, frame-major f32 records of
+# each prop bone's asset-space transform (xyz translation, xyzw quaternion) relative to
+# its socket's rest pose; the socket's clip motion is applied on top.
+PROP_TRACK_LAYOUT = "prop-track-v1"
+_PROP_TRACK_BYTES = 28
+MAX_PROP_BONES = 256
+MAX_PROP_TRACKS = 1024
+_MAX_PROP_TRACK_BYTES = 128 * 1024 * 1024
+_DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
 def pack_prop(positions, normals, texcoords, joints, weights, triangles):
@@ -269,16 +278,64 @@ def _props(raw):
                     or not isinstance(texture.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", texture["sha256"])
                     for role, texture in textures.items()):
                 return {}
+            animated = _prop_animation(prop)
+            if animated is None:
+                return {}
             result[key] = dict(id=key, name=name, file=file, vertex_count=vertices, index_count=indices, sha256=digest,
                                textures={role: dict(file=texture["file"], sha256=texture["sha256"])
-                                         for role, texture in textures.items()})
+                                         for role, texture in textures.items()}, **animated)
         return result
     except (AttributeError, TypeError):
         return {}
 
 
+def _prop_animation(prop):
+    """An animated prop's socket, skeleton size and clip tracks; {} for a rigid prop, None when invalid."""
+    socket, bones, tracks = prop.get("socket"), prop.get("bone_count"), prop.get("tracks")
+    if tracks is None:
+        return {} if socket is None and bones is None else None
+    if (type(socket) is not int or socket < 0 or type(bones) is not int or not 0 < bones <= MAX_PROP_BONES
+            or not isinstance(tracks, dict) or not 0 < len(tracks) <= MAX_PROP_TRACKS or any(
+                not isinstance(clip, str) or not _ID.fullmatch(clip) or not isinstance(track, dict)
+                or not isinstance(track.get("file"), str) or not _PROP_FILE.fullmatch(track["file"])
+                or not isinstance(track.get("sha256"), str) or not _DIGEST.fullmatch(track["sha256"])
+                or type(track.get("frame_count")) is not int or not 1 < track["frame_count"] <= 60000
+                or type(track.get("duration")) not in (int, float) or not 0 < track["duration"] <= 3600
+                for clip, track in tracks.items())):
+        return None
+    return dict(socket=socket, bone_count=bones, tracks={
+        clip: dict(file=track["file"], sha256=track["sha256"], frame_count=track["frame_count"], duration=track["duration"])
+        for clip, track in tracks.items()})
+
+
+def _read_prop_tracks(directory, prop, clips):
+    """One blob of the prop's checksummed, bounded tracks for the session's ``clips``,
+    and clip id -> {offset, frame_count, duration} into it."""
+    blobs, index, offset = [], {}, 0
+    for clip, track in sorted(prop["tracks"].items()):
+        if clip not in clips:
+            continue
+        size = track["frame_count"] * prop["bone_count"] * _PROP_TRACK_BYTES
+        path = paths.safe_asset_path(directory, track["file"])
+        if not path or offset + size > _MAX_PROP_TRACK_BYTES:
+            raise ValueError("The prop animation is unavailable.")
+        with open(path, "rb") as stream:
+            data = stream.read(size + 1)
+        if len(data) != size or hashlib.sha256(data).hexdigest() != track["sha256"] or not bounded(np.frombuffer(data, "<f4")):
+            raise ValueError("The prop animation is incomplete or has changed.")
+        blobs.append(data)
+        index[clip] = dict(offset=offset, frame_count=track["frame_count"], duration=track["duration"])
+        offset += size
+    return b"".join(blobs), index
+
+
 def _read_prop(directory, prop, bone_count):
-    """Bounded, checksummed prop geometry whose joints and triangles stay in range."""
+    """Bounded, checksummed prop geometry whose joints and triangles stay in range.
+
+    An animated prop's joints index its own skeleton and its socket a ``bone_count`` rig bone.
+    """
+    if "tracks" in prop and prop["socket"] >= bone_count:
+        raise ValueError("The prop does not match the loaded rig.")
     vertices, indices = prop["vertex_count"], prop["index_count"]
     size = vertices * _PROP_VERTEX_BYTES + indices * 4
     path = paths.safe_asset_path(directory, prop["file"])
@@ -292,7 +349,7 @@ def _read_prop(directory, prop, bone_count):
     joints = np.frombuffer(data, "<u2", count=vertices * 4, offset=vertices * 32)
     weights = np.frombuffer(data, "<f4", count=vertices * 4, offset=vertices * 40)
     triangles = np.frombuffer(data, "<u4", count=indices, offset=vertices * 56)
-    if (not bounded(records) or not bounded(weights) or int(joints.max()) >= bone_count
+    if (not bounded(records) or not bounded(weights) or int(joints.max()) >= prop.get("bone_count", bone_count)
             or int(triangles.max()) >= vertices):
         raise ValueError("The prop geometry does not match the loaded rig.")
     return data
@@ -444,20 +501,28 @@ class AnimationSessions:
             return empty
 
     def load_props(self, token):
-        """Publish the session's props: fresh single-use geometry URLs on each call, and
-        textures through one session texture publication released with the session."""
+        """Publish the session's props: fresh single-use geometry (and animated props'
+        track) URLs on each call, and textures through one session texture publication
+        released with the session. An animated prop without a track for any of the
+        session's clips is left out."""
         try:
             with self._lock:
                 session = self._sessions.get(token) if isinstance(token, str) else None
                 if not session or not session["is_current"]():
                     raise ValueError("The animation preview is no longer active.")
                 props = list(session["props"].values())
-            loaded = [(prop, _read_prop(session["directory"], prop, len(session["rig"]["bones"])),
-                       _prop_textures(session["directory"], prop)) for prop in props]
+                clips = set(session["entries"])
+            loaded = []
+            for prop in props:
+                tracks = _read_prop_tracks(session["directory"], prop, clips) if "tracks" in prop else None
+                if tracks is not None and not tracks[1]:
+                    continue
+                loaded.append((prop, _read_prop(session["directory"], prop, len(session["rig"]["bones"])),
+                               _prop_textures(session["directory"], prop), tracks))
             with self._lock:
                 if self._sessions.get(token) is not session or not session["is_current"]():
                     raise ValueError("The animation preview is no longer active.")
-                if session["prop_textures"] is None and any(textures for _prop, _data, textures in loaded):
+                if session["prop_textures"] is None and any(textures for _prop, _data, textures, _tracks in loaded):
                     publication = server.begin_texture_publication()
                     publication.commit(replace=False)
                     session["prop_textures"] = publication
@@ -465,14 +530,20 @@ class AnimationSessions:
                     server.release_geometry(url)
                 session["prop_urls"] = []
                 result = []
-                for prop, data, textures in loaded:
+                for prop, data, textures, tracks in loaded:
                     url = server.publish_geometry(data, replace=False)
                     session["prop_urls"].append(url)
                     urls = {role: session["prop_textures"].register(path, role) for role, path in textures.items()}
-                    result.append({"id": prop["id"], "name": prop["name"], "layout": PROP_LAYOUT,
-                                   "vertex_count": prop["vertex_count"], "index_count": prop["index_count"],
-                                   "data": {"url": url, "length": len(data)},
-                                   "textures": {role: url for role, url in urls.items() if url}})
+                    item = {"id": prop["id"], "name": prop["name"], "layout": PROP_LAYOUT,
+                            "vertex_count": prop["vertex_count"], "index_count": prop["index_count"],
+                            "data": {"url": url, "length": len(data)},
+                            "textures": {role: url for role, url in urls.items() if url}}
+                    if tracks is not None:
+                        track_url = server.publish_geometry(tracks[0], replace=False)
+                        session["prop_urls"].append(track_url)
+                        item.update(socket=prop["socket"], bone_count=prop["bone_count"], tracks={
+                            "layout": PROP_TRACK_LAYOUT, "url": track_url, "length": len(tracks[0]), "clips": tracks[1]})
+                    result.append(item)
             return {"status": "ok", "props": result}
         except (OSError, ValueError, TypeError, KeyError) as error:
             return {"status": "error", "error": str(error)}

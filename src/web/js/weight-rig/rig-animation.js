@@ -285,6 +285,8 @@ export function createRigAnimation({
     if (!clip || !values || rig?.id !== clip.skeleton_id) return;
     let transforms;
     let morphs;
+    // The clip and time props sync with; a crossfade hands over halfway, like morphs.
+    let playback = { clip: clip.id, time };
     const elapsed = elapsedForPose;
     elapsedForPose = 0;
     if (outgoing && fadeDuration > 0) {
@@ -294,6 +296,7 @@ export function createRigAnimation({
       applyRootMotion(rig, sampleLocalPose(rig, clip, values, time, to), motion);
       const mask = intersectSecondaryMasks(secondaryBoneMask(rig, outgoing.clip), secondaryBoneMask(rig, clip));
       transforms = composePose(rig, secondary.apply(rig, blendLocalPose(from, to, weight, blended), mask, elapsed));
+      if (weight < 0.5) playback = { clip: outgoing.clip.id, time: outgoing.time };
       if (faces) {
         morphs = sampleMergedMorphWeights(faces, [
           [outgoing.clip, outgoing.values, outgoing.time, 1 - weight],
@@ -314,7 +317,7 @@ export function createRigAnimation({
         ? sampleMergedMorphWeights(faces, [[clip, values, time, 1]])
         : sampleMorphWeights(clip, values, time);
     }
-    applyPose(transforms, { finalize, morphs: morphs || sampleIdleBlink(idle, idleTime, playing) });
+    applyPose(transforms, { finalize, morphs: morphs || sampleIdleBlink(idle, idleTime, playing), playback });
   };
   function cancel() {
     if (frame !== null) cancelAnimationFrame(frame);

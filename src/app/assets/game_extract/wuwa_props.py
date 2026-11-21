@@ -46,8 +46,8 @@ CHARACTER_ROOT = "Client/Content/Aki/Character/"
 MAIN_IDS = range(21000000, 21100000)
 SECONDARY = 100000
 # Developer description tags: signature weapon, and skin/deprecated variants.
-SIGNATURE = "专武"
-EXCLUDED = ("皮肤", "弃用", "废弃")
+SIGNATURE, SKIN = "专武", "皮肤"
+EXCLUDED = (SKIN, "弃用", "废弃")
 # roleinfo FlatBuffer fields: model id, initial weapon item (= model) id, weapon type.
 ROLE_MODEL, ROLE_WEAPON, ROLE_TYPE = 23, 42, 43
 # weaponconf FlatBuffer field: the weapon's models in attachment order.
@@ -65,6 +65,7 @@ FORMATS = {
 MAX_TEXTURE_READS = 96
 MAX_TEXTURE_BYTES = 96 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
+MAX_TRACK_BYTES = 128 * 1024 * 1024
 _SUFFIX = re.compile(r"_\d+_[0-9A-F]{32}$")
 
 
@@ -74,7 +75,7 @@ def _folder(mesh):
 
 
 def model_rows(client):
-    """Model id -> mesh, description and battle sockets from the game's model table."""
+    """Model id -> mesh, blueprint, anim blueprint, description and battle sockets from the game's model table."""
     file = client.export("json", MODEL_CONFIG, client.work / "model-config")[0]
     exports = document(file)
     tables = [item for item in exports if isinstance(item, dict) and isinstance(item.get("Rows"), dict)] \
@@ -93,9 +94,12 @@ def model_rows(client):
             values = fields.get(name, [])
             return values[0] if len(values) == 1 else None
 
-        mesh, description, sockets = one("网格体"), one("描述"), one("BattleSockets")
+        mesh, blueprint, description, sockets = one("网格体"), one("蓝图"), one("描述"), one("BattleSockets")
+        abp = one("动画蓝图")
         rows[int(key)] = dict(
             mesh=package_name(mesh.get("AssetPathName")) if isinstance(mesh, dict) else "",
+            blueprint=package_name(blueprint.get("AssetPathName")) if isinstance(blueprint, dict) else "",
+            abp=package_name(abp.get("AssetPathName")) if isinstance(abp, dict) else "",
             description=description if isinstance(description, str) else "",
             sockets=tuple(sockets) if isinstance(sockets, list) and all(isinstance(s, str) for s in sockets) else ())
     return rows
@@ -105,6 +109,12 @@ def _owners(description):
     """Character names a signature description names (``…-<name>[/<name>]专武…``)."""
     head = description.split(SIGNATURE, 1)[0]
     return {name for name in re.split(r"[-－]", head)[-1].split("/") if name}
+
+
+def _owned(owners, names):
+    """Whether a character description names a signature owner: exactly, or as the
+    leading name of a skin model description (``<name>…皮肤…``)."""
+    return any(name == owner or (SKIN in name and name.startswith(owner)) for owner in owners for name in names)
 
 
 def _flat_field(blob, number):
@@ -198,7 +208,7 @@ def choose(client, rows, mesh_package, character_root):
         return number in MAIN_IDS and not any(word in weapons[number]["description"] for word in EXCLUDED)
 
     signature = sorted(number for number, row in weapons.items() if usable(number)
-                       and SIGNATURE in row["description"] and _owners(row["description"]) & names)
+                       and SIGNATURE in row["description"] and _owned(_owners(row["description"]), names))
     choice = "signature"
     if signature:
         main = signature[0]
@@ -231,20 +241,39 @@ def choose(client, rows, mesh_package, character_root):
     raise ValueError("The character's weapon sockets are missing or ambiguous.")
 
 
+def _skin(mesh, used):
+    """Per-vertex u16x4 joints and normalized f32x4 weights from the mesh's own skeleton."""
+    joints, weights = np.zeros((len(used), 4), dtype=np.int64), np.zeros((len(used), 4))
+    for row, vertex in enumerate(used):
+        influences = sorted(mesh["weights"][vertex], key=lambda pair: -pair[1])[:4]
+        total = sum(weight for _bone, weight in influences)
+        if not total:
+            raise ValueError("The prop has unweighted vertices.")
+        for slot, (bone, weight) in enumerate(influences):
+            joints[row, slot], weights[row, slot] = bone, weight / total
+    return joints, weights
+
+
 def _geometry(mesh, first, count, socket, world):
-    """``PROP_LAYOUT`` bytes of one mesh section placed rigidly at the socket's rest ``world``."""
+    """``PROP_LAYOUT`` bytes of one mesh section placed at a socket's rest ``world``.
+
+    With a rig ``socket`` bone the section is rigid and fully weighted to it; with None
+    it keeps the mesh's own skin (joints index the mesh's own skeleton).
+    """
     indices = np.asarray(mesh["indices"][first:first + count], dtype=np.int64)
     if not 0 < indices.size <= MAX_PROP_INDICES or indices.size % 3:
         raise ValueError("Unsupported weapon geometry.")
     used, triangles = np.unique(indices, return_inverse=True)
     positions = np.asarray(mesh["positions"], dtype=float).reshape(-1, 3)
     normals = np.asarray(mesh.get("normals") or [], dtype=float)
-    texcoords = np.asarray(mesh["uv"][0] if mesh.get("uv") else [], dtype=float)
+    texcoords = np.asarray(mesh["uv"][0] if mesh.get("uv") else [], dtype=float).copy()
     if normals.shape != positions.shape or texcoords.shape != (len(positions), 2):
         raise ValueError("The weapon has no usable normals or UVs.")
     if not 0 < len(used) <= MAX_PROP_VERTICES:
         raise ValueError("Unsupported weapon geometry.")
     positions, normals, texcoords = positions[used], normals[used], texcoords[used]
+    # The viewer draws every mesh with flipped V, captured parts included.
+    texcoords[:, 1] = 1 - texcoords[:, 1]
     linear = world[:3, :3]
     determinant = np.linalg.det(linear)
     if not abs(determinant) > 1e-12:
@@ -259,10 +288,13 @@ def _geometry(mesh, first, count, socket, world):
         triangles = triangles[:, ::-1]
     if not np.isfinite(placed).all() or not np.isfinite(turned).all() or not np.isfinite(texcoords).all():
         raise ValueError("Unsupported weapon geometry.")
-    joints = np.zeros((len(used), 4), dtype=np.int64)
-    joints[:, 0] = socket
-    weights = np.zeros((len(used), 4))
-    weights[:, 0] = 1
+    if socket is None:
+        joints, weights = _skin(mesh, used)
+    else:
+        joints = np.zeros((len(used), 4), dtype=np.int64)
+        joints[:, 0] = socket
+        weights = np.zeros((len(used), 4))
+        weights[:, 0] = 1
     return pack_prop(placed, turned, texcoords, joints, weights, triangles), len(used), int(indices.size)
 
 
@@ -450,55 +482,121 @@ def _attach_textures(client, root, record, captured, palettes, body_exports, pro
     return tier
 
 
-def extract(client, root, record, captured, palettes, mesh_package, body_exports, rig, character_root, library, cancel):
-    """Write the character's weapon props under ``library/Props``.
+class Writer:
+    """Content-addressed prop files under ``library/Props`` within the prop budgets.
+
+    ``entries`` are the manifest props (plus report-only ``source``/``texture_error``),
+    ``materials`` pairs each entry with its section's material for texturing.
+    """
+
+    def __init__(self, library):
+        self.library, self.folder = library, library / "Props"
+        if self.folder.exists():
+            shutil.rmtree(self.folder)
+        self.entries, self.materials, self.skipped, self.total, self.tracks = [], [], [], 0, 0
+
+    def write(self, data, *, track=False):
+        """Write one content-addressed file; returns its manifest path and digest."""
+        if track:
+            if self.tracks + len(data) > MAX_TRACK_BYTES:
+                raise ValueError("The prop animation budget is exhausted.")
+            self.tracks += len(data)
+        digest = hashlib.sha256(data).hexdigest()
+        self.folder.mkdir(exist_ok=True)
+        file = f"Props/{digest[:32]}.bin"
+        (self.library / file).write_bytes(data)
+        return file, digest
+
+    def add(self, package, parts, **extra):
+        """Add each (material, (payload, vertices, indices)) section of one mesh as a prop."""
+        name = package.rsplit("/", 1)[-1]
+        for number, (material, (payload, vertices, indices)) in enumerate(parts):
+            # A prop is its geometry plus how it moves; equal props are kept once.
+            identity = hashlib.sha256(payload + json.dumps(extra, sort_keys=True).encode("utf-8")).hexdigest()
+            if any(entry["id"] == f"prop-{identity[:12]}" for entry in self.entries):
+                continue
+            if len(self.entries) == MAX_PROPS or self.total + len(payload) > MAX_TOTAL_BYTES:
+                self.skipped.append(dict(source=package, reason="The prop budget is exhausted."))
+                return
+            file, digest = self.write(payload)
+            self.total += len(payload)
+            label = name if len(parts) == 1 else f"{name} {number + 1}"
+            entry = dict(id=f"prop-{identity[:12]}", name=label[:128], file=file, layout=PROP_LAYOUT,
+                         sha256=digest, vertex_count=vertices, index_count=indices, **extra, source=package)
+            self.entries.append(entry)
+            self.materials.append((entry, material))
+
+
+def mesh_parts(client, package, socket, world, pose=None):
+    """(native mesh, [(material, geometry)]) of every material section of one prop mesh."""
+    mesh = read_mesh(client.export("mesh", package, client.work / "props", "ueformat")[0], normals=True)
+    exports = document(client.export("json", package, client.work / "prop-metadata")[0])
+    if pose:
+        mesh = pose(mesh, exports)
+    materials = _materials(exports)
+    # Each material section is drawn as its own prop with its own material.
+    return mesh, exports, [(materials.get(first), _geometry(mesh, first, count, socket, world))
+                           for first, count in mesh["sections"] if count]
+
+
+def extract(client, root, record, captured, palettes, mesh_package, body_exports, rig, character_root, clips,
+            library, cancel):
+    """Write the character's weapon and blueprint props under ``library/Props``.
 
     ``palettes`` maps proven captured component numbers of the verified mesh to their
-    palettes. Returns (entries, skipped, weapon) where ``weapon`` describes the choice.
+    palettes; ``clips`` maps the Asset's own clip names to their (id, frame count, length)s.
+    Returns (entries, skipped, weapon) where ``weapon`` describes the weapon choice.
+    A character whose blueprint props animate with its clips fights with them, so its
+    regular weapon is then left out.
     """
+    from . import wuwa_blueprint_props
+
     rows = model_rows(client)
-    models, sockets, choice = choose(client, rows, mesh_package, character_root)
+    own = {number: row for number, row in rows.items() if row["mesh"] == mesh_package}
+    if not own:
+        raise ValueError("No game model configuration uses the verified mesh.")
     names = [bone["name"] for bone in rig["bones"]]
     worlds = rest_worlds(rig["bones"], affine=True)
-    folder = library / "Props"
-    if folder.exists():
-        shutil.rmtree(folder)
-    entries, props, skipped, total = [], [], [], 0
-    for model, socket in zip(models, sockets):
-        check_cancelled(cancel)
-        package = rows[model]["mesh"]
-        try:
-            if names.count(socket) != 1:
-                raise ValueError("The weapon socket is not a unique bone of the verified rig.")
-            mesh = read_mesh(client.export("mesh", package, client.work / "weapons", "ueformat")[0], normals=True)
-            materials = _materials(document(client.export("json", package, client.work / "weapon-metadata")[0]))
-            sections = [(first, count) for first, count in mesh["sections"] if count]
-            # Each material section is drawn as its own prop with its own material.
-            parts = [(first, materials.get(first), _geometry(mesh, first, count, names.index(socket), worlds[names.index(socket)]))
-                     for first, count in sections]
-        except ExtractionCancelled:
-            raise
-        except (ValueError, KeyError, TypeError, IndexError, OSError) as error:
-            skipped.append(dict(source=package, reason=str(error) if isinstance(error, ValueError)
-                                else "The weapon mesh could not be read."))
-            continue
-        name = package.rsplit("/", 1)[-1]
-        for number, (_first, material, (payload, vertices, indices)) in enumerate(parts):
-            digest = hashlib.sha256(payload).hexdigest()
-            if len(entries) == MAX_PROPS or total + len(payload) > MAX_TOTAL_BYTES:
-                skipped.append(dict(source=package, reason="The prop budget is exhausted."))
-                break
-            if any(entry["sha256"] == digest for entry in entries):
+    writer, weapon = Writer(library), None
+    wuwa_blueprint_props.extract(client, own, names, worlds, clips, writer, cancel)
+    blueprint_props = bool(writer.entries)
+    try:
+        models, sockets, choice = choose(client, rows, mesh_package, character_root)
+    except ValueError as error:
+        writer.skipped.append(dict(kind="weapon", reason=str(error)))
+    else:
+        weapon = dict(choice=choice, models=models, sockets=sockets[:len(models)])
+        if blueprint_props:
+            weapon["hidden"] = "The character's blueprint props replace its weapon."
+        for model, socket in zip(models, [] if blueprint_props else sockets):
+            check_cancelled(cancel)
+            package = rows[model]["mesh"]
+
+            def rest(mesh, exports, blueprint=rows[model]["abp"]):
+                # The weapon's anim blueprint loops its resting pose; the bind pose is never shown.
+                # An unreadable resting animation leaves the bind pose.
+                skeleton = wuwa_blueprint_props.skeleton_of(exports)
+                try:
+                    found = wuwa_blueprint_props.rest_sequence(client, blueprint, skeleton) if skeleton else None
+                    return wuwa_blueprint_props.posed(client, mesh, *found, skeleton) if found else mesh
+                except ExtractionCancelled:
+                    raise
+                except (ValueError, KeyError, TypeError, IndexError, OSError):
+                    return mesh
+
+            try:
+                if names.count(socket) != 1:
+                    raise ValueError("The weapon socket is not a unique bone of the verified rig.")
+                parts = mesh_parts(client, package, names.index(socket), worlds[names.index(socket)], rest)[2]
+            except ExtractionCancelled:
+                raise
+            except (ValueError, KeyError, TypeError, IndexError, OSError) as error:
+                writer.skipped.append(dict(source=package, reason=str(error) if isinstance(error, ValueError)
+                                           else "The weapon mesh could not be read."))
                 continue
-            folder.mkdir(exist_ok=True)
-            file = f"Props/{digest[:32]}.bin"
-            (library / file).write_bytes(payload)
-            total += len(payload)
-            label = name if len(parts) == 1 else f"{name} {number + 1}"
-            entry = dict(id=f"prop-{digest[:12]}", name=label[:128], file=file, layout=PROP_LAYOUT,
-                         sha256=digest, vertex_count=vertices, index_count=indices, source=package)
-            entries.append(entry)
-            props.append((entry, material))
-    tier = _attach_textures(client, root, record, captured, palettes, body_exports, props, library, cancel) \
-        if props else None
-    return entries, skipped, dict(choice=choice, models=models, sockets=sockets[:len(models)], texture_tier=tier)
+            writer.add(package, parts)
+    tier = _attach_textures(client, root, record, captured, palettes, body_exports, writer.materials, library, cancel) \
+        if writer.materials else None
+    if weapon:
+        weapon["texture_tier"] = tier
+    return writer.entries, writer.skipped, weapon

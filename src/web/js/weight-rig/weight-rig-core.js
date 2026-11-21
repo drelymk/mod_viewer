@@ -378,7 +378,7 @@ const rigAnimation = createRigAnimation({
     setCharacterGroundAnchor(rigGroundAnchor(rig, binding?.meshes.keys() || knownMeshes));
   },
   suspendPhysics: (value) => rigPoseRuntime.setHumanoidEditPhysicsSuspended(value),
-  applyPose: (transforms, { finalize = false, morphs = null } = {}) => {
+  applyPose: (transforms, { finalize = false, morphs = null, playback = null } = {}) => {
     animationMeshes.setMorphs(getAnimationBinding(), morphs);
     if (!transforms) {
       animationMeshes.stop();
@@ -387,7 +387,7 @@ const rigAnimation = createRigAnimation({
     }
     if (transforms) {
       animationMeshes.apply(transforms, { finalize });
-      animationProps.apply(transforms);
+      animationProps.apply(transforms, playback);
       if (!modelSkinningRig?.gameRig) return;
     }
     if (!modelSkinningRig) return;

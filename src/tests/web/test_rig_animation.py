@@ -1357,3 +1357,68 @@ def test_game_props_load_once_skin_by_rig_deltas_and_exist_only_while_a_clip_is_
     assert result['skinned'] == [0, 0, 3]
     # The prop follows the body mesh's model transform.
     assert result['world'] == [5, 0, 3]
+
+
+def test_animated_props_follow_their_clip_tracks_and_abandoned_loads_release_what_they_built(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three');
+      const {createAnimationProps} = await import('./js/weight-rig/rig-animation-props.js');
+      // One triangle skinned fully to prop bone 1 (of 2); layout prop-v1.
+      const geometry = new ArrayBuffer(3 * 56 + 12);
+      new Float32Array(geometry, 0, 24).set([0,0,1, 0,0,1, 0,0,  1,0,1, 0,0,1, 1,0,  0,1,1, 0,0,1, 0,1]);
+      new Uint16Array(geometry, 96, 12).set([1,0,0,0, 1,0,0,0, 1,0,0,0]);
+      new Float32Array(geometry, 120, 12).set([1,0,0,0, 1,0,0,0, 1,0,0,0]);
+      new Uint32Array(geometry, 168, 3).set([0,1,2]);
+      // prop-track-v1 for clip01: 2 frames x 2 bones; bone 1 moves 1 unit along x by the end.
+      const track = new Float32Array([0,0,0, 0,0,0,1,  0,0,0, 0,0,0,1,   0,0,0, 0,0,0,1,  1,0,0, 0,0,0,1]);
+      const url = blob => URL.createObjectURL(new Blob([blob]));
+      const geometryUrl = url(geometry), trackUrl = url(track.buffer), slowUrl = url(geometry);
+      const descriptor = (id, dataUrl) => ({id, name:id, layout:'prop-v1', vertex_count:3, index_count:3,
+        data:{url:dataUrl, length:geometry.byteLength}, textures:{diffuse:'/texture/' + id + '.dds'},
+        socket:2, bone_count:2, tracks:{layout:'prop-track-v1', url:trackUrl, length:track.byteLength,
+          clips:{clip01:{offset:0, frame_count:2, duration:1}}}});
+      let created = 0, released = 0;
+      const materialFor = () => { created++; return {material:new T.MeshBasicMaterial(), bind:() => {},
+                                                     dispose:() => { released++; }}; };
+      const scene = new T.Scene();
+      const responses = {session01:[descriptor('prop-01', geometryUrl)],
+                         session02:[descriptor('prop-02', geometryUrl), descriptor('prop-03', slowUrl)]};
+      const props = createAnimationProps({loadProps: async token => ({status:'ok', props:responses[token]}),
+                                          getScene: () => scene, requestRender: () => {}, materialFor});
+      const tick = () => new Promise(r => setTimeout(r, 50));
+      props.prepare({bones:[{},{},{}], animation_session:'session01', animation_props:[{}]}, null);
+      await tick();
+      const socket = new T.Matrix4().makeTranslation(0, 0, 2);
+      const transforms = new Map([[0, new T.Matrix4()], [1, new T.Matrix4()], [2, socket]]);
+      const shown = (clip, time) => {
+        props.apply(transforms, {clip, time});
+        const mesh = scene.children[0];
+        if (!mesh) return null;
+        return mesh.applyBoneTransform(0, new T.Vector3().fromBufferAttribute(mesh.geometry.attributes.position, 0)).toArray();
+      };
+      // Socket delta on top of the halfway track pose; other clips and past the track's end hide it.
+      const states = [shown('clip01', .5), shown('clip02', .5), shown('clip01', 1.5), shown('clip01', 1)];
+      props.apply(transforms);
+      const withoutPlayback = scene.children.length;
+      // A second rig's load is abandoned while its second prop still downloads.
+      const originalFetch = window.fetch;
+      let open;
+      const gate = new Promise(r => { open = r; });
+      window.fetch = (target, options) => target === slowUrl ? gate.then(() => originalFetch(target, options))
+                                                            : originalFetch(target, options);
+      const before = {created, released};
+      props.prepare({bones:[{},{},{}], animation_session:'session02', animation_props:[{}]}, null);
+      await tick();
+      props.dispose();
+      open();
+      await tick();
+      window.fetch = originalFetch;
+      [geometryUrl, trackUrl, slowUrl].forEach(u => URL.revokeObjectURL(u));
+      return {states, withoutPlayback, before, created, released, children: scene.children.length};
+    }''')
+    assert result['states'] == [[.5, 0, 3], None, None, [1, 0, 3]]
+    assert result['withoutPlayback'] == 0
+    # The first rig's prop is released when the second rig replaces it; the abandoned
+    # load releases the prop it had already built.
+    assert result['before'] == {'created': 1, 'released': 0}
+    assert result['created'] == 2 and result['released'] == 2 and result['children'] == 0

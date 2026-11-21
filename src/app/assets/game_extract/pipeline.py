@@ -665,10 +665,16 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     # Weapons the capture never drew; a failure leaves the clips unaffected.
     from . import wuwa_props
     props, skipped_props, weapon, prop_error = [], [], None, None
+    # The Asset's own clips by source name (a skin folder may convert a name again), for
+    # props whose animations pair with them.
+    own_clips = collections.defaultdict(list)
+    for item in provenance:
+        own_clips[item["source"].rsplit("/", 1)[-1]].append(
+            (item["id"], existing[item["id"]]["frame_count"], entries[item["id"]]["duration"]))
     try:
         props, skipped_props, weapon = wuwa_props.extract(
             client, Path(root), record, captured, {index: palette_by_component[index] for index in proven if index not in companions},
-            mesh_package, mesh_document, rig, character_root, library, cancel)
+            mesh_package, mesh_document, rig, character_root, own_clips, library, cancel)
     except ExtractionCancelled:
         raise
     except (ValueError, KeyError, TypeError, IndexError, OSError) as error:
