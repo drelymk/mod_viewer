@@ -74,12 +74,16 @@ function bindPose(rig) {
   return cached;
 }
 
-// Local translation, rotation and scale per bone (10 numbers) at a clip time.
-export function sampleLocalPose(rig, clip, values, time, out) {
+// The two frames around a clip time and the blend between them.
+function sampledFrames(clip, time) {
   const position = Math.max(0, Math.min(1, time / clip.duration)) * (clip.frame_count - 1);
   const first = Math.floor(position);
-  const second = Math.min(first + 1, clip.frame_count - 1);
-  const alpha = position - first;
+  return [first, Math.min(first + 1, clip.frame_count - 1), position - first];
+}
+
+// Local translation, rotation and scale per bone (10 numbers) at a clip time.
+export function sampleLocalPose(rig, clip, values, time, out) {
+  const [first, second, alpha] = sampledFrames(clip, time);
   const count = rig.bones.length;
   const width = clip.layout === 'frame-major-tqs-f32le' ? 10 : 7;
   const { scales } = bindPose(rig);
@@ -97,6 +101,53 @@ export function sampleLocalPose(rig, clip, values, time, out) {
     scale.toArray(out, target + 7);
   }
   return out;
+}
+
+const UNIT_SCALE = new Vector3(1, 1, 1);
+const motionMatrix = new Matrix4();
+const ROOT_MOTION_WIDTH = 7;
+
+// The clip's Animator-space root motion (MotionT.xyz, MotionQ.xyzw) at a clip time.
+// Its per-frame track follows the bone transforms and morph weights.
+function rootMotionAt({ clip, values }, time, out) {
+  const [first, second, alpha] = sampledFrames(clip, time);
+  const width = clip.layout === 'frame-major-tqs-f32le' ? 10 : 7;
+  const base = clip.frame_count * (clip.bone_count * width + (clip.morphs?.names.length || 0));
+  const a = base + first * ROOT_MOTION_WIDTH;
+  const b = base + second * ROOT_MOTION_WIDTH;
+  translationA.fromArray(values, a).lerp(translationB.fromArray(values, b), alpha);
+  rotationA.fromArray(values, a + 3).slerp(rotationB.fromArray(values, b + 3), alpha);
+  return out.compose(translationA, rotationA, UNIT_SCALE);
+}
+
+// Clips place the character absolutely, while the game moves it by root-motion deltas.
+// Carry the travel across a step change so the entering clip's root motion starts where
+// the leaving one was. A step without a shared root-motion space keeps the offset.
+function carryRootMotion(offset, leaving, leaveTime, entering, enterTime) {
+  const bone = entering.clip.root_motion?.bone;
+  if (bone === undefined || leaving.clip.root_motion?.bone !== bone || (offset && offset.bone !== bone)) return offset;
+  const matrix = rootMotionAt(leaving, leaveTime, new Matrix4());
+  if (offset) matrix.premultiply(offset.matrix);
+  matrix.multiply(rootMotionAt(entering, enterTime, motionMatrix).invert());
+  return { bone, matrix };
+}
+
+// Move the whole character by a carried offset in its root-motion (Animator) space.
+function applyRootMotion(rig, locals, offset) {
+  if (!offset || offset.bone >= rig.bones.length) return locals;
+  const target = offset.bone * LOCAL_WIDTH;
+  motionMatrix
+    .compose(
+      translationA.fromArray(locals, target),
+      rotationA.fromArray(locals, target + 3),
+      scaleA.fromArray(locals, target + 7),
+    )
+    .multiply(offset.matrix)
+    .decompose(translationA, rotationA, scaleA);
+  translationA.toArray(locals, target);
+  rotationA.toArray(locals, target + 3);
+  scaleA.toArray(locals, target + 7);
+  return locals;
 }
 
 // Crossfade two local poses; rotations take the shortest path.
@@ -176,6 +227,8 @@ export function createRigAnimation({
   let step = 0;
   let next = null;
   let outgoing = null;
+  // Root-motion travel carried into the active step (null: the clip's own placement).
+  let motion = null;
   let fadeElapsed = 0;
   let fadeDuration = 0;
   // Backend loads replace the previous publication, so step downloads never overlap.
@@ -218,8 +271,8 @@ export function createRigAnimation({
     if (outgoing && fadeDuration > 0) {
       const weight = Math.min(1, fadeElapsed / fadeDuration);
       const [from, to, blended] = bindPose(rig).locals;
-      sampleLocalPose(rig, outgoing.clip, outgoing.values, outgoing.time, from);
-      sampleLocalPose(rig, clip, values, time, to);
+      applyRootMotion(rig, sampleLocalPose(rig, outgoing.clip, outgoing.values, outgoing.time, from), outgoing.motion);
+      applyRootMotion(rig, sampleLocalPose(rig, clip, values, time, to), motion);
       const mask = intersectSecondaryMasks(secondaryBoneMask(rig, outgoing.clip), secondaryBoneMask(rig, clip));
       transforms = composePose(rig, secondary.apply(rig, blendLocalPose(from, to, weight, blended), mask, elapsed));
       if (faces) {
@@ -236,7 +289,7 @@ export function createRigAnimation({
             : sampleMorphWeights(clip, values, time);
       }
     } else {
-      const locals = sampleLocalPose(rig, clip, values, time, bindPose(rig).locals[0]);
+      const locals = applyRootMotion(rig, sampleLocalPose(rig, clip, values, time, bindPose(rig).locals[0]), motion);
       transforms = composePose(rig, secondary.apply(rig, locals, secondaryBoneMask(rig, clip), elapsed));
       morphs = faces
         ? sampleMergedMorphWeights(faces, [[clip, values, time, 1]])
@@ -255,6 +308,7 @@ export function createRigAnimation({
     step = 0;
     next = null;
     outgoing = null;
+    motion = null;
     fadeElapsed = 0;
     fadeDuration = 0;
   }
@@ -316,7 +370,26 @@ export function createRigAnimation({
     const target = sequence.steps[index];
     // A new generation drops downloads and handoffs queued for the old position.
     const current = ++generation;
+    const shown = { clip, values };
     const apply = (entry) => {
+      // Replay the travel the earlier steps carry. Steps no longer resident cannot be
+      // replayed, so the seeked step then keeps its own placement.
+      const resident = (id) => (id === entry.clip.id ? entry : id === shown.clip.id ? shown : cache?.get(id));
+      motion = null;
+      for (let number = 0; number < index; number++) {
+        const [leaving, entering] = [number, number + 1].map((at) => resident(sequence.steps[at].clip));
+        if (!leaving || !entering) {
+          motion = null;
+          break;
+        }
+        motion = carryRootMotion(
+          motion,
+          leaving,
+          sequence.steps[number].leave,
+          entering,
+          sequence.steps[number + 1].start,
+        );
+      }
       ({ clip, values } = entry);
       step = index;
       time = target.start + remaining;
@@ -345,13 +418,17 @@ export function createRigAnimation({
   function beginStep(current) {
     const leaving = sequence.steps[step];
     const index = (step + 1) % sequence.steps.length;
-    outgoing = leaving.fade > 0 ? { clip, values, time: leaving.leave } : null;
+    const enterTime = index === 0 && sequence.cyclic ? sequence.restart : sequence.steps[index].start;
+    // Returning to the first step puts the character back at its origin once per pass.
+    const carried = index === 0 ? null : carryRootMotion(motion, { clip, values }, leaving.leave, next, enterTime);
+    outgoing = leaving.fade > 0 ? { clip, values, time: leaving.leave, motion } : null;
     fadeElapsed = 0;
     fadeDuration = leaving.fade;
     ({ clip, values } = next);
+    motion = carried;
     next = null;
     step = index;
-    time = index === 0 && sequence.cyclic ? sequence.restart : sequence.steps[index].start;
+    time = enterTime;
     if (!outgoing) preload(current);
   }
   function advanceSequence(elapsed) {
@@ -367,9 +444,14 @@ export function createRigAnimation({
       return;
     }
     const leave = sequence.steps[step].leave;
-    time = Math.min(time + elapsed, leave);
+    const reached = time + elapsed;
+    time = Math.min(reached, leave);
     // Hold the leaving pose until the next step has downloaded.
-    if (time >= leave && next) beginStep(current);
+    if (time < leave || !next) return;
+    beginStep(current);
+    // The frame's time past the leave belongs to the entering step, so the handoff
+    // frame advances as far as every other frame instead of stalling at the leave.
+    if (reached > leave) advanceSequence(reached - leave);
   }
   function tick(now) {
     frame = null;
@@ -432,6 +514,9 @@ export function createRigAnimation({
     if (!width) throw animationError('animation.rigMismatch');
     if (metadata.skeleton_id !== rig.id || metadata.bone_count !== rig.bones.length)
       throw animationError('animation.rigMismatch');
+    const motionBone = metadata.root_motion?.bone;
+    if (metadata.root_motion && !(Number.isInteger(motionBone) && motionBone >= 0 && motionBone < rig.bones.length))
+      throw animationError('animation.rigMismatch');
     const download = await fetch(metadata.data.url, { cache: 'no-store' });
     if (!download.ok) throw animationError('animation.downloadFailed');
     const buffer = await download.arrayBuffer();
@@ -439,7 +524,10 @@ export function createRigAnimation({
     if (
       buffer.byteLength !== metadata.data.length ||
       buffer.byteLength !==
-        metadata.frame_count * (rig.bones.length * width * 4 + (metadata.morphs?.names.length || 0) * 4)
+        metadata.frame_count *
+          (rig.bones.length * width * 4 +
+            (metadata.morphs?.names.length || 0) * 4 +
+            (metadata.root_motion ? ROOT_MOTION_WIDTH * 4 : 0))
     )
       throw animationError('animation.downloadIncomplete');
     if (metadata.morphs) {

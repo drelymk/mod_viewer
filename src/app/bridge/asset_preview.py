@@ -231,6 +231,8 @@ class AssetPreview:
                             "animation_source": "asset",
                             **session["animations"].catalog(session["root"], session["asset"], rig, is_current)}
                     entry.update(game_rig_id=rig["id"], game_bone_map=rig["bone_map"])
+                    if rig["unmapped_bone_ids"]:
+                        entry["game_unmapped_bone_ids"] = rig["unmapped_bone_ids"]
                     if rig["morph_binding"]:
                         entry["game_morph_binding"] = {**rig["morph_binding"], "vertices": list(manifest.vertices)}
                 meshes[session["mesh_prefix"] + part.key] = entry

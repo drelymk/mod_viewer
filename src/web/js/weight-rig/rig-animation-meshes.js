@@ -4,13 +4,17 @@ import { isGameRigSkeleton } from './game-rig.js';
 import { getLooseParts } from '../mesh/loose-parts.js';
 import { bindAnimationMorphs } from './animation-morphs.js';
 
-// Every used ID of a loaded mesh resolved to a joint of its game skeleton, or null.
+// Used IDs of a loaded mesh resolved to joints of its game skeleton, or null for an
+// invalid palette. IDs the proven palette lacks get no transform and stay at rest.
 function gameBoneMapping(state) {
   const rig = state?.gameRig;
   if (!state?.loaded || !rig?.bones?.length || !state.boneIds?.length) return null;
-  const mapping = new Map(state.boneIds.map((bone) => [bone, rig.boneMap?.[bone]]));
-  for (const target of mapping.values()) {
+  const mapping = new Map();
+  for (const bone of state.boneIds) {
+    if (!Object.hasOwn(rig.boneMap || {}, bone)) continue;
+    const target = rig.boneMap[bone];
     if (!Number.isInteger(target) || target < 0 || target >= rig.bones.length) return null;
+    mapping.set(bone, target);
   }
   return mapping;
 }

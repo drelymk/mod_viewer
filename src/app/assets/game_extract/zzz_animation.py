@@ -6,6 +6,10 @@ from pathlib import Path
 import numpy as np
 
 
+# Unity's Animator root-motion muscles: MotionT.xyz then MotionQ.xyzw, in the Animator's space.
+ROOT_MOTION_ATTRIBUTES = tuple(range(7))
+
+
 def dimension(binding):
     return {1: 3, 2: 4, 3: 3, 4: 3}.get(binding["attribute"], 1) if binding["type"] == "Transform" else 1
 
@@ -135,7 +139,7 @@ def convert(metadata, work, rig, avatar, morphs=None):
     output = np.broadcast_to(poses, (frames, *poses.shape)).copy()
     hash_to_bone = {bone["hash"]: index + 1 for index, bone in enumerate(avatar["bones"])}
     cursor, written, unsupported = 0, set(), 0
-    morph_columns = {}
+    morph_columns, motion_columns = {}, {}
     for binding in metadata["bindings"]:
         width = dimension(binding)
         if cursor + width > total:
@@ -143,6 +147,12 @@ def convert(metadata, work, rig, avatar, morphs=None):
         channel = sampled[:, cursor:cursor + width]
         cursor += width
         if binding["type"] != "Transform":
+            if (binding["type"] == "Animator" and binding["custom"] == 8 and not binding["pointer"]
+                    and binding["attribute"] in ROOT_MOTION_ATTRIBUTES):
+                if binding["attribute"] in motion_columns:
+                    raise ValueError("The native clip has duplicate root-motion tracks.")
+                motion_columns[binding["attribute"]] = channel[:, 0]
+                continue
             target = (morphs or {}).get((binding["path"], binding["attribute"]))
             if (target is not None and binding["type"] == "SkinnedMeshRenderer"
                     and binding["custom"] == 20 and not binding["pointer"]):
@@ -172,6 +182,18 @@ def convert(metadata, work, rig, avatar, morphs=None):
         output[:, bone, offset:offset + width] = channel
     if cursor != total or not written or not np.isfinite(output).all() or np.any(np.abs(output) > 1e6):
         raise ValueError("The native animation transform table is invalid.")
+    root_motion = track = None
+    if len(motion_columns) == len(ROOT_MOTION_ATTRIBUTES):
+        # Playback carries the character's travel across sequence steps with this track.
+        # It lives in the Animator's own space: the Avatar root, after the mesh-space root.
+        track = np.column_stack([motion_columns[attribute] for attribute in ROOT_MOTION_ATTRIBUTES])
+        lengths = np.linalg.norm(track[:, 3:], axis=1)
+        if not np.isfinite(track).all() or np.any(np.abs(track) > 1e6) or np.any(lengths < 1e-6):
+            raise ValueError("The native clip has an invalid root-motion track.")
+        track[:, 3:] /= lengths[:, None]
+        root_motion = dict(bone=hash_to_bone[avatar["bones"][0]["hash"]])
+    else:
+        unsupported += len(motion_columns)
     morph = None
     binary = output.astype("<f4").tobytes()
     if morph_columns:
@@ -185,7 +207,9 @@ def convert(metadata, work, rig, avatar, morphs=None):
             np.clip(weights, 0, 1, out=weights)
         morph = dict(names=list(morph_columns), weights=weights, clamp=clamp)
         binary += weights.tobytes()
+    if track is not None:
+        binary += track.astype("<f4").tobytes()
     if len(binary) > 128 * 1024 * 1024:
         raise ValueError("Native animation exceeds playback limits.")
     keyed = sorted({bone for bone, _attribute in written})
-    return binary, frames, duration, unsupported, morph, keyed
+    return binary, frames, duration, unsupported, morph, keyed, root_motion

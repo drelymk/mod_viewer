@@ -394,7 +394,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         source = zzz_index.identity(row)
         try:
             metadata = client.read(row)
-            binary, frames, duration, unsupported, morph, keyed = zzz_animation.convert(
+            binary, frames, duration, unsupported, morph, keyed, root_motion = zzz_animation.convert(
                 metadata, client.work, rig, avatar, facial["bindings"])
         except ExtractionCancelled:
             raise
@@ -424,6 +424,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         if morph:
             metadata["morphs"] = zzz_morphs.export_glb(facial, morph, frames, duration, library)
             metadata["blend_shape_clamp"] = morph["clamp"]
+        if root_motion:
+            metadata["root_motion"] = root_motion
         (library / (key + ".bin")).write_bytes(binary)
         write_document(library / (key + ".json"), metadata, 1024 * 1024)
         entry = dict(id=key, name=row["name"][:128], file=key + ".json", duration=duration)

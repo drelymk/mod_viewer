@@ -54,7 +54,7 @@ def test_rig_resolution_fingerprint_palette_and_reference_lifecycle(tmp_path):
 
     before = (asset / "Rig.json").read_bytes()
     first = read()
-    assert first["bone_map"] == {"7": 1, "8": 0}
+    assert first["bone_map"] == {"7": 1, "8": 0} and first["unmapped_bone_ids"] == []
     assert first["bones"][1]["translation"] == [1, 2, 3]
     assert read()["id"] == first["id"]
     raw["skin_bindings"].append({
@@ -65,7 +65,9 @@ def test_rig_resolution_fingerprint_palette_and_reference_lifecycle(tmp_path):
     assert read(fingerprint="a" * 64)["bone_map"] == {"7": 0, "8": 1}
     assert read(fingerprint="a" * 64)["id"] == first["id"]
     assert read(fingerprint="f" * 64) is None
-    assert resolve_game_rig(binding, source, (9,), enabled, {}, blend_sha256=fingerprint) is None
+    # A used ID the proven palette lacks binds anyway; it is reported and stays at rest.
+    partial = resolve_game_rig(binding, source, (7, 9), enabled, {}, blend_sha256=fingerprint)
+    assert partial["bone_map"] == first["bone_map"] and partial["unmapped_bone_ids"] == [9]
     assert resolve_game_rig(binding, source, (7,), set(), {}, blend_sha256=fingerprint) is None
     (asset / "10101010" / "Component 0.vb").write_bytes(b"changed")
     assert read() is None
@@ -191,7 +193,7 @@ def test_native_component_palette_maps_local_ids_only_for_its_bound_component(tm
                                 blend_sha256="f" * 64)
 
     assert resolve()["bone_map"] == {"0": 1, "1": 0}
-    assert resolve(ids=(2,)) is None
+    assert resolve(ids=(0, 2))["unmapped_bone_ids"] == [2]
     assert resolve(replace(native, bone_id_domain=wwmi_component_domain("10101010", 18, 6))) is None
     assert resolve(replace(native, bone_id_namespace="model", bone_id_domain="model")) is None
     (asset / "10101010" / "Component 0.vb").write_bytes(b"changed")
@@ -269,7 +271,7 @@ def test_lazy_skin_preview_publishes_verified_rig_without_remapping_weights(tmp_
     assert len(result["game_rigs"]) == 1
     entry = result["meshes"]["Mesh01"]
     assert entry["bone_ids"] == [7, 8]
-    assert entry["game_bone_map"] == {"7": 1, "8": 0}
+    assert entry["game_bone_map"] == {"7": 1, "8": 0} and "game_unmapped_bone_ids" not in entry
     assert entry["game_rig_id"] in result["game_rigs"]
     assert entry["vertex_count"] == 3
     assert entry["game_morph_binding"] == dict(
@@ -492,11 +494,15 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
     # but its own morph reference describes different geometry.
     drawn_elsewhere = resolve("bbbbbbbb", 0, (0, 2))
     assert drawn_elsewhere["bone_map"] == {"0": 5, "1": 6, "2": 7} and drawn_elsewhere["morph_binding"] is None
-    assert resolve("aaaaaaaa", 1, (3,)) is None
+    beyond = resolve("aaaaaaaa", 1, (0, 3))
+    assert beyond["bone_map"] == own["bone_map"] and beyond["unmapped_bone_ids"] == [3]
     assert resolve("aaaaaaaa", 1, (0,), (native, "22222222")) is None
     # A Blend hash the Asset never captured is corroborated only by the stream's own position hash.
     assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",)) is None
-    assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",), positions=("22222222",)) is None
+    # That position hash names stream 1, whose palette then binds; IDs it lacks stay at rest.
+    other_stream = resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",), positions=("22222222",))
+    assert other_stream["bone_map"] == {"0": 8} and other_stream["unmapped_bone_ids"] == [1, 2]
+    assert other_stream["morph_binding"] is None
     assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",), positions=("11111111",))["bone_map"] == own["bone_map"]
     # A Blend hash the Asset knows for another stream is a conflict, not a patch change.
     assert resolve("aaaaaaaa", 1, (0, 1, 2), ("44444444", "99999999"), positions=("11111111",)) is None

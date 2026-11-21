@@ -502,8 +502,9 @@ def test_sequence_playback_crossfades_steps_and_caches_its_clips(module_page, ca
     assert result['loadsDuringFade'] == 2
     assert result['settled'] == {'x': pytest.approx(2, abs=1e-6),
                                  'loads': ['clip01', 'clip02'] + ([] if cached else ['clip01'])}
-    # The cyclic sequence wraps to its restart time without waiting for a download when cached.
-    assert result['wrapped'] == {'step': 0, 'time': pytest.approx(.3)}
+    # The cyclic sequence wraps to its restart time without waiting for a download when cached;
+    # the 0.1 s this frame ran past the 0.8 s leave already plays the restarted step.
+    assert result['wrapped'] == {'step': 0, 'time': pytest.approx(.4)}
     # Step spans of 0.5 s and 0.7 s make a 1.2 s timeline; uncached step clips download first.
     assert result['seeks'] == [
         {'step': 1, 'time': pytest.approx(.55), 'position': pytest.approx(.95), 'length': pytest.approx(1.2),
@@ -515,6 +516,61 @@ def test_sequence_playback_crossfades_steps_and_caches_its_clips(module_page, ca
     assert result['order'] == ['clip01', 'clip02', 'seq-01']
     assert result['group'] == 'Sequences' and result['grouped'] == ['seq-01']
 
+
+def test_sequence_steps_carry_root_motion_and_return_to_origin_each_pass(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three');
+      const {createRigAnimation} = await import('./js/weight-rig/rig-animation.js');
+      const sequence = {id:'seq-01',name:'Group01: StateA – StateB',cyclic:true,restart:0,steps:[
+        {clip:'clip01',start:0,leave:.5,fade:0},{clip:'clip02',start:0,leave:.5,fade:0}]};
+      // Each clip places the body absolutely; its Animator-space root-motion track
+      // (MotionT.xyz, MotionQ.xyzw per frame) follows the bone transforms.
+      const rig = {id:'rig01',bones:['Top','Body'].map((name,index)=>(
+        {name,parent:index-1,translation:[0,0,0],rotation:[0,0,0,1]})),
+        animations:['clip01','clip02'].map(id=>({id,name:id,duration:1})),animation_session:'session01',
+        animation_sequences:[sequence]};
+      const turn = [0,0,Math.SQRT1_2,Math.SQRT1_2];
+      const pose = x => [0,0,0,0,0,0,1, x,0,0,0,0,0,1];
+      const motion = (x, rotation=[0,0,0,1]) => [x,0,0,...rotation];
+      const data = {clip01:new Float32Array([...pose(0),...pose(1),...motion(0),...motion(1)]),
+                    clip02:new Float32Array([...pose(5),...pose(6),...motion(5,turn),...motion(6,turn)])};
+      const urls = [];
+      const respond = id => { const url = URL.createObjectURL(new Blob([data[id]])); urls.push(url);
+        return {status:'ok',clip:{id,skeleton_id:rig.id,frame_count:2,bone_count:2,duration:1,
+          root_motion:{bone:0},data:{url,length:data[id].byteLength}}}; };
+      let latest = null, scheduled = null;
+      window.requestAnimationFrame = callback => {scheduled=callback;return 1;};
+      window.cancelAnimationFrame = () => {scheduled=null;};
+      Object.defineProperty(performance,'now',{value:()=>0,configurable:true});
+      const runtime = createRigAnimation({getRig:()=>rig,loadClip:async(_token,id)=>respond(id),
+        applyPose:pose=>{latest=pose;},suspendPhysics:()=>{},prepare:()=>{},notify:()=>{}});
+      const body = () => new T.Vector3().applyMatrix4(latest.get(1)).toArray().map(v=>Math.round(v*1e5)/1e5);
+      await runtime.select('seq-01');
+      const started = body();
+      // This frame crosses the 0.5 s leave by 20 ms; that remainder plays the entering step.
+      scheduled(520);
+      const entered = {step:runtime.snapshot().step,time:runtime.snapshot().time,body:body()};
+      scheduled(750);
+      const travelled = body();
+      scheduled(1000);
+      const wrapped = {step:runtime.snapshot().step,body:body()};
+      runtime.seek(.75);
+      await new Promise(r=>setTimeout(r,20));
+      const seeked = {step:runtime.snapshot().step,body:body()};
+      runtime.stop();
+      urls.forEach(url=>URL.revokeObjectURL(url));
+      return {started,entered,travelled,wrapped,seeked};
+    }''')
+    assert result['started'] == [0, 0, 0]
+    # The second clip starts its root motion 5 units away and turned 90 degrees; the
+    # body continues from where the first step left it instead of jumping there.
+    assert result['entered'] == {'step': 1, 'time': pytest.approx(.02), 'body': [.5, -.02, 0]}
+    # Its forward travel follows the carried heading: the motion's turn is undone too.
+    assert result['travelled'] == [.5, -.25, 0]
+    # A cyclic sequence returns to the origin when it wraps to its first step.
+    assert result['wrapped'] == {'step': 0, 'body': [0, 0, 0]}
+    # Seeking replays the travel that the earlier resident steps carry.
+    assert result['seeked'] == {'step': 1, 'body': [.5, -.25, 0]}
 
 def test_merged_clip_morphs_keep_each_clips_deltas_and_reject_conflicts(module_page):
     result = module_page.evaluate('''async () => {
@@ -560,6 +616,7 @@ def test_merged_clip_morphs_keep_each_clips_deltas_and_reject_conflicts(module_p
 
 @pytest.mark.parametrize('case,expected', [
     ('partial', [0]), ('same_skeleton', [0, 1]), ('detached_skeleton', [0, 1]), ('invalid_palette', [0]),
+    ('unmapped_bone', [0, 1]),
     ('different_skeleton', [0]), ('competing_libraries', None),
     ('invalid_skeleton', None), ('no_library', None),
 ])
@@ -575,6 +632,7 @@ def test_animation_mesh_binding_uses_only_verified_palettes(module_page, case, e
       if(variant==='same_skeleton')second.gameRig={...rig};
       if(variant==='detached_skeleton')second.gameRig={...rig,bones:bones.map(b=>({...b}))};
       if(variant==='invalid_palette')second.gameRig={...rig,boneMap:{7:9}};
+      if(variant==='unmapped_bone')second.gameRig={...rig},second.boneIds=[7,8];
       if(variant==='different_skeleton')second.gameRig={...rig,id:'rig02',animations:[]};
       if(variant==='competing_libraries')second.gameRig={...rig,id:'rig02'};
       if(variant==='invalid_skeleton')rig.bones=[{...bones[0],parent:0}];
@@ -584,9 +642,12 @@ def test_animation_mesh_binding_uses_only_verified_palettes(module_page, case, e
       const binding=buildAnimationMeshBinding(meshes,states);
       return {included:binding?[...binding.meshes.keys()].map(mesh=>meshes.indexOf(mesh)):null,
         serializations,
+        mapped:binding?.meshes.has(meshes[1])?[...binding.meshes.get(meshes[1])]:null,
         manualRig:variant==='partial'?buildGameRigReconciliation([first,second]):null};
     }''', case)
     assert result['included'] == expected
+    # A used ID the proven palette lacks gets no transform, so its weight stays at rest.
+    assert result['mapped'] == ([[7, 0]] if expected and 1 in expected else None)
     assert result['manualRig'] is None
     assert result['serializations'] == (1 if case == 'detached_skeleton' else 0)
 

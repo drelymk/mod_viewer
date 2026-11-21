@@ -427,18 +427,22 @@ def _file_matches(path, fingerprint, cache, max_bytes):
 
 
 def _game_bone_mapping(bone_map, bone_ids, offset=0):
-    """Map decoded IDs (palette index + offset) to skeleton joints, or None."""
+    """Map decoded IDs (palette index + offset) to skeleton joints.
+
+    Also return the used IDs the proven palette lacks; they stay at rest.
+    """
     items = bone_map.items() if isinstance(bone_map, dict) else enumerate(bone_map)
     mapping = {str(int(index) + offset): joint for index, joint in items}
-    return mapping if all(str(bone) in mapping for bone in bone_ids) else None
+    return mapping, sorted({int(bone) for bone in bone_ids if str(bone) not in mapping})
 
 
 def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
                      blend_sha256=None, merged_layout=(), captured_palette=False, positions=b"", morph_signature=(), morph_topology=()):
     """Read optional rig data only for a retained exact Asset/range binding.
 
-    Unsupported skin namespaces, changed reference geometry and incomplete
-    palettes keep the ordinary inferred-rig path. Authored weights are untouched.
+    Unsupported skin namespaces and changed reference geometry keep the
+    ordinary inferred-rig path. A proven palette binds even when it lacks some
+    used IDs; those are reported and stay at rest. Authored weights are untouched.
     """
     if binding is not None and binding.asset_type in ("ZZMI", "GIMI"):
         # GIMI shares the hash-Asset palette proof; only ZZZ has a merged skeleton layout.
@@ -515,15 +519,13 @@ def resolve_game_rig(binding, source, bone_ids, enabled_roots, cache, *,
                 if not reference or not _file_matches(reference, reference_palette[fingerprint], cache, 64 * 1024 * 1024):
                     return None
         offset = 0 if source.bone_id_namespace == "wwmi_merged" or source.blend_remap else source.bone_id_offset
-        mapping = _game_bone_mapping(bone_map, bone_ids, offset)
-        if mapping is None:
-            return None
+        mapping, unmapped = _game_bone_mapping(bone_map, bone_ids, offset)
         morph_binding = {key: palette[key] for key in ("vertex_sha256", "index_sha256")}
         if not captured_palette:
             vertices = _mod_morph_vertices(directory, reference_dir, palette, positions, cache, morph_signature, morph_topology)
             morph_binding = {**morph_binding, "vertices": vertices} if vertices is not None else None
         return dict(id=rig["id"], version=rig["version"], bones=rig["bones"], bone_map=mapping,
-                    humanoid_controls=rig.get("humanoid_controls"),
+                    unmapped_bone_ids=unmapped, humanoid_controls=rig.get("humanoid_controls"),
                     morph_binding=morph_binding)
     except (OSError, ValueError, TypeError, KeyError, IndexError, RecursionError):
         return None
@@ -723,12 +725,10 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
                 if mapping is None:
                     return None
                 own_geometry = any(p is palette for p in stream)
-        mapping = _game_bone_mapping(mapping, bone_ids)
-        if mapping is None:
-            return None
+        mapping, unmapped = _game_bone_mapping(mapping, bone_ids)
         if not own_geometry:
             # The bound component's morph reference describes different geometry.
-            return dict(id=rig["id"], version=2, bones=rig["bones"], bone_map=mapping,
+            return dict(id=rig["id"], version=2, bones=rig["bones"], bone_map=mapping, unmapped_bone_ids=unmapped,
                         humanoid_controls=rig.get("humanoid_controls"), morph_binding=None)
         morph_binding = {key: palette[key] for key in ("vertex_sha256", "index_sha256")}
         if not captured:
@@ -736,7 +736,7 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
             vertices = (_mod_morph_vertices(directory, directory, palette, positions, cache, signature, topology,
                                             reference=reference) if reference is not None else None)
             morph_binding = {**morph_binding, "vertices": vertices} if vertices is not None else None
-        return dict(id=rig["id"], version=2, bones=rig["bones"], bone_map=mapping,
+        return dict(id=rig["id"], version=2, bones=rig["bones"], bone_map=mapping, unmapped_bone_ids=unmapped,
                     humanoid_controls=rig.get("humanoid_controls"), morph_binding=morph_binding)
     except (OSError, ValueError, TypeError, KeyError, IndexError, RecursionError):
         return None

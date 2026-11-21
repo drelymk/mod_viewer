@@ -215,10 +215,11 @@ filename = blend.buf
     rig_file.write_text(json.dumps(ambiguous))
     assert preview.get_model_skinning_preview(str(mod))["game_rigs"] == {}
     rig_file.write_bytes(original)
-    # An unknown positively weighted ID must fall back instead of adopting a palette.
+    # A positively weighted ID the proven palette lacks still adopts it; that ID stays at rest.
     (mod / "blend.buf").write_bytes(struct.pack("<4f4I", .75, .25, 0, 0, 8, 99, 0, 0) * 4)
-    rejected = preview.get_model_skinning_preview(str(mod))
-    assert rejected["status"] == "ok" and rejected["game_rigs"] == {}
+    partial = preview.get_model_skinning_preview(str(mod))
+    assert partial["status"] == "ok" and list(partial["game_rigs"]) == [rig["id"]]
+    assert [entry["game_unmapped_bone_ids"] for entry in partial["meshes"].values()] == [[99]]
     # Changed captured metadata must invalidate even an otherwise matching stock program.
     (mod / "blend.buf").write_bytes(struct.pack("<4f4I", .75, .25, 0, 0, 8, 12, 0, 0) * 4)
     (asset / "hash.json").write_text(json.dumps(metadata) + "\n")
@@ -789,15 +790,73 @@ def test_zzz_mixed_streamed_dense_constant_tracks_without_acl(tmp_path, step, tr
             dict(index=i, value=time if i == 0 else 0, incoming=0, outgoing="Infinity" if step else 0)
             for i in range(3)]) for time in (0, 1)])
     rig = dict(bones=[dict(translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])] * 3)
-    data, frames, duration, omitted, morph, keyed = zzz_animation.convert(metadata, client.work, rig, avatar)
+    data, frames, duration, omitted, morph, keyed, root_motion = zzz_animation.convert(metadata, client.work, rig, avatar)
     samples = np.frombuffer(data, dtype="<f4").reshape(frames, 3, 10)
-    assert duration == 1 and omitted == 0 and morph is None
+    assert duration == 1 and omitted == 0 and morph is None and root_motion is None
     # The only transform track targets avatar bone hash 100, the rig's bone 2.
     assert keyed == [2]
     assert samples[15, 2, 0] == pytest.approx(translation)
     assert samples[15, 2, 3:7] == pytest.approx([0, 0, np.sin(np.pi / 8), np.cos(np.pi / 8)])
     assert samples[-1, 2, 0] == 1 and list(samples[-1, 2, 7:]) == [1, 2, 1]
 
+
+@pytest.mark.parametrize("attributes", [tuple(range(7)), tuple(range(6))])
+def test_zzz_root_motion_track_conversion_validation_and_publication(tmp_path, monkeypatch, attributes):
+    from app.assets.animations import AnimationSessions, read_clip
+
+    _root, _asset, _record, avatar, _mesh, rows, client = fixture(tmp_path)
+    metadata = client.read(rows[-1])
+    # MotionT.xyz then an unnormalized identity MotionQ.xyzw, as constant Animator muscles.
+    motion = [.5, 0, -2, 0, 0, 0, 2]
+    metadata["constant"] = [motion[attribute] for attribute in attributes]
+    metadata["bindings"] += [dict(path=0, attribute=attribute, type="Animator", custom=8, pointer=0)
+                             for attribute in attributes]
+    rig = dict(id="a" * 64, bones=[dict(name=f"Joint{i:02}", parent=i - 1, translation=[0, 0, 0],
+                                        rotation=[0, 0, 0, 1], scale=[1, 1, 1]) for i in range(3)])
+    data, frames, _duration, omitted, _morph, _keyed, root_motion = zzz_animation.convert(
+        metadata, client.work, rig, avatar)
+    bone_bytes = frames * 3 * 10 * 4
+    if len(attributes) < 7:
+        # An incomplete muscle set is an omitted channel family, never a guessed track.
+        assert root_motion is None and omitted == 1 + len(attributes) and len(data) == bone_bytes
+        return
+    # The track lives in the Animator's space: the Avatar root after the mesh-space root.
+    assert root_motion == {"bone": 1} and omitted == 1
+    track = np.frombuffer(data, "<f4", offset=bone_bytes).reshape(frames, 7)
+    assert track == pytest.approx(np.tile([.5, 0, -2, 0, 0, 0, 1], (frames, 1)))
+    library = tmp_path / "Asset01" / "Animation"
+    library.mkdir(parents=True)
+    raw = dict(format="mod-viewer-animation", version=2, coordinate_space="asset", layout="frame-major-tqs-f32le",
+               skeleton_id=rig["id"], frame_count=frames, bone_count=3, duration=1, data_file="Clip01.bin",
+               sha256=hashlib.sha256(data).hexdigest(), root_motion=root_motion)
+    entry = dict(id="clip01", name="Clip 01", file="Clip01.json", duration=1)
+    (library / "Clip01.bin").write_bytes(data)
+    (library / "manifest.json").write_text(json.dumps(dict(
+        format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=[entry])))
+
+    def write(**changes):
+        (library / "Clip01.json").write_text(json.dumps({**raw, **changes}))
+
+    write()
+    assert read_clip(str(library), entry, rig)[1] == data
+    monkeypatch.setattr("app.assets.animations.server.publish_geometry", lambda *_args, **_kwargs: "/geometry/01")
+    sessions = AnimationSessions()
+    token = sessions.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animation_session"]
+    assert sessions.load(token, "clip01")["clip"]["root_motion"] == {"bone": 1}
+    for change in (dict(root_motion={"bone": 3}), dict(root_motion={"bone": 1, "space": 0}), dict(root_motion=[1])):
+        write(**change)
+        with pytest.raises(ValueError, match="root motion does not match"):
+            read_clip(str(library), entry, rig)
+    # The track's quaternions must be unit length like every other rotation.
+    corrupt = bytearray(data)
+    struct.pack_into("<f", corrupt, bone_bytes + 6 * 4, 2)
+    (library / "Clip01.bin").write_bytes(corrupt)
+    write(sha256=hashlib.sha256(corrupt).hexdigest())
+    with pytest.raises(ValueError, match="invalid root-motion track"):
+        read_clip(str(library), entry, rig)
+    write(root_motion=None)
+    with pytest.raises(ValueError, match="incomplete or has changed"):
+        read_clip(str(library), entry, rig)
 
 @pytest.mark.parametrize("triangles,sections,accepted", [
     ([0, 1, 2, 0, 1, 3, 0, 1, 3], [(0, 9)], True),
@@ -847,7 +906,8 @@ def test_zzz_facial_weights_follow_verified_player_policy(tmp_path, policy):
         with pytest.raises(ValueError, match="weight policy is unavailable"):
             zzz_animation.convert(metadata, client.work, rig, avatar, {(0, 123): ("Shape01", 100)})
         return
-    raw, frames, _duration, _omitted, morph, keyed = zzz_animation.convert(metadata, client.work, rig, avatar, {(0, 123): ("Shape01", 100)})
+    raw, frames, _duration, _omitted, morph, keyed, _motion = zzz_animation.convert(
+        metadata, client.work, rig, avatar, {(0, 123): ("Shape01", 100)})
     assert keyed == [2]
     weights = np.frombuffer(raw, dtype="<f4")[-frames:]
     assert weights[[0, -1]] == pytest.approx([0, 1] if policy else [-.25, 1.5])

@@ -827,7 +827,7 @@ of documentation, comments and tests; use portable fixtures instead.
   in an INI that never runs a skeleton/Blend remapper or assigns `vs`, `vs-cb3/4`,
   Blend input layout or WWMI palette variables outside custom shader sections,
   with an unaltered file-backed R8 Blend. Its domain names the root override and
-  must equal the exact Asset binding; used IDs must fit that component's palette.
+  must equal the exact Asset binding; used IDs outside that component's palette stay at rest.
   Its external calls must be WWMI core, RabbitFX pixel helpers, output-only
   built-ins or sibling pixel/draw lists. Both WWMI proofs may call a sibling
   INI's list (unique namespace, or a unique global name from an un-namespaced
@@ -889,11 +889,14 @@ of documentation, comments and tests; use portable fixtures instead.
   Shared Asset palettes may have up to 1024 entries when a verified proxy program
   projects each drawn compact palette to R8. Unproven pipelines, unsupported
   namespaces, stale reference geometry and invalid sidecars retain inference.
+  A proven palette that lacks some used IDs still binds instead of falling back:
+  those IDs get no game joint, are reported as `game_unmapped_bone_ids`, and their
+  unchanged authored weight holds the bind pose in playback and posing.
   Authored graph adoption requires every source to resolve the same skeleton.
   Meshes sharing a weight source may carry different sparse subsets of its
   verified bone map. Merge those subsets for source-Rig admission while retaining
-  each mesh's exact palette for playback. Require every member's used bone IDs
-  to resolve, reject conflicting aliases, and never mutate the per-mesh bindings.
+  each mesh's exact palette for playback. Require every mapped bone ID to name a
+  valid joint, reject conflicting aliases, and never mutate the per-mesh bindings.
   Keep source IDs/weights unchanged; source-to-game-joint aliases supply exact
   parents, pivots, rest axes and names, including unweighted ancestors. Optional
   explicit `humanoid_controls` maps all 16 controls to distinct, hierarchy-checked
@@ -983,6 +986,19 @@ of documentation, comments and tests; use portable fixtures instead.
   owns its sparse targets. Sequences are not seekable. A crossfade never outlasts its
   incoming step (catalog validation and playback both enforce it), and a cyclic restart
   precedes the head's leave.
+  Clips place the character absolutely while the game moves it by root-motion
+  deltas. ZZZ conversion keeps a clip's complete Animator `MotionT`/`MotionQ`
+  muscle set (an incomplete set stays an omitted channel) as an optional
+  frames×7 track after the morph weights, declared by `root_motion.bone`: the
+  Avatar root whose local space holds it. Each step change carries the travel so
+  the entering clip's root motion starts at the leaving one's rigid transform,
+  applied as an offset on that bone; a crossfade blends each side with its own
+  offset, and a step without a shared root-motion space keeps the offset.
+  Entering the first step (a cyclic wrap or replay) returns to the origin.
+  Seeking replays the carry through resident steps only; otherwise the step keeps
+  its own placement. Single clips and clips without a track keep their placement.
+  A frame that crosses a step's leave plays its remainder in the entering step (and
+  its fade), so handoff frames advance as far as any other frame.
   Playback may use one uniquely identified verified skeleton's compatible mesh
   subset while the manual ModelRig retains its original all-source admission.
   Apply fallback transforms through each mesh's exact game-bone palette, never
