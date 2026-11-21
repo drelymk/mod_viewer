@@ -16,9 +16,10 @@ from app.assets.extractor.core import Analysis, Component, Context, Part, Unsupp
 from app.assets.extractor.export import Selection, _component_folders, export, extract
 from app.assets.extractor.geometry import Element, Mesh
 from app.assets.extractor.memory_capture import MemoryCapture
-from app.assets.extractor.profiles.gimi_faces import classify_faces
+from app.assets.extractor.profiles.gimi_faces import classify_faces, split_gated_shells
 from app.assets.extractor.profiles.gimi_placement import apply_placement
 from tests.support.gimi_capture import make_face_capture
+from tests.support.extraction_data import header
 from app.assets.extractor.capture import Inventory
 from tests.support.memory_capture_data import capture_data
 
@@ -345,6 +346,53 @@ def test_all_face_candidates_preserve_expressions_passes_and_topology(case, fami
     assert _component_folders(faces) == {m.component.id: m.component.streams["position"]["hash"] for m in faces}
 
 
+@pytest.mark.parametrize("case", ["gated", "mixed", "nonzero_selector", "noncontiguous"])
+def test_gated_face_shell_split(case):
+    meshes = _family()
+    anchor = meshes["surface-2"]
+    for vertex in anchor.vertices:
+        vertex[2] = (0.5, 0.5)
+        vertex.extend(((0.5, 0.5), (0, 0)))
+    anchor.elements.extend((Element("TEXCOORD", 1, "R32G32_FLOAT", 32),
+                            Element("TEXCOORD", 2, "R32G32_FLOAT", 40)))
+    base_indices = list(anchor.indices[0])
+    disc_positions, disc_indices = _discs(((0, 0, -0.75), (0, 0, 0.75)))
+    start = len(anchor.vertices)
+    anchor.vertices.extend([[p, (1, 0, 0), (0.5, 0.5), (0.5, 0.5), (0.5, 0.5)] for p in disc_positions])
+    shell_indices = [i + start for i in disc_indices]
+    anchor.indices[0].extend(shell_indices)
+    if case == "mixed":
+        anchor.indices[0].extend((0, start, start + 1))
+    elif case == "nonzero_selector":
+        anchor.vertices[0][4] = (0.01, 0)
+    elif case == "noncontiguous":
+        anchor.indices[0].extend(base_indices[:3])
+        anchor.indices[0].extend((start, start + 1, start + 2))
+    anchor.component.parts[0].count = len(anchor.indices[0])
+    components = [m.component for m in meshes.values()]
+    before = [(c.id, copy.deepcopy(c.parts)) for c in components]
+    split_gated_shells(components, meshes)
+    if case != "gated":
+        assert [(c.id, c.parts) for c in components] == before
+        assert set(meshes) == {c.id for c in components}
+        return
+    classify_faces(meshes, Context())
+    base = anchor.component
+    shell = components[[c.id for c in components].index("surface-2") + 1]
+    assert len(components) == len(before) + 1
+    assert len(base.parts) == 1 and base.parts[0].first == 0 and base.parts[0].count == len(base_indices)
+    assert meshes["surface-2"].indices == [base_indices]
+    assert shell.provenance["gimi_gated_shell"]["base"] == "surface-2"
+    assert len(shell.parts) == 1
+    assert shell.parts[0].first == len(base_indices) and shell.parts[0].count == len(disc_indices)
+    assert meshes[shell.id].indices[0] == shell_indices
+    assert not shell.default_included and base.default_included
+    assert shell.provenance["gimi_face_family"] == base.provenance["gimi_face_family"]
+    assert shell.provenance["gimi_face_candidate"] and base.provenance["gimi_face_candidate"]
+    position_hash = base.streams["position"]["hash"]
+    assert _component_folders([meshes["surface-2"], meshes[shell.id]]) == {"surface-2": position_hash, shell.id: position_hash}
+
+
 @pytest.mark.parametrize("shared_position_hash", [False, True])
 def test_all_faces_export_update_and_manual_hash_folder_removal(tmp_path, monkeypatch, shared_position_hash):
     meshes = list(_family().values())
@@ -406,3 +454,39 @@ def test_all_faces_export_update_and_manual_hash_folder_removal(tmp_path, monkey
     record, = index.build_index("GIMI", str(root))["assets"]
     assert _snapshot(loader.load_asset_parts("GIMI", str(root), record)) == snapshots
     assert {p.name: p.read_bytes() for p in dump.iterdir()} == before
+
+
+def test_reused_face_stream_with_auxiliary_tangent_layout_merges(tmp_path, monkeypatch):
+    meshes = list(_family().values())
+    meshes[1] = _open_face_mesh(openings=False)
+    # The alternate pass is a copy of the open anchor, drawn after it.
+    meshes[4] = copy.deepcopy(meshes[1])
+    dump, material = make_face_capture(tmp_path, meshes)
+    shutil.copyfile(dump / "000005-vs-cb1=55555555.buf", dump / "000006-vs-cb1=55555555.buf")
+    for suffix in ("buf", "txt"):
+        (dump / f"000006-vb0=00000060.{suffix}").rename(dump / f"000006-vb0=00000030.{suffix}")
+        (dump / f"000006-vb1=00000061.{suffix}").rename(dump / f"000006-vb1=00000031.{suffix}")
+    log = dump / "log.txt"
+    text = log.read_text()
+    for before_text, after_text in (("resource=0x60 hash=00000060", "resource=0x30 hash=00000030"),
+                                    ("resource=0x61 hash=00000061", "resource=0x31 hash=00000031"),
+                                    ("pIndexBuffer:0x62", "pIndexBuffer:0x32")):
+        assert before_text in text
+        text = text.replace(before_text, after_text)
+    log.write_text(text)
+    # The alternate pass declares an auxiliary TANGENT beside the same POSITION/NORMAL layout.
+    (dump / "000006-vb0=00000030.txt").write_text(header(24, 0, [
+        ("POSITION", 0, "R32G32B32_FLOAT", 0), ("NORMAL", 0, "R32G32B32_FLOAT", 12),
+        ("TANGENT", 0, "R8G8B8A8_UNORM", 0)]).replace(
+        "vertex count: 4", f"vertex count: {len(meshes[1].vertices)}").replace("pointlist", "trianglelist"))
+    monkeypatch.setattr(discovery, "collect", lambda *_: copy.deepcopy(material))
+    analysis = discovery.analyze(str(dump))
+    anchor_ib = meshes[1].component.ib
+    anchors = [c for c in analysis.components if c.status == "included"
+               and c.provenance.get("geometry_kind") == "direct" and c.ib == anchor_ib]
+    component, = anchors
+    part, = component.parts
+    assert part.draws == ["000003", "000006"]
+    assert [e["draw"] for e in component.provenance["draw_evidence"]] == ["000003", "000006"]
+    assert len([c for c in analysis.components if c.provenance.get("gimi_face_candidate")]) == 3
+    assert component.provenance["gimi_face_placement"]["status"] == "proven"

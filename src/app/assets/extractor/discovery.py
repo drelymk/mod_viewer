@@ -179,7 +179,8 @@ def analyze(dump, context=None):
             if int(draw.args.get("InstanceCount", 1)) != 1:
                 raise Unsupported("Instanced character grouping is ambiguous")
             if direct:
-                # Direct passes can reuse resources under different input layouts.
+                # Passes rebinding the same position bytes merge when POSITION/NORMAL decode identically;
+                # auxiliary declarations such as TANGENT do not split them, and the first draw's layout is decoded.
                 identity = []
                 for role, source in sources.items():
                     path = inv.path(source["file"])
@@ -190,6 +191,8 @@ def analyze(dump, context=None):
                     # Valid subset counts describe the draw, not a different layout.
                     if (role == "texcoord" or attribute_skinning) and first_vertex == 0 and 0 <= declared <= path.stat().st_size // stride:
                         declared = 0
+                    if role == "position" and not attribute_skinning:
+                        elements = [e for e in elements if (e.semantic, e.index) in {("POSITION", 0), ("NORMAL", 0)}]
                     identity.append((source["resource"]["address"], source["resource"]["version"],
                                      source["sha256"], repr((stride, elements, declared, first_vertex))))
                 source_key = (ib.key, "attribute_skinning" if attribute_skinning else "direct", tuple(identity))
@@ -266,8 +269,9 @@ def analyze(dump, context=None):
     if surface_ids:
         classify_surface_overlaps(outlines, colors, surface_signatures)
     if inv.gimi_evidence and not inv.zzz_evidence:
-        from .profiles.gimi_faces import classify_faces
+        from .profiles.gimi_faces import classify_faces, split_gated_shells
         from .profiles.gimi_placement import placement_resolver, record_placements
+        split_gated_shells(components, decoded_meshes)
         resolve = placement_resolver(inv, calls, components, ctx)
         classify_faces(decoded_meshes, ctx)
         record_placements(inv, calls, components, ctx, resolve=resolve)

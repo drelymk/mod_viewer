@@ -89,6 +89,8 @@ class Component:
 
     @property
     def default_included(self):
+        if self.provenance.get("gimi_gated_shell"):
+            return False
         if self.provenance.get("gimi_face_candidate"):
             return self.status == "included"
         return (self.status == "included" and not self.requires_review
