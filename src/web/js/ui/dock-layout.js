@@ -8,9 +8,9 @@ import { openRightDock, toggleRightDock } from '../panels/right-dock.js';
 
 const DOCK_WIDTHS = Object.freeze({
   left: {
-    min: 220,
-    max: 640,
-    fallback: 288,
+    min: 270,
+    max: 690,
+    fallback: 338,
     property: '--left-dock-width',
     preference: 'leftDockWidth',
     dock: 'left-dock',
@@ -259,7 +259,12 @@ export function initDockLayout({ onWidthChange } = {}) {
     scheduleLayout();
   });
   window.addEventListener('mod-viewer-right-dock-tab-changed', scheduleLayout);
-  const observer = new ResizeObserver(() => scheduleLayout());
+  const observer = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.target.id === 'left-dock' || entry.target.id === 'right-dock') viewportDirty = true;
+    }
+    scheduleLayout();
+  });
   for (const id of OBSERVED_LAYOUT_IDS) {
     const element = $(id);
     if (element) observer.observe(element);

@@ -15,7 +15,7 @@ CHOICES = {
 }
 RANGES = {"ambientOcclusion": (0, 1), "keyLightIntensity": (0, 1.5),
           "glossy": (0, 100), "panelOpacity": (0, 100),
-          "leftDockWidth": (220, 640), "rightDockWidth": (260, 640)}
+          "leftDockWidth": (270, 690), "rightDockWidth": (260, 640)}
 INTEGER_KEYS = {"panelOpacity", "leftDockWidth", "rightDockWidth"}
 
 

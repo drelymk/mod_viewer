@@ -42,7 +42,7 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
         "textureMode": "all", "keyLightIntensity": 1,
         "navigationGizmo": True, "autoRestoreMissingAssetParts": False,
         "panelOpacity": 58, "language": "en", "autoLoadWeightRig": False,
-        "leftDockWidth": 288, "rightDockWidth": 316,
+        "leftDockWidth": 338, "rightDockWidth": 316,
     }
     assert viewer_preferences.save_preferences(defaults, filename) == defaults
     root = tmp_path / "root"
@@ -86,7 +86,7 @@ def test_legacy_glossy_preferences_load_and_save_as_numeric_levels(tmp_path, leg
     {"keyLightIntensity": float("nan")}, {"keyLightIntensity": float("inf")},
     {"keyLightIntensity": 10 ** 1000},
     {"glossy": -1}, {"glossy": 101}, {"glossy": float("nan")},
-    {"leftDockWidth": 219}, {"leftDockWidth": 641}, {"leftDockWidth": 300.5},
+    {"leftDockWidth": 269}, {"leftDockWidth": 691}, {"leftDockWidth": 300.5},
     {"rightDockWidth": True}, {"rightDockWidth": "316"}, {"rightDockWidth": 259},
     {"environment": "studio", "bloom": "true"},
 ])

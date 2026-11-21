@@ -1016,13 +1016,16 @@ def test_dock_resize_collapse_shortcuts_and_focus_mode_preserve_layout_preferenc
 
     page.locator('#left-dock-resizer').dblclick()
     page.wait_for_function(
-        "Math.abs(document.getElementById('left-dock').getBoundingClientRect().width - 288) <= 1")
-    wait_saved('leftDockWidth', 288)
-    assert saved('leftDockWidth')[-1] == 288
+        "Math.abs(document.getElementById('left-dock').getBoundingClientRect().width - 338) <= 1")
+    wait_saved('leftDockWidth', 338)
+    assert saved('leftDockWidth')[-1] == 338
 
     page.locator('#left-dock-collapse').click()
     assert page.locator('#left-panel-container').is_hidden()
     assert page.locator('#left-dock-collapse').get_attribute('aria-expanded') == 'false'
+    assert width('#left-dock') < 80
+    rail = page.locator('#left-dock-tabs').bounding_box()
+    assert rail['height'] > rail['width']
     blur()
     page.keyboard.press('BracketLeft')
     assert page.locator('#left-panel-container').is_visible()
@@ -1040,7 +1043,7 @@ def test_dock_resize_collapse_shortcuts_and_focus_mode_preserve_layout_preferenc
     page.keyboard.press('Backslash')
     assert page.evaluate("document.body.classList.contains('focus-mode')")
     assert page.locator('#right-dock').is_hidden()
-    assert page.locator('#left-dock-tabs').is_hidden()
+    assert page.locator('#left-dock-header').is_hidden()
     assert page.locator('#tool-panel').is_visible()
     assert page.locator('#focus-exit-btn').is_visible()
     assert page.locator('#focus-mode-btn').get_attribute('aria-pressed') == 'true'
@@ -1208,6 +1211,63 @@ def test_environment_and_tools_restore_and_save_without_orientation_or_source_ed
     assert page.locator('#glossy-slider').input_value() == '0'
     assert bridge_calls(page, 'preferencesSave') == []
     assert bridge_calls(page, 'load') == []
+
+
+def test_toolbar_groups_environment_popover_and_weight_rig_sections(viewer):
+    page = viewer({'fixture-01': model_payload()})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+
+    groups = page.locator('#tool-buttons .tool-group')
+    assert groups.count() == 3
+    assert groups.nth(1).locator('#environment-btn').count() == 1
+    assert groups.nth(2).locator('#focus-mode-btn').count() == 1
+
+    env_btn = page.locator('#environment-btn')
+    env_btn.click()
+    popover = page.locator('#environment-popover')
+    assert popover.is_visible()
+    popover_box = popover.bounding_box()
+    assert popover_box['y'] + popover_box['height'] <= env_btn.bounding_box()['y']
+    page.locator('#ao-btn').click()
+    assert popover.is_hidden()
+    assert page.locator('#ao-popover').is_visible()
+    page.keyboard.press('Escape')
+    assert page.locator('#ao-popover').is_hidden()
+
+    label = page.locator('.open-disabled-toggle')
+    assert label.is_visible() and 'Open disabled mod' in label.inner_text()
+    checkbox = page.locator('#open-disabled-mod')
+    before = checkbox.is_checked()
+    label.locator('span').click()
+    assert checkbox.is_checked() != before
+    label.locator('span').click()
+    assert checkbox.is_checked() == before
+
+    if page.locator('#weight-rig-panel').is_hidden():
+        page.locator('#weight-rig-tab').click()
+    toggles = page.locator('.weight-rig-section-toggle')
+    toggles.nth(0).wait_for()
+    assert toggles.count() == 3
+    section = page.locator('.weight-rig-section').nth(0)
+    toggles.nth(0).click()
+    assert 'collapsed' in section.get_attribute('class')
+    assert section.locator('.weight-rig-advanced').is_hidden()
+    assert toggles.nth(0).get_attribute('aria-expanded') == 'false'
+
+    page.reload()
+    page.wait_for_function('window.modViewer !== undefined')
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    if page.locator('#weight-rig-panel').is_hidden():
+        page.locator('#weight-rig-tab').click()
+    toggles = page.locator('.weight-rig-section-toggle')
+    toggles.nth(0).wait_for()
+    section = page.locator('.weight-rig-section').nth(0)
+    assert 'collapsed' in section.get_attribute('class')
+    toggles.nth(0).click()
+    assert 'collapsed' not in section.get_attribute('class')
+    assert bridge_calls(page, 'export') == []
 
 
 def test_glossy_slider_updates_materials_and_restores_level_for_new_meshes(viewer):
@@ -1605,7 +1665,7 @@ def test_face_selection_modes_combine_clicks_and_rectangles_only_while_editing(v
           const bounds = toolbar.getBoundingClientRect();
           const tabs = document.getElementById('left-dock-tabs').getBoundingClientRect();
           return bounds.left > tabs.right && bounds.right <= innerWidth
-            && Math.abs(bounds.top + bounds.height / 2 - tabs.top - tabs.height / 2) < 1;
+            && Math.abs(bounds.top - tabs.top) < 1;
         }""")
     assert page.locator('#meshes-tab').get_attribute('aria-selected') == 'true'
     page.locator('#inspector-tab').click()

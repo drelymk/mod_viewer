@@ -2,6 +2,7 @@
 // domains while keeping Weight and Rig picking lifecycles separate.
 
 import { weightRigApi } from '../weight-rig/weight-rig-core.js';
+import { createIcon } from '../ui/ui-icons.js';
 const {
   activateWeightRig,
   loadRigAnimationLibrary,
@@ -100,11 +101,43 @@ function addText(parent, className, value = '', translationKey = null) {
   return node;
 }
 
+function readSectionCollapsed(storageKey) {
+  try {
+    return localStorage.getItem(storageKey) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function writeSectionCollapsed(storageKey, collapsed) {
+  try {
+    localStorage.setItem(storageKey, String(collapsed));
+  } catch {
+    /* private mode */
+  }
+}
+
 function addSection(parent, title) {
   const section = document.createElement('section');
   section.className = 'weight-rig-section';
   const key = { WEIGHT: 'weightRig.weight', RIG: 'weightRig.rig', ANIMATION: 'weightRig.animation' }[title];
-  addText(section, 'weight-rig-section-title', '', key);
+  const storageKey = `mod-viewer.weight-rig.${title.toLowerCase()}.collapsed`;
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'weight-rig-section-toggle';
+  toggle.appendChild(createIcon('chevron-down'));
+  addText(toggle, 'weight-rig-section-title', '', key);
+  const applyCollapsed = (collapsed) => {
+    section.classList.toggle('collapsed', collapsed);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+  };
+  applyCollapsed(readSectionCollapsed(storageKey));
+  toggle.addEventListener('click', () => {
+    const collapsed = !section.classList.contains('collapsed');
+    applyCollapsed(collapsed);
+    writeSectionCollapsed(storageKey, collapsed);
+  });
+  section.appendChild(toggle);
   parent.appendChild(section);
   return section;
 }
@@ -306,7 +339,7 @@ function buildWeightSection(parent) {
   section.appendChild(gravityLabel);
   ui.physicsGravityEnable = gravity;
 
-  const advanced = addAdvanced(parent);
+  const advanced = addAdvanced(section);
   const physicsTitle = addText(advanced.content, 'weight-rig-advanced-title', '', 'weightRig.physicsTuning');
   physicsTitle.setAttribute('aria-hidden', 'true');
   const initial = getModelPhysicsState();
@@ -575,7 +608,7 @@ function buildRigSection(parent) {
   ui.presetStatus = addText(section, 'rig-hint');
   ui.presetStatus.setAttribute('aria-live', 'polite');
 
-  const advanced = addAdvanced(parent);
+  const advanced = addAdvanced(section);
   const ikLabel = document.createElement('label');
   ikLabel.className = 'weight-checkbox';
   const ik = document.createElement('input');

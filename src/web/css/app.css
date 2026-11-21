@@ -25,7 +25,7 @@
   --state-editor-line: rgba(110,118,129,.10);
   --state-editor-selection: rgba(38,79,120,.85);
   --state-selected-strong: rgba(31,111,235,.38);
-  --left-dock-default-width: 288px;
+  --left-dock-default-width: 338px;
   --right-dock-default-width: 316px;
   --left-dock-size: var(--left-dock-width, var(--left-dock-default-width));
   --right-dock-size: var(--right-dock-width, var(--right-dock-default-width));
@@ -108,7 +108,7 @@ body {
 .open-mod-menu button:hover:not(:disabled) { background: var(--panel-fill-active); }
 .open-mod-menu button:disabled { opacity: .45; cursor: default; }
 #open-disabled-mod {
-  width: 14px; height: 14px; margin: 0 -4px 0 0; accent-color: var(--success);
+  width: 14px; height: 14px; margin: 0; accent-color: var(--success);
   cursor: pointer;
 }
 #open-disabled-mod:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -397,6 +397,9 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-glb-choic
 }
 #tool-panel .panel-hdr { margin-bottom: 7px; }
 #tool-buttons { display: flex; align-items: center; gap: 6px; }
+.tool-group { display: flex; align-items: center; gap: 6px; }
+.tool-group + .tool-group { padding-left: 7px; margin-left: 1px; border-left: 1px solid var(--border); }
+#environment-btn svg { width: 22px; height: 22px; }
 #tool-buttons.collapsed { display: none; }
 .tool-btn {
   width: 40px; height: 40px; padding: 0;
@@ -1058,7 +1061,12 @@ body.feature-modify-toggle-off .toggle-actions { display: none; }
 body.feature-modify-toggle-off .mesh-create-toggle-action { display: none; }
 body.feature-modify-toggle-off #present-action-btn { display: none; }
 body.feature-modify-toggle-off .present-author-actions { display: none; }
-body.feature-open-disabled-mod-off #open-disabled-mod { display: none; }
+body.feature-open-disabled-mod-off .open-disabled-toggle { display: none; }
+.open-disabled-toggle {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+  color: var(--text-muted); white-space: nowrap; cursor: pointer;
+}
+.open-disabled-toggle:hover { color: var(--text); }
 body.feature-edit-mesh-off .mesh-edit-context-action { display: none; }
 body.feature-edit-mesh-off .inspector-mesh-edit-section { display: none; }
 body.feature-edit-mesh-off .inspector-mesh-edit-actions { display: none; }
@@ -1158,12 +1166,9 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .header-control-wrap {
   position: relative; display: flex; align-items: center;
 }
-#environment-control { margin-left: auto; }
+#settings-btn { margin-left: auto; }
 .header-setting-btn {
   display: grid; place-items: center; width: 32px; height: 32px; padding: 0;
-}
-#environment-popover {
-  position: absolute; top: calc(100% + 8px); right: 0; bottom: auto; left: auto;
 }
 .range-control-row {
   display: flex; align-items: center; justify-content: space-between;
@@ -1262,6 +1267,15 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .weight-rig-section-title { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; }
 .weight-rig-control-label { color: var(--text-muted); font-size: 11px; }
 .weight-rig-advanced { padding: 10px 0; border-bottom: 1px solid rgba(48,54,61,.72); }
+.weight-rig-section > .weight-rig-advanced { border-bottom: 0; padding-bottom: 0; }
+.weight-rig-section-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 0;
+  border: 0; background: transparent; color: var(--text-muted); cursor: pointer; text-align: left;
+}
+.weight-rig-section-toggle .ui-icon { width: 14px; height: 14px; transition: transform .15s ease; }
+.weight-rig-section.collapsed .weight-rig-section-toggle .ui-icon { transform: rotate(-90deg); }
+.weight-rig-section.collapsed > :not(.weight-rig-section-toggle) { display: none !important; }
+.weight-rig-section-toggle:hover { color: var(--text); }
 .weight-rig-advanced > summary { color: var(--text-muted); cursor: pointer; font-size: 11px; font-weight: 700; }
 .weight-rig-advanced > summary:hover { color: var(--text); }
 .weight-rig-advanced-content { display: flex; flex-direction: column; gap: 7px; padding-top: 9px; }
@@ -1686,6 +1700,9 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   #ini-view-btn { font-size: 0; }
   #ini-view-btn::before { content: 'INI'; font-size: 12px; }
   #right-dock { right: 8px; width: min(var(--right-dock-size), calc(100vw - 16px)); }
+  .tool-group { gap: 4px; }
+  .tool-group + .tool-group { padding-left: 5px; }
+  .open-disabled-toggle span { display: none; }
   #tool-panel.viewport-toolbar { max-width: calc(100vw - 16px); padding: 4px 5px; }
   #tool-panel.viewport-toolbar .camera-btn,
   #tool-panel.viewport-toolbar .tool-btn {
@@ -1704,11 +1721,21 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 /* Dock navigation and shared registry panels.  The tab row remains mounted
  * while its selected panel is hidden, so a second click is a true close. */
 #left-dock {
-  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  display: flex; flex-direction: row; align-items: flex-start; gap: 6px;
   width: var(--left-dock-size); max-width: min(var(--left-dock-size), calc(50vw - 36px));
 }
-#left-dock-header { position: relative; width: 100%; display: flex; align-items: stretch; gap: 4px; }
-#left-dock-tabs { flex: 1; min-width: 0; width: auto; }
+#left-dock:not(.ui-visible) { width: auto; }
+#left-dock-header {
+  position: relative; flex: 0 0 auto; width: auto; display: flex; flex-direction: column;
+  align-items: stretch; gap: 4px;
+}
+#left-dock-tabs { flex: 0 0 auto; width: 44px; }
+#left-dock-tabs .dock-tab { width: 36px; min-height: 36px; padding: 0; }
+#left-dock-tabs .dock-tab .ui-icon { width: 18px; height: 18px; }
+.dock-tab-label {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+#left-dock-collapse { flex: 0 0 auto; width: 44px; min-height: 32px; }
 .right-dock-header { display: flex; align-items: stretch; gap: 4px; }
 .right-dock-header > .right-dock-tabs { flex: 1; min-width: 0; }
 .dock-collapse-btn {
@@ -1721,7 +1748,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .dock-collapse-btn:hover { color: var(--text); background: var(--panel-fill-hover); }
 .dock-collapse-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .dock-collapse-btn .ui-icon { width: 15px; height: 15px; }
-#left-panel-container { position: relative; }
+#left-panel-container { position: relative; flex: 1 1 auto; min-width: 0; width: auto; }
 .dock-resizer {
   position: absolute; top: 0; bottom: 0; width: 10px; z-index: 3;
   cursor: col-resize; touch-action: none; background: transparent; border: 0; padding: 0;
@@ -1740,7 +1767,7 @@ body.dock-resizing, body.dock-resizing * { cursor: col-resize !important; user-s
 
 /* Focus mode hides dock chrome but keeps the viewport toolbar and playback (both live in #left-dock). */
 body.focus-mode #left-dock { width: 0; }
-body.focus-mode #left-dock-tabs, body.focus-mode #left-dock-collapse,
+body.focus-mode #left-dock-header, body.focus-mode #left-dock-tabs, body.focus-mode #left-dock-collapse,
 body.focus-mode #left-panel-container, body.focus-mode #right-dock { display: none !important; }
 .focus-exit-btn {
   position: fixed; top: calc(var(--toolbar-height) + 8px); left: 12px; z-index: 120;
@@ -1758,7 +1785,7 @@ body.focus-mode #left-panel-container, body.focus-mode #right-dock { display: no
   border-radius: var(--radius-md); backdrop-filter: blur(var(--panel-blur));
   box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
 }
-.left-dock-tabs { grid-template-columns: .9fr 1.2fr .9fr; }
+.left-dock-tabs { grid-template-columns: 1fr; }
 .mesh-selection-modes {
   position: absolute; left: calc(100% + 8px); top: 0;
   display: flex; align-items: center; gap: 2px; width: max-content;
@@ -1778,7 +1805,7 @@ body.focus-mode #left-panel-container, body.focus-mode #right-dock { display: no
 .dock-tab.active, .right-dock-tab.active { color: var(--text); background: var(--accent); }
 .dock-tab:disabled { color: var(--text-muted); opacity: .45; cursor: default; }
 #left-panel-container {
-  width: 100%; height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap) - var(--left-dock-clearance));
+  height: calc(100vh - var(--toolbar-height) - var(--footer-height) - var(--dock-gap) - var(--left-dock-clearance));
   min-height: 0;
 }
 #left-dock:not(.ui-visible) #left-panel-container { display: none; }
@@ -1873,10 +1900,8 @@ body.focus-mode #left-panel-container, body.focus-mode #right-dock { display: no
 #sidebar[hidden], #mod-folder-panel[hidden], #asset-folder-panel[hidden] { display: none !important; }
 
 @media (max-width: 900px) {
-  :root { --left-dock-default-width: 230px; }
+  :root { --left-dock-default-width: 280px; }
   #left-dock { max-width: min(var(--left-dock-size), calc(50vw - 28px)); }
-  .dock-tab { font-size: 10px; }
-  .dock-tab .ui-icon { display: none; }
 }
 #persistence-feedback {
   position: fixed;
