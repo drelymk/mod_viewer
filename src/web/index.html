@@ -66,6 +66,7 @@
   <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="m14 5-7 7 7 7"/></symbol>
   <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
   <symbol id="icon-close" viewBox="0 0 24 24"><path d="m5 5 14 14M19 5 5 19"/></symbol>
+  <symbol id="icon-panels" viewBox="0 0 24 24"><path d="M3 5h18v14H3zM9 5v14M15 5v14"/></symbol>
   <symbol id="icon-expand" viewBox="0 0 24 24"><path d="M9 3H3v6M15 3h6v6M21 15v6h-6M9 21H3v-6M3 3l6 6M21 3l-6 6M21 21l-6-6M3 21l6-6"/></symbol>
   <symbol id="icon-exit-isolation" viewBox="0 0 24 24"><path d="M9 4H4v16h5M12 12h9m-4-4 4 4-4 4"/></symbol>
 </svg>
@@ -75,9 +76,12 @@
   <span class="app-title" data-i18n="app.title">Mod Viewer</span>
   <span id="mod-path">No mod loaded</span>
   <span id="pending-indicator" class="pending-indicator" role="status" data-i18n="toolbar.edited">Edited</span>
-  <input id="open-disabled-mod" type="checkbox" title="Open disabled mod"
-         aria-label="Open disabled mod" data-i18n-title="toolbar.openDisabledMod"
-         data-i18n-aria-label="toolbar.openDisabledMod">
+  <label class="open-disabled-toggle">
+    <input id="open-disabled-mod" type="checkbox" title="Open disabled mod"
+           aria-label="Open disabled mod" data-i18n-title="toolbar.openDisabledMod"
+           data-i18n-aria-label="toolbar.openDisabledMod">
+    <span data-i18n="toolbar.openDisabledMod">Open disabled mod</span>
+  </label>
   <div id="open-mod-control" class="open-mod-control">
     <button id="open-btn" class="ui-button" disabled data-i18n="toolbar.openMod">Open Mod</button>
     <button id="open-menu-btn" class="open-menu-btn" type="button"
@@ -126,39 +130,6 @@
     <button type="button" role="menuitem" data-toolbar-target="export-btn" data-i18n="toolbar.export">Export</button>
     <button type="button" role="menuitem" data-toolbar-target="export-glb-choice" data-i18n="toolbar.exportGlb">Blender / glTF (.glb)…</button>
   </div>
-  <div id="environment-control" class="header-control-wrap environment-control">
-    <button id="environment-btn" class="icon-btn header-setting-btn environment-btn" type="button"
-            aria-label="Environment: Default. Click to change."
-            title="Environment: Default (click to change)">
-      <svg id="environment-icon" class="environment-icon" data-environment="default"
-           viewBox="0 0 40 40" aria-hidden="true">
-        <g data-environment-icon="default">
-          <circle cx="20" cy="20" r="7"/>
-          <path d="M20 3v5M20 32v5M3 20h5M32 20h5M8 8l4 4M28 28l4 4M32 8l-4 4M12 28l-4 4"/>
-        </g>
-        <g data-environment-icon="studio">
-          <path d="M8 13h18l3 12H5zM17 25v8M11 33h12"/>
-          <path d="M12 17h10M14 20h6"/>
-          <circle cx="29" cy="9" r="3"/>
-        </g>
-        <g data-environment-icon="indoor">
-          <path d="M5 34V17L20 6l15 11v17M5 34h30M12 34V22h16v12"/>
-          <path d="M16 16h8v6h-8zM20 28v6"/>
-        </g>
-        <g data-environment-icon="outdoor">
-          <circle cx="29" cy="10" r="5"/>
-          <path d="M3 33l11-13 7 8 5-6 11 11M3 34h34"/>
-          <path d="M8 15v-5M5.5 12.5l2.5-2.5 2.5 2.5"/>
-        </g>
-        <g data-environment-icon="sunset">
-          <path d="M10 24a10 10 0 0 1 20 0"/>
-          <path d="M4 25h32M8 30h24M13 35h14M20 3v5M5 12l4 4M35 12l-4 4"/>
-        </g>
-      </svg>
-    </button>
-    <div id="environment-popover" class="ui-popover header-popover" role="menu"
-         aria-label="Environment presets" data-i18n-aria-label="toolbar.environmentPresets" hidden></div>
-  </div>
   <button id="settings-btn" class="icon-btn header-setting-btn" type="button"
           aria-label="Settings" data-i18n-aria-label="settings.title"
           title="Settings" data-i18n-title="settings.title" aria-haspopup="dialog"
@@ -185,25 +156,34 @@
     </svg>
   </div>
 </div>
+<button id="focus-exit-btn" class="icon-btn focus-exit-btn" type="button" hidden
+        title="Show panels (\)" aria-label="Show panels (\)"
+        data-i18n-title="panels.showPanels" data-i18n-aria-label="panels.showPanels">
+  <svg class="ui-icon" aria-hidden="true"><use href="#icon-panels"></use></svg>
+</button>
 
 <div id="left-dock">
   <div id="left-dock-header">
-  <nav id="left-dock-tabs" class="dock-tabs left-dock-tabs" role="tablist" aria-label="Viewer panels" data-i18n-aria-label="panels.viewer">
-    <button id="meshes-tab" class="dock-tab" data-left-tab="meshes" type="button" role="tab"
+  <nav id="left-dock-tabs" class="left-dock-tabs" role="tablist" aria-label="Viewer panels" data-i18n-aria-label="panels.viewer">
+    <button id="meshes-tab" class="dock-tab" data-i18n-title="panels.meshes" title="Meshes" data-left-tab="meshes" type="button" role="tab"
             aria-selected="false" aria-expanded="false" aria-controls="sidebar" aria-disabled="true">
-      <svg class="ui-icon" aria-hidden="true"><use href="#icon-mesh"></use></svg><span data-i18n="panels.meshes">Meshes</span>
+      <svg class="ui-icon" aria-hidden="true"><use href="#icon-mesh"></use></svg><span class="dock-tab-label" data-i18n="panels.meshes">Meshes</span>
     </button>
-    <button id="mod-library-tab" class="dock-tab" data-left-tab="mod-library" type="button" role="tab"
+    <button id="mod-library-tab" class="dock-tab" data-i18n-title="panels.modLibrary" title="Mod Library" data-left-tab="mod-library" type="button" role="tab"
             aria-selected="false" aria-expanded="false" aria-controls="mod-folder-panel">
-      <svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg><span data-i18n="panels.modLibrary">Mod Library</span>
+      <svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg><span class="dock-tab-label" data-i18n="panels.modLibrary">Mod Library</span>
     </button>
-    <button id="assets-tab" class="dock-tab" data-left-tab="assets" type="button" role="tab"
+    <button id="assets-tab" class="dock-tab" data-i18n-title="panels.assets" title="Assets" data-left-tab="assets" type="button" role="tab"
             aria-selected="false" aria-expanded="false" aria-controls="asset-folder-panel">
-      <svg class="ui-icon" aria-hidden="true"><use href="#icon-assets"></use></svg><span data-i18n="panels.assets">Assets</span>
+      <svg class="ui-icon" aria-hidden="true"><use href="#icon-assets"></use></svg><span class="dock-tab-label" data-i18n="panels.assets">Assets</span>
     </button>
   </nav>
-    <div id="mesh-selection-modes" class="dock-tabs mesh-selection-modes" role="toolbar" hidden></div>
+  <button id="left-dock-collapse" class="dock-collapse-btn" type="button"
+          aria-controls="left-panel-container" aria-expanded="false">
+    <svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-left"></use></svg>
+  </button>
   </div>
+  <div id="mesh-selection-modes" class="dock-tabs mesh-selection-modes" role="toolbar" hidden></div>
 
   <div id="left-panel-container">
     <section id="mod-folder-panel" class="left-dock-panel" role="tabpanel" aria-labelledby="mod-library-tab" aria-label="Mod Library" data-i18n-aria-label="panels.modLibrary" hidden>
@@ -244,9 +224,14 @@
     </section>
 
     <section id="sidebar" class="left-dock-panel" role="tabpanel" aria-labelledby="meshes-tab" hidden>
-      <div class="panel-hdr">
-        <button type="button" class="group-toggle" aria-expanded="true" aria-controls="mesh-list"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
-        <h3 data-i18n="panels.meshes">Meshes</h3>
+      <div class="panel-hdr mesh-filter-hdr">
+        <label class="mesh-search">
+          <svg class="ui-icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+          <input id="mesh-search" type="search" autocomplete="off" spellcheck="false"
+                 placeholder="Filter meshes" data-i18n-placeholder="mesh.filterPlaceholder"
+                 aria-label="Filter meshes by name" data-i18n-aria-label="mesh.filterLabel"
+                 aria-controls="mesh-list"/>
+        </label>
         <div class="panel-hdr-actions">
           <button id="exit-isolation-btn" class="icon-btn" type="button" hidden title="Exit Isolation" aria-label="Exit Isolation" data-i18n-title="mesh.exitIsolation" data-i18n-aria-label="mesh.exitIsolation"><svg class="ui-icon" aria-hidden="true"><use href="#icon-exit-isolation"></use></svg></button>
           <button id="asset-fill-btn" class="icon-btn asset-fill-btn" type="button" disabled
@@ -255,8 +240,21 @@
           <button id="reset-state-btn" class="icon-btn" title="Reset mesh visibility" data-i18n-title="mesh.resetVisibility" aria-label="Reset mesh visibility" data-i18n-aria-label="mesh.resetVisibility"><svg class="ui-icon" aria-hidden="true"><use href="#icon-reset"></use></svg></button>
         </div>
       </div>
+      <div class="mesh-filter-row">
+        <div id="mesh-visibility-filter" class="mesh-visibility-filter" role="group"
+             aria-label="Show meshes" data-i18n-aria-label="mesh.filterVisibility">
+          <button type="button" data-mesh-filter="all" aria-pressed="true" data-i18n="mesh.filterAll">All</button>
+          <button type="button" data-mesh-filter="visible" aria-pressed="false" data-i18n="mesh.filterVisible">Visible</button>
+          <button type="button" data-mesh-filter="hidden" aria-pressed="false" data-i18n="mesh.filterHidden">Hidden</button>
+        </div>
+        <span id="mesh-filter-count" class="mesh-filter-count" role="status" aria-live="polite"></span>
+      </div>
       <div id="mesh-list"></div>
+      <div id="mesh-filter-empty" class="mesh-filter-empty" data-i18n="mesh.filterEmpty" hidden>No meshes match the filter.</div>
     </section>
+    <div id="left-dock-resizer" class="dock-resizer" role="separator" tabindex="0"
+         aria-orientation="vertical" aria-controls="left-dock"
+         aria-label="Resize left panel" data-i18n-aria-label="panels.resizeLeft"></div>
   </div>
 
   <div id="camera-panel">
@@ -335,25 +333,64 @@
   <div id="tool-panel" class="viewport-toolbar">
     <div id="viewport-camera-buttons" class="viewport-camera-buttons" aria-label="Viewport orientation"></div>
     <div id="tool-buttons">
-      <button id="wire-btn" class="tool-btn" title="Wireframe rendering: off" aria-label="Wireframe rendering: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-wireframe"></use></svg></button>
-      <button id="outline-btn" class="tool-btn" title="Silhouette outlines: off" aria-label="Silhouette outlines: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-outline"></use></svg></button>
-      <button id="ao-btn" class="tool-btn" title="Ambient occlusion: 0%" aria-label="Ambient occlusion: 0%"
-              aria-expanded="false" aria-controls="ao-popover"><svg class="ui-icon" aria-hidden="true"><use href="#icon-ao"></use></svg></button>
-      <button id="bloom-btn" class="tool-btn off" title="Emission bloom: off" aria-label="Emission bloom: off" aria-pressed="false">B</button>
-      <button id="glossy-btn" class="tool-btn off" title="Glossy materials: 0%" aria-label="Glossy materials: 0%"
-              aria-expanded="false" aria-controls="glossy-popover"><svg class="ui-icon" aria-hidden="true"><use href="#icon-glossy"></use></svg></button>
-      <button id="toon-btn" class="tool-btn off" title="Toon shadows: off" aria-label="Toon shadows: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-toon"></use></svg></button>
-      <button id="grid-btn" class="tool-btn" title="Grid visibility: on" aria-label="Grid visibility: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-grid"></use></svg></button>
-      <button id="shading-btn" class="tool-btn" title="Smooth shading: on" aria-label="Smooth shading: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-shading"></use></svg></button>
-      <button id="texture-btn" class="tool-btn" title="Textures: all maps" aria-label="Textures: all maps"><svg class="ui-icon" aria-hidden="true"><use href="#icon-texture"></use></svg></button>
-      <button id="light-btn" class="tool-btn partial" title="Key light: 67%" aria-label="Key light: 67%"
-              aria-expanded="false" aria-controls="light-popover"><svg class="ui-icon" aria-hidden="true"><use href="#icon-light"></use></svg></button>
-      <button id="trackball-btn" class="tool-btn active" title="Toggle navigation gizmo: on" aria-label="Toggle navigation gizmo: on" aria-pressed="true">
-        <svg class="nav-gizmo-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path class="nav-x" d="M12 12L20 15"/><path class="nav-y" d="M12 12V3"/><path class="nav-z" d="M12 12L5 18"/>
-          <circle class="nav-x" cx="20" cy="15" r="2"/><circle class="nav-y" cx="12" cy="3" r="2"/><circle class="nav-z" cx="5" cy="18" r="2"/>
-        </svg>
-      </button>
+      <div class="tool-group" role="group" aria-label="Display" data-i18n-aria-label="toolbar.groupDisplay">
+        <button id="wire-btn" class="tool-btn" title="Wireframe rendering: off" aria-label="Wireframe rendering: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-wireframe"></use></svg></button>
+        <button id="outline-btn" class="tool-btn" title="Silhouette outlines: off" aria-label="Silhouette outlines: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-outline"></use></svg></button>
+        <button id="shading-btn" class="tool-btn" title="Smooth shading: on" aria-label="Smooth shading: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-shading"></use></svg></button>
+        <button id="texture-btn" class="tool-btn" title="Textures: all maps" aria-label="Textures: all maps"><svg class="ui-icon" aria-hidden="true"><use href="#icon-texture"></use></svg></button>
+        <button id="grid-btn" class="tool-btn" title="Grid visibility: on" aria-label="Grid visibility: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-grid"></use></svg></button>
+        <button id="trackball-btn" class="tool-btn active" title="Toggle navigation gizmo: on" aria-label="Toggle navigation gizmo: on" aria-pressed="true">
+          <svg class="nav-gizmo-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path class="nav-x" d="M12 12L20 15"/><path class="nav-y" d="M12 12V3"/><path class="nav-z" d="M12 12L5 18"/>
+            <circle class="nav-x" cx="20" cy="15" r="2"/><circle class="nav-y" cx="12" cy="3" r="2"/><circle class="nav-z" cx="5" cy="18" r="2"/>
+          </svg>
+        </button>
+      </div>
+      <div class="tool-group" role="group" aria-label="Lighting" data-i18n-aria-label="toolbar.groupLighting">
+        <button id="light-btn" class="tool-btn partial" title="Key light: 67%" aria-label="Key light: 67%"
+                aria-expanded="false" aria-controls="light-popover"><svg class="ui-icon" aria-hidden="true"><use href="#icon-light"></use></svg></button>
+        <button id="ao-btn" class="tool-btn" title="Ambient occlusion: 0%" aria-label="Ambient occlusion: 0%"
+                aria-expanded="false" aria-controls="ao-popover"><svg class="ui-icon" aria-hidden="true"><use href="#icon-ao"></use></svg></button>
+        <button id="glossy-btn" class="tool-btn off" title="Glossy materials: 0%" aria-label="Glossy materials: 0%"
+                aria-expanded="false" aria-controls="glossy-popover"><svg class="ui-icon" aria-hidden="true"><use href="#icon-glossy"></use></svg></button>
+        <button id="toon-btn" class="tool-btn off" title="Toon shadows: off" aria-label="Toon shadows: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-toon"></use></svg></button>
+        <button id="bloom-btn" class="tool-btn off" title="Emission bloom: off" aria-label="Emission bloom: off" aria-pressed="false">B</button>
+        <div id="environment-control" class="header-control-wrap environment-control">
+          <button id="environment-btn" class="tool-btn environment-btn" type="button"
+                  aria-label="Environment: Default. Click to change."
+                  title="Environment: Default (click to change)">
+            <svg id="environment-icon" class="environment-icon" data-environment="default"
+                 viewBox="0 0 40 40" aria-hidden="true">
+              <g data-environment-icon="default">
+                <circle cx="20" cy="20" r="7"/>
+                <path d="M20 3v5M20 32v5M3 20h5M32 20h5M8 8l4 4M28 28l4 4M32 8l-4 4M12 28l-4 4"/>
+              </g>
+              <g data-environment-icon="studio">
+                <path d="M8 13h18l3 12H5zM17 25v8M11 33h12"/>
+                <path d="M12 17h10M14 20h6"/>
+                <circle cx="29" cy="9" r="3"/>
+              </g>
+              <g data-environment-icon="indoor">
+                <path d="M5 34V17L20 6l15 11v17M5 34h30M12 34V22h16v12"/>
+                <path d="M16 16h8v6h-8zM20 28v6"/>
+              </g>
+              <g data-environment-icon="outdoor">
+                <circle cx="29" cy="10" r="5"/>
+                <path d="M3 33l11-13 7 8 5-6 11 11M3 34h34"/>
+                <path d="M8 15v-5M5.5 12.5l2.5-2.5 2.5 2.5"/>
+              </g>
+              <g data-environment-icon="sunset">
+                <path d="M10 24a10 10 0 0 1 20 0"/>
+                <path d="M4 25h32M8 30h24M13 35h14M20 3v5M5 12l4 4M35 12l-4 4"/>
+              </g>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="tool-group" role="group" aria-label="View" data-i18n-aria-label="toolbar.groupView">
+        <button id="focus-mode-btn" class="tool-btn" type="button" aria-pressed="false"
+                title="Focus mode (\): off" aria-label="Focus mode (\): off"><svg class="ui-icon" aria-hidden="true"><use href="#icon-expand"></use></svg></button>
+      </div>
     </div>
     <div id="animation-tools" class="viewport-animation-buttons" hidden>
       <button id="animation-toggle-btn" class="tool-btn active" type="button" aria-pressed="true"
@@ -365,6 +402,10 @@
 </div>
 
   <div id="right-dock">
+  <div id="right-dock-resizer" class="dock-resizer" role="separator" tabindex="0"
+       aria-orientation="vertical" aria-controls="right-dock"
+       aria-label="Resize right panel" data-i18n-aria-label="panels.resizeRight"></div>
+  <div class="right-dock-header">
   <div class="right-dock-tabs" role="tablist" aria-label="Details panels" data-i18n-aria-label="panels.details">
     <button id="controls-tab" class="right-dock-tab" type="button" role="tab"
             aria-selected="false" aria-expanded="false" aria-controls="controls-panel" data-i18n="panels.controls">Controls</button>
@@ -372,6 +413,10 @@
             aria-selected="false" aria-expanded="false" aria-controls="inspector-panel" data-i18n="panels.inspector">Inspector</button>
     <button id="weight-rig-tab" class="right-dock-tab" type="button" role="tab"
             aria-selected="false" aria-expanded="false" aria-controls="weight-rig-panel" data-i18n="panels.weightRig">Weight/Rig</button>
+  </div>
+  <button id="right-dock-collapse" class="dock-collapse-btn" type="button" aria-expanded="false">
+    <svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+  </button>
   </div>
   <section id="inspector-panel" class="right-dock-pane" role="tabpanel" aria-labelledby="inspector-tab" hidden>
     <div class="inspector-empty" id="inspector-empty">
@@ -429,6 +474,8 @@
 
 <!-- Toolbar popovers stay at body level so viewport docks never cover them. -->
 <div id="texture-popover" class="ui-popover tool-popover" role="menu" aria-label="Texture display options" data-i18n-aria-label="render.textureOptions" hidden></div>
+<div id="environment-popover" class="ui-popover tool-popover" role="menu"
+     aria-label="Environment presets" data-i18n-aria-label="toolbar.environmentPresets" hidden></div>
 <div id="light-popover" class="ui-popover tool-popover range-popover" role="dialog"
      aria-label="Key light" data-i18n-aria-label="render.keyLight" hidden>
   <div class="range-control-row">

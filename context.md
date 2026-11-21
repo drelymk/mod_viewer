@@ -1464,13 +1464,17 @@ of documentation, comments and tests; use portable fixtures instead.
   Rig picking/dragging owns its gestures and
   must block view selection. Visibility, reset, refresh and texture mutations
   publish shared state notifications so Inspector and rendering stay synchronized.
-  Ctrl+A selects all mesh rows (including hidden/collapsed rows) in MESHES,
-  and only visible mesh/part targets in the viewport; text editing, dialogs and
+  Ctrl+A selects all mesh rows (including hidden/collapsed rows) in MESHES, or
+  only the rows passing an active MESHES name/visibility filter, and only visible
+  mesh/part targets in the viewport; text editing, dialogs and
   rig gestures keep priority. H hides the selection rather than inverting each
   mesh. A selected mesh's eye sets the whole selection to that eye's new state;
   an unselected eye affects only its own mesh. Control refreshes replace manual
   visibility only for meshes wired to changed visibility variables (including
   derived-state changes); explicit forced refreshes may rebaseline all meshes.
+  The MESHES filter is view-only: it hides non-matching rows (shift ranges and
+  drag selection see only displayed rows), never changes selection, visibility,
+  collapse or staged state, and resets when a new mod or Asset replaces the panel.
 - Loose-part separation is transient viewer state. Detect connected triangle
   islands from exact positions or a bounded user tolerance, retain original
   triangle ordinals, share the semantic source's attributes/material/state, and
@@ -1534,6 +1538,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Reset retains the base transform; removed meshes leave the reset baseline.
   Direct Asset previews use the backend's authoritative game metadata for this
   orientation, sharing mod rules without transforming stored Asset geometry.
+- Docks float over the viewport. Camera framing and projection use the whole
+  canvas; opening, closing, resizing or focus-hiding docks never shifts,
+  re-centres or refits the view.
 
 ## Manager capture integration
 

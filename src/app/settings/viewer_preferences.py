@@ -14,7 +14,9 @@ CHOICES = {
     "textureMode": ("all", "diffuse-normal", "diffuse", "none"),
 }
 RANGES = {"ambientOcclusion": (0, 1), "keyLightIntensity": (0, 1.5),
-          "glossy": (0, 100), "panelOpacity": (0, 100)}
+          "glossy": (0, 100), "panelOpacity": (0, 100),
+          "leftDockWidth": (270, 690), "rightDockWidth": (260, 640)}
+INTEGER_KEYS = {"panelOpacity", "leftDockWidth", "rightDockWidth"}
 
 
 def _validated_preferences(value):
@@ -33,7 +35,7 @@ def _validated_preferences(value):
             valid = (not isinstance(setting, bool)
                      and isinstance(setting, (int, float))
                      and low <= setting <= high)
-            if valid and key == "panelOpacity":
+            if valid and key in INTEGER_KEYS:
                 valid = setting == int(setting)
         else:
             raise ValueError(f"Unknown viewer preference: {key}.")

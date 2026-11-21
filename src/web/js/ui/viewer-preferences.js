@@ -13,6 +13,7 @@ import { setGlossyLevel, setTextureDisplayMode } from '../scene/render-modes.js'
 import { setOutlinesEnabled } from '../scene/outline-renderer.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { createPreferencePersistence } from './preference-persistence.js';
+import { setDockWidth } from './dock-layout.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -63,6 +64,10 @@ export function initViewerPreferences({ applyEnvironmentPreset, syncToolControls
       } else if (name === 'glossy') {
         setGlossyLevel(value, activeMeshes);
         syncToolControls();
+      } else if (name === 'leftDockWidth') {
+        setDockWidth('left', value);
+      } else if (name === 'rightDockWidth') {
+        setDockWidth('right', value);
       }
     },
   });

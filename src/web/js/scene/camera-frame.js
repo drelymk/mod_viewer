@@ -1,4 +1,4 @@
-// Camera/model framing, clipping, orientation and unobstructed viewport math.
+// Camera/model framing, clipping and orientation over the whole canvas.
 
 import * as THREE from 'three';
 import { computeModelBounds } from './model-bounds.js';
@@ -36,53 +36,9 @@ export function createCameraFrame({
   let modelPivot = null;
   const modelTranslation = new THREE.Vector3();
 
-  /** Aim projection at the unobstructed region while retaining the real model
-   * center as Arcball's physical orbit target. */
-  function usableViewport() {
-    const canvas = renderer.domElement.getBoundingClientRect();
-    const fullWidth = Math.max(canvas.width, 1);
-    const fullHeight = Math.max(canvas.height, 1);
-    let left = 0;
-    let right = fullWidth;
-    const gap = 14;
-
-    const leftDock = document.getElementById('left-dock');
-    const leftRect = leftDock?.getBoundingClientRect();
-    if (leftDock && leftRect.width > 1) {
-      left = Math.max(left, leftRect.right - canvas.left + gap);
-    }
-    const rightDock = document.getElementById('right-dock');
-    const rightRect = rightDock?.getBoundingClientRect();
-    if (rightDock && rightRect.width > 1) {
-      right = Math.min(right, rightRect.left - canvas.left - gap);
-    }
-    if (right - left < fullWidth * 0.25) {
-      left = 0;
-      right = fullWidth;
-    }
-    return {
-      fullWidth,
-      fullHeight,
-      width: right - left,
-      centerShiftX: (left + right - fullWidth) * 0.5,
-    };
-  }
-
+  /** Floating docks overlay the canvas and never affect the projection. */
   function updateViewport() {
-    const viewport = usableViewport();
-    camera.clearViewOffset();
-    if (Math.abs(viewport.centerShiftX) > 0.5) {
-      camera.setViewOffset(
-        viewport.fullWidth,
-        viewport.fullHeight,
-        -viewport.centerShiftX,
-        0,
-        viewport.fullWidth,
-        viewport.fullHeight,
-      );
-    }
     camera.updateProjectionMatrix();
-    return viewport;
   }
 
   function resize(width, height) {
@@ -119,8 +75,8 @@ export function createCameraFrame({
     const center = box.getCenter(new THREE.Vector3());
     center.y += targetYOffset;
     const radius = Math.max(size.length() * 0.5, 0.001);
-    const viewport = updateViewport();
-    const narrowScale = Math.max(1, viewport.fullHeight / viewport.width);
+    updateViewport();
+    const narrowScale = Math.max(1, 1 / camera.aspect);
     const distance = (radius / Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))) * 1.15 * narrowScale;
     const offset = direction ? direction.clone().normalize() : camera.position.clone().sub(controls.target).normalize();
     if (offset.lengthSq() < 0.01) offset.set(0.3, 0.5, 1).normalize();

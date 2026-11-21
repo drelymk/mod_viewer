@@ -1,7 +1,7 @@
 """Selection reaches the Inspector without changing staged source state."""
 
 from .payloads import append_stream, controlled_payload, model_payload, textured_payload
-from .support import bridge_calls, open_model, project_mesh_points, wait_loaded
+from .support import bridge_calls, open_model, project_mesh_points, wait_loaded, widen_for_viewport_clicks
 
 
 def test_ini_header_remove_failure_retry_sibling_identity_last_ini_and_read_only(viewer):
@@ -629,6 +629,86 @@ def test_mesh_select_all_respects_panel_viewport_and_editing_context(viewer):
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
 
 
+def test_mesh_filter_counts_and_select_all_follow_filter_without_staging(viewer):
+    payload = model_payload(6)
+    inis = ['alpha/Part.ini'] * 3 + ['beta/Part.ini'] * 3
+    components = ['ComponentAlpha', 'ComponentAlpha', 'ComponentBeta'] + ['ComponentGamma'] * 3
+    for mesh, ini, component in zip(payload['meshes'].values(), inis, components):
+        mesh['source'] = ini.split('/')[0]
+        mesh['component'] = component
+        mesh['identity']['source'] = ini
+        mesh['identity']['component'] = component
+        mesh['sources'][0]['ini'] = ini
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 6)
+
+    def displayed():
+        return page.evaluate("""() => [...document.querySelectorAll('#mesh-list .draw-item')]
+          .filter(row => row.getBoundingClientRect().height > 0).length""")
+
+    def gamma_header():
+        return page.locator('.group-hdr', has_text='ComponentGamma')
+
+    search = page.locator('#mesh-search')
+    count = page.locator('#mesh-filter-count')
+
+    assert '6' in count.inner_text()
+    assert page.locator('.group-hdr .group-count').all_inner_texts() == ['2/2', '1/1', '3/3']
+
+    page.locator('.draw-item').nth(3).locator('.mesh-state-btn').click()
+    assert gamma_header().locator('.group-count').inner_text() == '2/3'
+    assert 'partial' in (gamma_header().locator('.group-count').get_attribute('class') or '')
+    assert page.locator('.mesh-src-hdr', has_text='beta').locator('.group-count').inner_text() == '2/3'
+
+    search.fill('gamma')
+    assert displayed() == 3
+    assert '3 of 6' in count.inner_text()
+    assert page.locator('.group-hdr', has_text='ComponentAlpha').is_hidden()
+    assert page.locator('.mesh-src-hdr', has_text='alpha').is_hidden()
+
+    search.fill('')
+    gamma_header().locator('.group-toggle').click()
+    search.fill('gamma')
+    assert displayed() == 3
+    assert gamma_header().locator('.group-toggle').is_hidden()
+    search.fill('')
+    assert displayed() == 3
+    gamma_header().locator('.group-toggle').click()
+    assert displayed() == 6
+
+    page.locator('[data-mesh-filter="hidden"]').click()
+    assert displayed() == 1
+    page.locator('[data-mesh-filter="visible"]').click()
+    assert displayed() == 5
+    page.locator('[data-mesh-filter="all"]').click()
+    assert displayed() == 6
+
+    search.fill('alpha')
+    page.evaluate('document.activeElement.blur()')
+    page.locator('#mesh-list').hover()
+    page.keyboard.press('Control+a')
+    assert page.evaluate("""() => {
+      const shown = [...document.querySelectorAll('#mesh-list .draw-item')]
+        .filter(row => row.getBoundingClientRect().height > 0);
+      const selected = [...document.querySelectorAll('#mesh-list .draw-item.selected')];
+      return shown.length === 3 && selected.length === 3 && selected.every(row => shown.includes(row));
+    }""")
+
+    search.fill('zzz-no-match')
+    assert page.locator('#mesh-filter-empty').is_visible()
+    search.fill('')
+    page.locator('[data-mesh-filter="hidden"]').click()
+    assert displayed() == 1
+
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 6)
+    assert search.input_value() == ''
+    assert page.locator('[data-mesh-filter="all"]').get_attribute('aria-pressed') == 'true'
+    assert displayed() == 6
+    assert bridge_calls(page, 'record') == bridge_calls(page, 'export') == []
+
+
 def test_toggle_visibility_changes_only_wired_meshes(viewer):
     payload = controlled_payload(4)
     payload['controls']['toggles']['KeyFixture02'] = {
@@ -670,6 +750,70 @@ def test_toggle_visibility_changes_only_wired_meshes(viewer):
     assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [True, True, False, True]
     assert rows.nth(2).locator('.mesh-state-btn').get_attribute('aria-pressed') == 'false'
     assert bridge_calls(page, 'record') == bridge_calls(page, 'export') == []
+    assert page.evaluate('!window.__bridge.pending["fixture-01"]')
+
+
+def test_toggle_row_steps_both_ways_and_actions_menu_yields_to_recording(viewer):
+    payload = controlled_payload()
+    payload['controls']['toggles']['KeyFixture']['vars'][0]['values'] = ['0', '1', '2']
+    payload['controls']['toggles']['KeyFixture02'] = {
+        'name': 'control-02', 'ini': 'source-01.ini', 'section': 'KeyFixture02', 'wired': True,
+        'vars': [{'var': 'input02', 'default': '0', 'values': ['0', '1']}],
+    }
+    payload['state']['defaults']['input02'] = '0'
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    if page.locator('#controls-panel').is_hidden():
+        page.locator('#controls-tab').click()
+
+    three = page.locator('.toggle-item', has_text='control-01')
+    two = page.locator('.toggle-item', has_text='control-02')
+    three_row = three.locator('.toggle-row')
+    two_row = two.locator('.toggle-row')
+    for row in (three_row, two_row):
+        assert row.bounding_box()['height'] <= 34
+    assert three_row.locator('.toggle-step-btn').count() == 1
+    assert two_row.locator('.toggle-step-btn').count() == 0
+
+    value = three_row.locator('.toggle-value')
+
+    def expect_value(expected):
+        text = value.text_content()
+        assert f'input01={expected}' in text
+        assert value.get_attribute('title') == text
+
+    expect_value('0')
+    three_row.locator('.toggle-step-btn').click()
+    expect_value('2')
+    three_row.locator('.toggle-cycle-btn').click()
+    expect_value('0')
+    three_row.locator('.toggle-cycle-btn').click()
+    expect_value('1')
+
+    three_row.locator('.toggle-more-btn').click()
+    menu = page.locator('.mesh-context-menu')
+    assert menu.is_visible()
+    for name in ('Edit toggle', 'Delete toggle', 'Record toggle mesh visibility'):
+        assert menu.get_by_role('menuitem', name=name).is_visible()
+    page.keyboard.press('Escape')
+    assert menu.is_hidden()
+
+    three_row.locator('.toggle-more-btn').click()
+    page.get_by_role('menuitem', name='Record toggle mesh visibility').click()
+    page.locator('.toggle-row.recording').wait_for()
+    assert three_row.evaluate('row => row.classList.contains("recording")')
+    assert three.locator('.toggle-more-btn').is_hidden()
+    assert three.locator('.toggle-step-btn').is_hidden()
+    assert two.locator('.toggle-more-btn').is_disabled()
+    three.locator('.toggle-record-cancel').click()
+    assert page.locator('.toggle-row.recording').count() == 0
+    assert three.locator('.toggle-more-btn').is_visible()
+    assert three.locator('.toggle-step-btn').is_visible()
+    assert two.locator('.toggle-more-btn').is_enabled()
+
+    assert bridge_calls(page, 'record') == []
+    assert bridge_calls(page, 'export') == []
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
 
 
@@ -755,7 +899,8 @@ def test_keyboard_and_inspector_visibility_record_like_meshes_eye(viewer):
     for action in ('keyboard', 'inspector', 'panel'):
         if page.locator('#controls-panel').is_hidden():
             page.locator('#controls-tab').click()
-        page.locator('#toggle-list [aria-label="Record toggle mesh visibility"]').click()
+        page.locator('#toggle-list .toggle-more-btn').first.click()
+        page.get_by_role('menuitem', name='Record toggle mesh visibility').click()
         page.locator('.toggle-row.recording').wait_for()
         page.locator('.draw-item').nth(1).click()
         point = project_mesh_points(page, [[0.25, 0.25, 0]])[0]
@@ -816,6 +961,124 @@ def test_panel_preference_survives_page_reload_without_loading_or_editing_source
     wait_loaded(page)
     assert page.locator('#inspector-panel').is_visible()
     assert page.locator('#controls-panel').is_hidden()
+
+
+def test_dock_resize_collapse_shortcuts_and_focus_mode_preserve_layout_preferences(viewer):
+    page = viewer({'fixture-01': model_payload()}, preferences={'leftDockWidth': 360})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+
+    def width(selector):
+        return page.locator(selector).bounding_box()['width']
+
+    def saved(key):
+        return [args[0][key] for args in bridge_calls(page, 'preferencesSave') if key in args[0]]
+
+    def wait_saved(key, value):
+        page.wait_for_function(
+            '([key, value]) => window.__bridge.calls.some(c => c.name === "preferencesSave" '
+            '&& c.args[0] && c.args[0][key] === value)',
+            arg=[key, value],
+        )
+
+    def blur():
+        page.evaluate('document.activeElement.blur()')
+
+    page.wait_for_function(
+        "Math.abs(document.getElementById('left-dock').getBoundingClientRect().width - 360) <= 1")
+
+    handle = page.locator('#left-dock-resizer').bounding_box()
+    dock_left = page.locator('#left-dock').bounding_box()['x']
+    x = handle['x'] + handle['width'] / 2
+    y = handle['y'] + handle['height'] / 2
+    grab_offset = x - dock_left
+    page.mouse.move(x, y)
+    page.mouse.down()
+    for step in range(1, 4):
+        page.mouse.move(x + 20 * step, y)
+    assert saved('leftDockWidth') == []
+    page.mouse.up()
+    left_width = width('#left-dock')
+    assert abs(left_width - (grab_offset + 60)) <= 1
+    wait_saved('leftDockWidth', saved('leftDockWidth')[-1])
+    assert len(saved('leftDockWidth')) == 1
+    assert abs(saved('leftDockWidth')[0] - left_width) <= 1
+
+    if page.locator('#controls-panel').is_hidden():
+        page.locator('#controls-tab').click()
+    page.locator('#controls-panel').wait_for()
+    right_before = width('#right-dock')
+    page.locator('#right-dock-resizer').focus()
+    page.keyboard.press('ArrowLeft')
+    wait_saved('rightDockWidth', round(right_before + 16))
+    assert abs(width('#right-dock') - (right_before + 16)) <= 1
+    assert len(saved('rightDockWidth')) == 1
+
+    page.locator('#left-dock-resizer').dblclick()
+    page.wait_for_function(
+        "Math.abs(document.getElementById('left-dock').getBoundingClientRect().width - 338) <= 1")
+    wait_saved('leftDockWidth', 338)
+    assert saved('leftDockWidth')[-1] == 338
+
+    page.locator('#left-dock-collapse').click()
+    assert page.locator('#left-panel-container').is_hidden()
+    assert page.locator('#left-dock-collapse').get_attribute('aria-expanded') == 'false'
+    assert width('#left-dock') < 80
+    rail = page.locator('#left-dock-tabs').bounding_box()
+    assert rail['height'] > rail['width']
+    blur()
+    page.keyboard.press('BracketLeft')
+    assert page.locator('#left-panel-container').is_visible()
+    assert page.locator('#meshes-tab').get_attribute('aria-selected') == 'true'
+    assert page.locator('#sidebar').is_visible()
+
+    blur()
+    page.keyboard.press('BracketRight')
+    assert page.locator('#controls-panel').is_hidden()
+    blur()
+    page.keyboard.press('BracketRight')
+    assert page.locator('#controls-panel').is_visible()
+
+    blur()
+    page.keyboard.press('Backslash')
+    assert page.evaluate("document.body.classList.contains('focus-mode')")
+    assert page.locator('#right-dock').is_hidden()
+    assert page.locator('#left-dock-header').is_hidden()
+    assert page.locator('#tool-panel').is_visible()
+    assert page.locator('#focus-exit-btn').is_visible()
+    assert page.locator('#focus-mode-btn').get_attribute('aria-pressed') == 'true'
+    page.locator('#focus-exit-btn').click()
+    assert not page.evaluate("document.body.classList.contains('focus-mode')")
+    assert page.locator('#left-dock-tabs').is_visible()
+    assert page.locator('#right-dock').is_visible()
+    assert page.locator('#focus-exit-btn').is_hidden()
+
+    page.evaluate("""() => {
+      const input = document.createElement('input');
+      input.id = 'tmp-shortcut-input';
+      document.body.append(input);
+      input.focus();
+    }""")
+    page.keyboard.press('BracketLeft')
+    assert page.locator('#left-panel-container').is_visible()
+    page.evaluate("document.getElementById('tmp-shortcut-input').remove()")
+
+    page.set_viewport_size({'width': 900, 'height': 600})
+    page.wait_for_timeout(100)
+    rects = page.evaluate("""() => {
+      const box = id => document.getElementById(id).getBoundingClientRect();
+      const container = box('left-panel-container');
+      const tool = box('tool-panel');
+      return {
+        containerLeft: container.left, containerRight: container.right, containerBottom: container.bottom,
+        toolLeft: tool.left, toolRight: tool.right, toolTop: tool.top,
+      };
+    }""")
+    assert rects['containerLeft'] < rects['toolRight'] and rects['containerRight'] > rects['toolLeft']
+    assert rects['containerBottom'] <= rects['toolTop'] + 1
+    assert len(bridge_calls(page, 'load')) == 1
+
+    assert bridge_calls(page, 'export') == []
 
 
 def test_library_folder_context_menus_open_native_folders_without_loading(viewer):
@@ -950,6 +1213,63 @@ def test_environment_and_tools_restore_and_save_without_orientation_or_source_ed
     assert bridge_calls(page, 'load') == []
 
 
+def test_toolbar_groups_environment_popover_and_weight_rig_sections(viewer):
+    page = viewer({'fixture-01': model_payload()})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+
+    groups = page.locator('#tool-buttons .tool-group')
+    assert groups.count() == 3
+    assert groups.nth(1).locator('#environment-btn').count() == 1
+    assert groups.nth(2).locator('#focus-mode-btn').count() == 1
+
+    env_btn = page.locator('#environment-btn')
+    env_btn.click()
+    popover = page.locator('#environment-popover')
+    assert popover.is_visible()
+    popover_box = popover.bounding_box()
+    assert popover_box['y'] + popover_box['height'] <= env_btn.bounding_box()['y']
+    page.locator('#ao-btn').click()
+    assert popover.is_hidden()
+    assert page.locator('#ao-popover').is_visible()
+    page.keyboard.press('Escape')
+    assert page.locator('#ao-popover').is_hidden()
+
+    label = page.locator('.open-disabled-toggle')
+    assert label.is_visible() and 'Open disabled mod' in label.inner_text()
+    checkbox = page.locator('#open-disabled-mod')
+    before = checkbox.is_checked()
+    label.locator('span').click()
+    assert checkbox.is_checked() != before
+    label.locator('span').click()
+    assert checkbox.is_checked() == before
+
+    if page.locator('#weight-rig-panel').is_hidden():
+        page.locator('#weight-rig-tab').click()
+    toggles = page.locator('.weight-rig-section-toggle')
+    toggles.nth(0).wait_for()
+    assert toggles.count() == 3
+    section = page.locator('.weight-rig-section').nth(0)
+    toggles.nth(0).click()
+    assert 'collapsed' in section.get_attribute('class')
+    assert section.locator('.weight-rig-advanced').is_hidden()
+    assert toggles.nth(0).get_attribute('aria-expanded') == 'false'
+
+    page.reload()
+    page.wait_for_function('window.modViewer !== undefined')
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    if page.locator('#weight-rig-panel').is_hidden():
+        page.locator('#weight-rig-tab').click()
+    toggles = page.locator('.weight-rig-section-toggle')
+    toggles.nth(0).wait_for()
+    section = page.locator('.weight-rig-section').nth(0)
+    assert 'collapsed' in section.get_attribute('class')
+    toggles.nth(0).click()
+    assert 'collapsed' not in section.get_attribute('class')
+    assert bridge_calls(page, 'export') == []
+
+
 def test_glossy_slider_updates_materials_and_restores_level_for_new_meshes(viewer):
     page = viewer({'fixture-01': model_payload(2), 'fixture-02': model_payload()})
     open_model(page, 'fixture-01')
@@ -1000,6 +1320,7 @@ def test_loose_part_apply_requires_confirmation_and_stages_complete_partition(vi
     mesh['drawindexed'] = [6,0,0]
     mesh['identity'] = {'key': 'identity-01', 'component': 'component-00'}
     page = viewer({'fixture-01': payload})
+    widen_for_viewport_clicks(page)
     open_model(page, 'fixture-01')
     wait_loaded(page)
     page.locator('#inspector-tab').click()
@@ -1119,6 +1440,7 @@ def test_viewport_context_menu_shares_selection_and_create_toggle(viewer):
         source.update(line=10 + index, occurrence={
             'section': source['section'], 'ordinal': index, 'path': []})
     page = viewer({'fixture-01': payload})
+    widen_for_viewport_clicks(page)
     open_model(page, 'fixture-01')
     wait_loaded(page, 3)
     page.locator('#inspector-tab').click()
@@ -1241,6 +1563,7 @@ def test_face_selection_modes_combine_clicks_and_rectangles_only_while_editing(v
         0,0,0, 1,0,0, 0,1,0, 2,0,0, 3,0,0, 2,1,0, 4,0,0, 5,0,0, 4,1,0]),
         idx=append_stream(payload, 'I', [0,1,2,3,4,5,6,7,8]), drawindexed=[9,0,0])
     page = viewer({'fixture-01': payload})
+    widen_for_viewport_clicks(page)
     open_model(page, 'fixture-01')
     wait_loaded(page)
     page.locator('#inspector-tab').click()
@@ -1343,9 +1666,9 @@ def test_face_selection_modes_combine_clicks_and_rectangles_only_while_editing(v
         page.set_viewport_size({'width': width, 'height': 900})
         assert mode.evaluate("""toolbar => {
           const bounds = toolbar.getBoundingClientRect();
-          const tabs = document.getElementById('left-dock-tabs').getBoundingClientRect();
+          const tabs = document.getElementById('left-dock-header').getBoundingClientRect();
           return bounds.left > tabs.right && bounds.right <= innerWidth
-            && Math.abs(bounds.top + bounds.height / 2 - tabs.top - tabs.height / 2) < 1;
+            && Math.abs(bounds.top - tabs.top) < 1;
         }""")
     assert page.locator('#meshes-tab').get_attribute('aria-selected') == 'true'
     page.locator('#inspector-tab').click()
@@ -1415,6 +1738,7 @@ def test_inspector_mesh_tools_preview_history_and_staging(viewer):
         payload['meshes'][f'mesh-{index:02d}']['pos'] = append_stream(
             payload, 'f', [x,0,0,x+1,0,0,x,1,0])
     page = viewer({'fixture-01': payload})
+    widen_for_viewport_clicks(page)
     open_model(page, 'fixture-01')
     wait_loaded(page, 3)
     page.locator('#inspector-tab').click()
@@ -1581,6 +1905,7 @@ def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
         mesh['pos'] = append_stream(payload, 'f', [x,0,0,x+1,0,0,x,1,0])
     payload['metadata']['mesh_names'][payload['meshes']['mesh-00']['identity']['key']] = label.strip()
     page = viewer({'fixture-01': payload})
+    widen_for_viewport_clicks(page)
     open_model(page, 'fixture-01')
     wait_loaded(page, 4)
     page.locator('#inspector-tab').click()
@@ -2116,7 +2441,8 @@ def test_mesh_create_toggle_refuses_incomplete_or_transient_selection(viewer):
     page.locator('[data-i18n="mesh.cancelSelection"]').click()
     if page.locator('#controls-panel').is_hidden():
         page.locator('#controls-tab').click()
-    page.locator('#toggle-list [aria-label="Record toggle mesh visibility"]').click()
+    page.locator('#toggle-list .toggle-more-btn').first.click()
+    page.get_by_role('menuitem', name='Record toggle mesh visibility').click()
     page.locator('.toggle-row.recording').wait_for()
     rows.nth(0).click(button='right')
     assert page.locator('.mesh-context-menu').is_hidden()

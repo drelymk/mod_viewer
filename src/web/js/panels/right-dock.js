@@ -1,5 +1,7 @@
 // Right-dock navigation keeps the user's preferred tab separate from the
 // transient choice to have the dock open at all.
+import { LANGUAGE_CHANGED } from '../i18n/index.js';
+import { syncDockCollapseButton } from '../ui/panel-utils.js';
 
 const STORAGE_KEY = 'mod-viewer.right-dock-tab';
 const VALID_TABS = Object.freeze(['controls', 'inspector', 'weight-rig']);
@@ -46,6 +48,9 @@ function renderRightDock() {
   dock?.classList.toggle('ui-visible', dockEnabled);
   document.body?.classList.toggle('right-dock-mounted', dockEnabled);
   document.body?.classList.toggle('right-dock-visible', !!activeTab);
+  const collapse = document.getElementById('right-dock-collapse');
+  collapse?.setAttribute('aria-controls', `${selectedTab}-panel`);
+  syncDockCollapseButton(collapse, 'right', !!activeTab);
   notifyTabChange(activeTab);
 }
 
@@ -91,6 +96,13 @@ export function isRightDockOpen() {
   return dockEnabled && validTab(openTab);
 }
 
+export function toggleRightDock() {
+  if (!dockEnabled) return;
+  userHasChosenDockState = true;
+  openTab = validTab(openTab) ? null : selectedTab;
+  renderRightDock();
+}
+
 export function setRightDockEnabled(enabled) {
   dockEnabled = !!enabled;
   if (dockEnabled && !userHasChosenDockState && !openTab) openTab = selectedTab;
@@ -112,6 +124,8 @@ export function initRightDock() {
     } catch {
       /* private mode */
     }
+    document.getElementById('right-dock-collapse')?.addEventListener('click', toggleRightDock);
+    window.addEventListener(LANGUAGE_CHANGED, renderRightDock);
     ready = true;
   }
   renderRightDock();

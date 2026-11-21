@@ -34,7 +34,9 @@ import {
   showRecordingSourceRows,
   clearMeshPanelRows,
   meshRowWrap,
+  buildCountBadge,
 } from './mesh-panel-rows.js';
+import { initMeshPanelFilter, resetMeshPanelFilter } from './mesh-panel-filter.js';
 import { initializeComponentMeshEdit, resetMeshPanelEditing } from './mesh-panel-edit.js';
 export { hasUnappliedMeshChanges } from './mesh-panel-edit.js';
 
@@ -197,10 +199,12 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   installPanelSelectionDrag(list);
   const replace = options.replace !== false;
   closeMeshContextMenu();
+  initMeshPanelFilter();
   if (replace) {
     resetMeshPanelEditing();
     clearMeshPanelRows(list);
     clearTextureRunGroups();
+    resetMeshPanelFilter();
   }
   registerViewSync('mesh-panel', syncMeshPanel);
 
@@ -222,6 +226,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         : list;
     const sourceHeader = container === list ? null : container.previousElementSibling;
     if (sourceHeader) {
+      sourceHeader.append(buildCountBadge());
       if (multiSource && src) {
         const button = buildGroupVisibilityButton(src, () => sourceMeshes(sourceHeader), 'source-visibility-btn');
         sourceHeader.insertBefore(button, sourceHeader.querySelector('.group-name'));
@@ -249,6 +254,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
               itemsClass: 'mesh-src-items mesh-ini-items',
             })
           : container;
+      if (iniContainer !== container) iniContainer.previousElementSibling.append(buildCountBadge());
       if (iniContainer !== container && options.onRemoveIni && options.canPersistMetadata !== false) {
         iniContainer.previousElementSibling.addEventListener('contextmenu', (event) => {
           event.preventDefault();
@@ -265,7 +271,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         const componentDescriptor = createComponentDescriptor(groupName, names, meshes, src, modPath, options);
         componentDescriptor.ini = ini;
         const itemObjs = componentDescriptor.meshes;
-        const { hdr, visibilityButton, syncLabels, syncEditState } = buildGroupHeader(
+        const { hdr, visibilityButton, syncLabels, syncEditState, countBadge } = buildGroupHeader(
           groupName,
           itemsWrap,
           componentDescriptor,
@@ -302,6 +308,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
 
         groupsUI.push({
           visibilityButton,
+          countBadge,
           itemCbs,
           itemObjs,
           componentDescriptor,
@@ -368,6 +375,7 @@ export function removeMeshPanelMeshes(targetMeshes, assetFillOnly = false) {
       source.remove();
     }
   }
+  syncMeshPanel();
   window.dispatchEvent(
     new CustomEvent('mod-viewer-inspector-refresh', {
       detail: { component: null, reason: 'asset-fill-removed' },

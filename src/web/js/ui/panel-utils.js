@@ -77,6 +77,17 @@ export function buildSourceSection(
   return items;
 }
 
+/** Sync a dock's show/hide chevron: expanded state, translated label and arrow direction. */
+export function syncDockCollapseButton(button, side, open) {
+  if (!button) return;
+  const other = side === 'left' ? 'right' : 'left';
+  const label = t(`panels.${open ? 'hide' : 'show'}${side === 'left' ? 'Left' : 'Right'}`);
+  button.setAttribute('aria-expanded', String(open));
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  button.querySelector('use')?.setAttribute('href', `#icon-chevron-${open ? side : other}`);
+}
+
 // Collapse a panel body while preserving the shared local preference.
 export function initPanelCollapse(panel, contentId) {
   const hdr = panel.querySelector('.panel-hdr');

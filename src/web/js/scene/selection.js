@@ -708,8 +708,11 @@ function onKeyDown(event) {
     const inPanel = target?.closest?.('#sidebar') || document.querySelector('#sidebar:hover');
     const inViewport = target === canvas || canvas.matches(':hover');
     if (!inPanel && !inViewport) return;
+    // Rows hidden by the MESHES filter are excluded; collapsed rows still count.
     const meshes = inPanel
-      ? activeMeshes.flatMap((mesh) => (getMeshView(mesh)?.row?.isConnected ? [mesh] : getLooseParts(mesh)))
+      ? activeMeshes
+          .flatMap((mesh) => (getMeshView(mesh)?.row?.isConnected ? [mesh] : getLooseParts(mesh)))
+          .filter((mesh) => !getMeshView(mesh)?.row?.closest('.filtered-out'))
       : modelPickTargets(activeMeshes);
     event.preventDefault();
     selectMeshes(meshes, meshes.includes(primary) ? primary : null);

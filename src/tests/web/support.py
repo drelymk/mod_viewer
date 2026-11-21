@@ -228,6 +228,11 @@ def viewer(edge_browser, frontend_url):
         context.close()
 
 
+def widen_for_viewport_clicks(page):
+    """Docks float over a full-canvas view; widen it so wide meshes clear both docks."""
+    page.set_viewport_size({"width": 1600, "height": 900})
+
+
 def open_model(page, path):
     page.evaluate('path => {window.__bridge.nextPath = path;}', path)
     page.locator('#open-btn').click()

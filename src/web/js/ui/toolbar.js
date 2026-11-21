@@ -18,6 +18,20 @@ import { closeHeaderPopovers } from './header-popovers.js';
 const $ = (id) => document.getElementById(id);
 const AO_MAX_STRENGTH = 1;
 
+/** Centre a fixed popover above its button, clamped to the viewport. */
+function positionPopover(popover, button) {
+  if (!popover || !button) return;
+  const buttonRect = button.getBoundingClientRect();
+  const popoverRect = popover.getBoundingClientRect();
+  const gutter = 8;
+  const maxLeft = Math.max(gutter, window.innerWidth - popoverRect.width - gutter);
+  const desiredLeft = buttonRect.left + (buttonRect.width - popoverRect.width) / 2;
+  const left = Math.min(maxLeft, Math.max(gutter, desiredLeft));
+  const top = Math.max(gutter, buttonRect.top - popoverRect.height - gutter);
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+}
+
 function normalizeAmbientOcclusionLevel(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return 0;
@@ -85,6 +99,7 @@ export function initEnvironmentControl(onChange = () => {}) {
     });
     popover.hidden = false;
     button.setAttribute('aria-expanded', 'true');
+    positionPopover(popover, button);
   }
 
   updateControl(currentId);
@@ -104,6 +119,9 @@ export function initEnvironmentControl(onChange = () => {}) {
   window.addEventListener(LANGUAGE_CHANGED, () => {
     updateControl(currentId);
     if (!popover?.hidden) openPopover();
+  });
+  window.addEventListener('resize', () => {
+    if (!popover?.hidden) positionPopover(popover, button);
   });
 
   return applyEnvironmentPreset;
@@ -129,18 +147,6 @@ export function initToolPopovers(onChange = () => {}) {
     popover.hidden = true;
   };
   let activeToolPopover = null;
-  const positionPopover = (popover, button) => {
-    if (!popover || !button) return;
-    const buttonRect = button.getBoundingClientRect();
-    const popoverRect = popover.getBoundingClientRect();
-    const gutter = 8;
-    const maxLeft = Math.max(gutter, window.innerWidth - popoverRect.width - gutter);
-    const desiredLeft = buttonRect.left + (buttonRect.width - popoverRect.width) / 2;
-    const left = Math.min(maxLeft, Math.max(gutter, desiredLeft));
-    const top = Math.max(gutter, buttonRect.top - popoverRect.height - gutter);
-    popover.style.left = `${left}px`;
-    popover.style.top = `${top}px`;
-  };
   const closeAll = () => {
     close(texturePopover);
     close(lightPopover);

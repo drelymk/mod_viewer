@@ -48,6 +48,10 @@ export const meshPanelContexts = new WeakMap();
 
 const meshByRow = new WeakMap();
 
+export function meshForPanelRow(row) {
+  return meshByRow.get(row) || null;
+}
+
 const PANEL_SELECTION_THRESHOLD = 5;
 
 function canIsolateSelectedMeshes() {
@@ -339,11 +343,18 @@ export function syncMeshPanel(changedMeshes = null) {
       getLooseParts(mesh).forEach((part) => getMeshView(part)?.syncStateIndicator?.());
     });
     syncGroupVisibilityButton(group.visibilityButton, group.itemObjs);
+    syncCountBadge(group.countBadge, group.itemObjs);
   }
   for (const header of new Set(groupsUI.map((group) => group.sourceHeader).filter(Boolean))) {
     const button = header.querySelector('.source-visibility-btn');
     if (button) syncGroupVisibilityButton(button, sourceMeshes(header));
   }
+  const list = document.getElementById('mesh-list');
+  list?.querySelectorAll('.mesh-src-hdr').forEach((header) => {
+    const items = header.nextElementSibling;
+    const meshes = groupsUI.filter((group) => items?.contains(group.header)).flatMap((group) => group.itemObjs);
+    syncCountBadge(header.querySelector(':scope > .group-count'), meshes);
+  });
 }
 
 export function sourceMeshes(header) {
@@ -355,6 +366,22 @@ function visibilityTargets(meshes) {
     const parts = getLooseParts(mesh);
     return !isRecording() && parts.length ? parts : [mesh];
   });
+}
+
+export function buildCountBadge() {
+  const badge = document.createElement('span');
+  badge.className = 'group-count';
+  return badge;
+}
+
+function syncCountBadge(badge, meshes) {
+  if (!badge) return;
+  const targets = visibilityTargets(meshes);
+  const visible = targets.filter(meshUnderlyingVisible).length;
+  badge.textContent = `${visible}/${targets.length}`;
+  badge.title = t('mesh.visibleCount', { visible, total: targets.length });
+  badge.classList.toggle('partial', visible > 0 && visible < targets.length);
+  badge.classList.toggle('none', visible === 0);
 }
 
 function syncGroupVisibilityButton(button, meshes) {
@@ -461,7 +488,8 @@ export function buildGroupHeader(groupName, itemsWrap, componentDescriptor) {
   nameSpan.textContent = groupName;
   nameSpan.title = groupName;
 
-  hdr.append(chevron, visibilityButton, nameSpan);
+  const countBadge = buildCountBadge();
+  hdr.append(chevron, visibilityButton, nameSpan, countBadge);
   const editBadge = document.createElement('span');
   editBadge.className = 'mesh-edit-badge';
   editBadge.hidden = true;
@@ -528,7 +556,7 @@ export function buildGroupHeader(groupName, itemsWrap, componentDescriptor) {
   }
 
   syncEditState();
-  return { hdr, visibilityButton, syncLabels, syncEditState };
+  return { hdr, visibilityButton, syncLabels, syncEditState, countBadge };
 }
 
 function renameMesh(mesh) {
