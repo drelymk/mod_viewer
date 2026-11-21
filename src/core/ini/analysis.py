@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from .sections import ResourceTable, canonical_var_names, extract_resources
 from .toggles import (extract_toggle_keys, extract_variable_defaults)
 from .menu import extract_menu_toggles
-from .state import extract_state_rules
+from .state import extract_draw_derived_rules, extract_state_rules
 from .shapes import extract_shape_sliders
 from .draw_groups import build_draw_groups
 from .draw_scan import _scan_sections_for_draws
@@ -67,15 +67,6 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     state_rules = extract_state_rules(
         sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
         condition_aliases=condition_aliases)
-    shapes = extract_shape_sliders(
-        sections, resources, var_prefix=var_prefix, source=source,
-        canonical_vars=canonical_vars)
-    defaults = extract_variable_defaults(
-        sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
-    animation_analysis = discover_animation_clocks(
-        sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
-        qualified_vars=qualified_vars, condition_aliases=condition_aliases)
-
     gating_vars = {
         var for info in toggles.values() for var in info.get("vars", {})
     }
@@ -99,6 +90,29 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         else value
         for value in gating_vars
     }
+
+    # Slider-less WWMI sparse keys apply only when their weight is derived
+    # from controls by state rules, here literal writes in draw sections.
+    shapes = extract_shape_sliders(
+        sections, resources, var_prefix=var_prefix, source=source,
+        canonical_vars=canonical_vars, include_derived=True)
+    draw_rules = extract_draw_derived_rules(
+        sections, [item["name"] for item in shapes if item.get("derived")],
+        scan_gating_vars, var_prefix=var_prefix,
+        canonical_vars=canonical_vars, condition_aliases=condition_aliases)
+    state_rules += draw_rules
+    gating_vars.update(rule["var"] for rule in draw_rules)
+    scan_gating_vars.update(rule["var"][len(scan_prefix):] for rule in draw_rules)
+    ruled = {rule["var"].casefold() for rule in state_rules}
+    shapes = [item for item in shapes
+              if not item.get("derived") or item["var"].casefold() in ruled]
+    defaults = extract_variable_defaults(
+        sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
+        zero_initialized=[item["name"] for item in shapes if item.get("derived")])
+    animation_analysis = discover_animation_clocks(
+        sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
+        qualified_vars=qualified_vars, condition_aliases=condition_aliases)
+
     section_info = _scan_sections_for_draws(
         sections, var_prefix, scan_gating_vars, animation_analysis.frame_vars,
         qualified_vars, resources=resources, condition_aliases=condition_aliases,

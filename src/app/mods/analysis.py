@@ -433,14 +433,16 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
             source=source, var_prefix=var_prefix,
             canonical_vars=record["canonical_vars"],
             condition_aliases=analysis.condition_aliases)
-        shape_sliders = analysis.shapes
+        # Rule-derived WWMI keys deform geometry but are not user controls.
+        shape_sliders = [item for item in analysis.shapes
+                         if not item.get("derived")]
         compute = [item for item in compute
                    if not _is_plain_shape_slider_compute(
                        item, shape_sliders)]
         animation_control_vars.update(
             compute_animation_control_vars(compute, analysis.state_rules))
         sparse_compute = discover_wwmi_sparse_animations(
-            secs, analysis.shapes, mod_dir=folder_path, ini_path=ini_path,
+            secs, shape_sliders, mod_dir=folder_path, ini_path=ini_path,
             source=source, var_prefix=var_prefix,
             canonical_vars=record["canonical_vars"])
         animation_control_vars.update(
@@ -477,7 +479,7 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
         runtime_evidence.extend(analysis.runtime_evidence)
         texture_api_evidence.extend(analysis.texture_api_evidence)
         animations.extend(analysis.animations)
-        _attach_shape_sliders(ini_groups, shape_sliders)
+        _attach_shape_sliders(ini_groups, analysis.shapes)
         groups.extend(ini_groups)
         ini_toggles = analysis.toggles
         ini_menu = analysis.menu

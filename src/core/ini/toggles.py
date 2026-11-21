@@ -91,22 +91,30 @@ def extract_toggle_var_names(sections, var_prefix=None, toggle_keys=None,
 _DEFAULT_VAR_RE = re.compile(r'^(?:global\s+)?(?:persist\s+)?\$(\w+)\s*=\s*([^,]+)$', re.I)
 
 
-def extract_variable_defaults(sections, var_prefix=None, canonical_vars=None):
+def extract_variable_defaults(sections, var_prefix=None, canonical_vars=None,
+                              zero_initialized=()):
     """Return {variable: default_value} from `global [persist] $var = value` lines
     (comma-separated cycle-list assignments inside Key sections don't match).
-    var_prefix namespaces keys so same-named vars from different ini files don't collide."""
+    var_prefix namespaces keys so same-named vars from different ini files don't collide.
+
+    ``zero_initialized`` names rule-derived variables: without a [Constants]
+    value they start at 3DMigoto's 0 instead of their first later assignment."""
     defaults = {}
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
+    zero_keys = {str(var).casefold() for var in zero_initialized}
     # Constants initialize the model independently of where the section appears.
     # Keep the legacy assignment fallback only for variables without a default.
     ordered = sorted(sections.items(), key=lambda item: item[0].casefold() != "constants")
-    for _section, lines in ordered:
+    for section, lines in ordered:
+        constants = section.casefold() == "constants"
         for line in lines:
             m = _DEFAULT_VAR_RE.match(line.strip())
             if m:
                 var = canon.get(m.group(1).lower(), m.group(1))
                 var_key = f"{var_prefix}{var}" if var_prefix else var
+                if var.casefold() in zero_keys and not constants:
+                    defaults.setdefault(var_key, "0")
                 if var_key not in defaults:
                     defaults[var_key] = m.group(2).strip()
     return defaults
