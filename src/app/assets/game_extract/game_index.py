@@ -14,7 +14,7 @@ from pathlib import Path
 from app.assets import folders as asset_folders
 from app.settings import config, paths
 from . import pipeline, shared_library
-from .runtime import VERSION, check_cancelled, find_paks, list_packages
+from .runtime import INDEX_VERSION, check_cancelled, find_paks, list_packages
 
 FORMAT = 2
 KIND = "WWMI"
@@ -26,7 +26,7 @@ BATCH_SIZE = 250
 def fingerprint(game_folder):
     """Identify the installed game data: runtime version plus every archive's name, size and mtime."""
     paks = find_paks(game_folder)
-    digest = hashlib.sha256(VERSION.encode("utf-8"))
+    digest = hashlib.sha256(INDEX_VERSION.encode("utf-8"))
     for file in sorted(paks.iterdir(), key=lambda item: item.name.lower()):
         if file.suffix.lower() in (".pak", ".utoc", ".ucas") and file.is_file():
             stat = file.stat()

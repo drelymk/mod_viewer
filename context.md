@@ -1109,7 +1109,11 @@ of documentation, comments and tests; use portable fixtures instead.
   WuWa AES keys at build time and verify them with the runtime manifest. Extraction
   needs no network access and never downloads or updates keys at runtime. A game
   update may require a new viewer build with updated keys or parser support.
-  Expose only package search/folders, mesh/property and animation export. Keep one mounted provider
+  Expose only package search/folders, mesh/property and animation export, plus two
+  narrow reads for weapon props: one `ConfigDB/db_*.db` file copied unchanged, and one
+  Texture2D's stored top mip from a quality-tier folder (`HD`/`UHD` beside `Paks`),
+  mounted lazily as its own provider so it never changes package resolution, without
+  image decoding. Keep one mounted provider
   per job, export only into private staging, and terminate it before staging
   cleanup on completion, failure or cancellation. Monitor the native work
   directory before commands, while awaiting responses and on completion; exceeding
@@ -1159,7 +1163,7 @@ of documentation, comments and tests; use portable fixtures instead.
   cancellation before installation. Keep extraction off normal load/index paths.
   The game index (`game_extract/game_index.py`, stored as `game-wwmi-<hash>.json`
   in the asset-index folder) only caches SkeletalMesh section shapes under
-  `Role/*` and `Prop/RoleProp`, keyed by the runtime version plus every archive's
+  `Role/*` and `Prop/RoleProp`, keyed by the runtime's index version plus every archive's
   name, size and mtime. It is an accelerator: native exports still prove each
   mesh, and a missing, stale or invalid index falls back to native searches.
   A truncated direct-folder search or unreadable mesh metadata fails the index
@@ -1189,6 +1193,32 @@ of documentation, comments and tests; use portable fixtures instead.
   (one per end, hard cuts, each clip once), always labeled `(by name)`, listed after
   authored timelines and counted as `name_sequences`. Names never pair, identify or
   admit clips, and a stem with several starts or loops is skipped.
+- WuWa extraction also exports the character's weapon as playback props
+  (`Animation/Props/`, the shared `prop-v1` layout and manifest `props`, served and
+  played like ZZZ props). Captures never draw weapons; the game attaches separate
+  weapon models to battle sockets. The weapon is a `CDT_ModelConfig` weapon model whose
+  developer description tags it as the signature weapon (`<name>专武`; skin and
+  deprecated variants excluded) of a name that a model row under the verified
+  character folder carries exactly. Intentional exception to name-free proof, since
+  no game data links a character to its signature weapon: without a match, a
+  mesh-seeded deterministic five-star weapon of the character's type is used. The
+  type comes only from `db_role` roleinfo rows whose model is one of the verified
+  mesh's model rows and whose starter weapon id encodes the row's own type. A
+  weapon's models and their order come from `db_weapon` weaponconf (the list must
+  contain the item), else the paired model at id + 100000. Model i attaches to
+  battle socket i; all of the verified mesh's model rows with sockets must agree on
+  that prefix, and the socket must be a unique rig bone. Each material section is one
+  rigid prop at the socket's rest world, fully weighted to that bone (the weapon's own
+  skeleton never animates), with native normals, UVs and triangle order (reversed for
+  a mirrored socket). Textures try the HD tier, then UHD; material parameters are
+  learned per extraction as for ZZZ (a parameter takes a role only when its top mip is
+  byte-identical to a captured texture of that role on a proven body section, with no
+  competing parameter or role) and read from each weapon section's own material; the
+  top mip is written unchanged as a single-mip DX10 DDS. ConfigDB FlatBuffer rows are
+  read by fixed field numbers with bounds checks (roleinfo 23/42/43, weaponconf 7); a
+  changed layout yields no type or the id + 100000 pairing, never an unchecked value.
+  Prop failures never block clips (`prop_error`, `skipped_props`, per-prop
+  `texture_error`); the report's `weapon` records the choice, models, sockets and tier.
 - ZZZ uses a separate minimal native reader built from pinned original AnimeStudio
   source and its rebuilt ZZZ V2 ACL decoder, plus the same pinned Oodle decoder as
   WuWa. No GUI, Ultimate fork, media exporters or updater is bundled. The shared

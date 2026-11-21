@@ -662,9 +662,23 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         sequences.append(item)
         total += len(item["steps"])
         name_sequences += 1
+    # Weapons the capture never drew; a failure leaves the clips unaffected.
+    from . import wuwa_props
+    props, skipped_props, weapon, prop_error = [], [], None, None
+    try:
+        props, skipped_props, weapon = wuwa_props.extract(
+            client, Path(root), record, captured, {index: palette_by_component[index] for index in proven if index not in companions},
+            mesh_package, mesh_document, rig, character_root, library, cancel)
+    except ExtractionCancelled:
+        raise
+    except (ValueError, KeyError, TypeError, IndexError, OSError) as error:
+        prop_error = str(error) if isinstance(error, ValueError) else "The weapon props could not be extracted."
     manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()), sequences=sequences,
                     runtime_bones=animation_keys.runtime_bones(rig, existing.values()),
                     shared_layers=layers, shared_layer_masks=layer_masks, layer_bones=sorted(layer_bones))
+    if props:
+        manifest["props"] = [{key: value for key, value in prop.items() if key not in ("source", "texture_error")}
+                             for prop in props]
     write_document(library / "manifest.json", manifest, 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="wuwa", mesh=mesh_package,
@@ -675,6 +689,9 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                   skipped_details=list(skipped_items.values()),
                   sequences=len(sequences), name_sequences=name_sequences, skipped_sequences=len(skipped_sequences),
                   skipped_sequence_details=skipped_sequences, sequence_error=sequence_error,
-                  shared_layers=len(layers))
+                  shared_layers=len(layers),
+                  props=[dict(id=prop["id"], name=prop["name"], source=prop["source"], textures=sorted(prop.get("textures", {})),
+                              **({"texture_error": prop["texture_error"]} if "texture_error" in prop else {})) for prop in props],
+                  skipped_props=skipped_props, weapon=weapon, **({"prop_error": prop_error} if prop_error else {}))
     (output / "RigExtraction.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report, fingerprints

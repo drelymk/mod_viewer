@@ -234,6 +234,17 @@ _PROP_TEXTURE_ROLES = ("diffuse", "light_map", "material_map", "normal_map")
 _MAX_PROP_TEXTURE_BYTES = 96 * 1024 * 1024
 
 
+def pack_prop(positions, normals, texcoords, joints, weights, triangles):
+    """``PROP_LAYOUT`` bytes: per-vertex f32 position/normal/uv records, u16x4 rig joints,
+    f32x4 weights, then u32 triangle indices."""
+    return b"".join([
+        np.hstack([positions, normals, texcoords]).astype("<f4").tobytes(),
+        np.asarray(joints).astype("<u2").tobytes(),
+        np.asarray(weights).astype("<f4").tobytes(),
+        np.asarray(triangles).astype("<u4").tobytes(),
+    ])
+
+
 def _props(raw):
     """The catalog's game props (weapons shown during playback); invalid data yields none."""
     try:
