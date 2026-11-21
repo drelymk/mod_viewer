@@ -1,5 +1,6 @@
 """Portable build prerequisite checks and explicit SDK selection."""
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -79,3 +80,76 @@ def test_missing_sdk_cli_warns_before_build_work(tmp_path, script, arguments):
     assert "Install a compatible SDK" in message and "PATH" in message
     assert "Traceback" not in message and "pip install" not in message
     assert "Determining projects to restore" not in message
+
+
+def test_helper_rebuild_skips_only_unchanged_intact_publish(tmp_path, monkeypatch):
+    script = Path(__file__).resolve().parents[3] / "tools/build_game_extract.py"
+    spec = importlib.util.spec_from_file_location("helper_rebuild_build", script)
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    monkeypatch.setattr(builder, "ROOT", tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/THIRD_PARTY_NOTICES.md").write_text("notices")
+    project = tmp_path / "project"
+    (project / "locks").mkdir(parents=True)
+    program = project / "Program.cs"
+    lock = project / "locks/viewer.json"
+    program.write_text("original source")
+    lock.write_text("original lock")
+
+    def fingerprint(sdk="10.0.100"):
+        return builder.inputs_fingerprint(project, sdk)
+
+    original = fingerprint()
+    assert fingerprint() == original
+
+    # Build outputs and restored lock copies must not invalidate the helper.
+    (project / "bin").mkdir()
+    (project / "bin/out.dll").write_text("binary")
+    (project / "obj").mkdir()
+    (project / "obj/x.cache").write_text("cache")
+    (project / "packages.lock.json").write_text("restored lock")
+    assert fingerprint() == original
+
+    # Each real input changes the fingerprint on its own.
+    program.write_text("edited source")
+    edited_source = fingerprint()
+    assert edited_source != original
+    program.write_text("original source")
+    lock.write_text("edited lock")
+    edited_lock = fingerprint()
+    assert edited_lock not in (original, edited_source)
+    lock.write_text("original lock")
+    assert fingerprint() == original
+    assert fingerprint("10.0.101") != original
+
+    dest = tmp_path / "publish"
+    dest.mkdir()
+    helper = dest / "Helper.dll"
+    helper.write_bytes(b"helper bytes")
+    (tmp_path / "escape.dll").write_bytes(b"outside")
+
+    def write_manifest(**overrides):
+        files = {"Helper.dll": hashlib.sha256(b"helper bytes").hexdigest()}
+        manifest = dict(version="v", parser="p", inputs=original,
+                        format_verified=False, files=files)
+        manifest.update(overrides)
+        (dest / "runtime.json").write_text(json.dumps(manifest))
+
+    write_manifest()
+    assert builder.up_to_date(dest, original) is True
+    assert builder.up_to_date(dest, original, verify_format=True) is False
+    assert builder.up_to_date(dest, "other") is False
+
+    write_manifest(files={"../escape.dll": hashlib.sha256(b"outside").hexdigest()})
+    assert builder.up_to_date(dest, original) is False
+    write_manifest()
+
+    helper.write_bytes(b"tampered bytes")
+    assert builder.up_to_date(dest, original) is False
+    helper.write_bytes(b"helper bytes")
+
+    (dest / "runtime.json").unlink()
+    assert builder.up_to_date(dest, original) is False
+    (dest / "runtime.json").write_text("[]")
+    assert builder.up_to_date(dest, original) is False
