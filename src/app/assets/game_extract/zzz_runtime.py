@@ -8,9 +8,9 @@ from . import runtime
 from .bundle import runtime_directory
 
 PARSER_COMMIT = "76234e9f6f5a839504f41f9612719529fe2309a5"
-VERSION = "zzz-7-" + PARSER_COMMIT[:12]
+VERSION = "zzz-8-" + PARSER_COMMIT[:12]
 # Runtime clip decoding can change without changing cached discovery metadata.
-INDEX_VERSION = "zzz-3-" + PARSER_COMMIT[:12]
+INDEX_VERSION = "zzz-4-" + PARSER_COMMIT[:12]
 BLOCK_DIRS = ("ZenlessZoneZero_Data/StreamingAssets/Blocks", "ZenlessZoneZero_Data/Persistent/Blocks")
 
 
@@ -71,6 +71,9 @@ def ensure_runtime(cancel, bundle=None):
 
 
 class Client(runtime.Client):
+    # ZZZ also indexes files holding materials or textures to locate prop textures.
+    index_files = True
+
     def __init__(self, executable, folder, work, cancel):
         self.root = validate_folder(folder)
         self.executable, self.work, self.cancel = Path(executable), Path(work), cancel
@@ -84,7 +87,7 @@ class Client(runtime.Client):
 
     def scan_many(self, blocks):
         names = [Path(block).relative_to(self.root).as_posix() for block in blocks]
-        items = self.call("scan_batch", blocks=names)["items"]
+        items = self.call("scan_batch", blocks=names, files=self.index_files)["items"]
         if len(items) != len(names) or [item.get("block") for item in items] != names:
             raise ValueError("The native metadata scan is incomplete.")
         return [{**row, "block": item["block"]} for item in items for row in item["rows"]]

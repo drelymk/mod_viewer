@@ -9,6 +9,7 @@ import {
   getModelTransformState,
   invalidateCharacterShadowGeometry,
   renderer,
+  scene,
   setCharacterGroundAnchor,
 } from '../scene/scene.js';
 import { rigGroundAnchor } from './rig-ground.js';
@@ -17,6 +18,9 @@ import { rebuildModelRestFrames, rebuildSourceRigRestFrames } from './weight-rig
 import { buildModelRigCooperative, sourceBoneKey } from './weight-rig-reconcile.js';
 import { createRigAnimation } from './rig-animation.js';
 import { buildAnimationMeshBinding, createAnimationMeshSession } from './rig-animation-meshes.js';
+import { createAnimationProps } from './rig-animation-props.js';
+import { createGameMaterial } from '../mesh/material-profile.js';
+import { addTexture, refreshMeshTexture, removeTextures } from '../mesh/mesh-factory.js';
 import { setRigAnimationMeshes } from '../mesh/mesh-state.js';
 import { buildGameRigReconciliation } from './game-rig.js';
 import { buildAuthoredHumanoidControlRig, mergeAuthoredHumanoidMappings } from './game-rig-humanoid.js';
@@ -317,13 +321,50 @@ const animationMeshes = createAnimationMeshSession({
   invalidateShadow: invalidateCharacterShadowGeometry,
   requestRender,
 });
+const PROP_TEXTURE_ROLES = ['diffuse', 'light_map', 'material_map'];
+
+// Textured props share the body's game material profile; their textures live in the
+// shared registry under prop-scoped keys until the props are disposed.
+function propMaterial(descriptor, reference, session) {
+  const keys = {};
+  for (const role of PROP_TEXTURE_ROLES) {
+    const url = descriptor.textures?.[role];
+    const key = `${role}::game-prop/${session}/${descriptor.id}`;
+    if (typeof url === 'string' && addTexture(key, url)) keys[role] = key;
+  }
+  if (!Object.keys(keys).length) return null;
+  return {
+    material: createGameMaterial(reference?.userData?.materialProfile || null, 0xcccccc, { hasUv: true }),
+    bind(mesh) {
+      Object.assign(mesh.userData, {
+        texKey: keys.diffuse,
+        lightMapKey: keys.light_map,
+        materialMapKey: keys.material_map,
+      });
+      refreshMeshTexture(mesh);
+    },
+    dispose() {
+      removeTextures(Object.values(keys));
+    },
+  };
+}
+
+// Asset previews and Asset Fill serve their own animation sessions; mods use the model's.
+const assetAnimationSource = () => assetRigContext || getAnimationBinding()?.rig.animation_source === 'asset';
+const animationProps = createAnimationProps({
+  loadProps: async (token) => {
+    const api = await bridgeReady();
+    return assetAnimationSource() ? api.get_asset_animation_props(token) : api.get_model_animation_props(token);
+  },
+  getScene: () => scene,
+  requestRender,
+  materialFor: propMaterial,
+});
 const rigAnimation = createRigAnimation({
   getRig: () => getAnimationBinding()?.rig || modelSkinningRig?.gameRig || null,
   loadClip: async (token, id) => {
     const api = await bridgeReady();
-    return assetRigContext || getAnimationBinding()?.rig.animation_source === 'asset'
-      ? api.get_asset_animation(token, id)
-      : api.get_model_animation(token, id);
+    return assetAnimationSource() ? api.get_asset_animation(token, id) : api.get_model_animation(token, id);
   },
   prepare: () => {
     humanoidRigEditSession.cancel();
@@ -332,6 +373,8 @@ const rigAnimation = createRigAnimation({
     animationMeshes.prepare(binding, { deform: !modelSkinningRig?.gameRig });
     // Clips stand on the game's ground, not on the bind pose's lowest point.
     const rig = binding?.rig || modelSkinningRig?.gameRig;
+    // Uncaptured game props (weapons) follow the body's model transform.
+    animationProps.prepare(rig, [...(binding?.meshes.keys() || knownMeshes)][0]);
     setCharacterGroundAnchor(rigGroundAnchor(rig, binding?.meshes.keys() || knownMeshes));
   },
   suspendPhysics: (value) => rigPoseRuntime.setHumanoidEditPhysicsSuspended(value),
@@ -339,10 +382,12 @@ const rigAnimation = createRigAnimation({
     animationMeshes.setMorphs(getAnimationBinding(), morphs);
     if (!transforms) {
       animationMeshes.stop();
+      animationProps.hide();
       setCharacterGroundAnchor(null);
     }
     if (transforms) {
       animationMeshes.apply(transforms, { finalize });
+      animationProps.apply(transforms);
       if (!modelSkinningRig?.gameRig) return;
     }
     if (!modelSkinningRig) return;
@@ -721,6 +766,7 @@ function resetRigPose() {
 
 function resetModelWeightState() {
   rigAnimation.stop();
+  animationProps.dispose();
   weightRigActivationSession?.invalidate();
   modelWeightGeneration += 1;
   animationBinding = null;

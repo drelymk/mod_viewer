@@ -528,7 +528,7 @@ def test_sequence_playback_crossfades_steps_and_caches_its_clips(module_page, ca
     assert result['group'] == 'Sequences' and result['grouped'] == ['seq-01']
 
 
-def test_sequence_steps_carry_root_motion_and_return_to_origin_each_pass(module_page):
+def test_root_motion_starts_at_origin_and_carries_across_sequence_steps(module_page):
     result = module_page.evaluate('''async () => {
       const T = await import('three');
       const {createRigAnimation} = await import('./js/weight-rig/rig-animation.js');
@@ -543,7 +543,8 @@ def test_sequence_steps_carry_root_motion_and_return_to_origin_each_pass(module_
       const turn = [0,0,Math.SQRT1_2,Math.SQRT1_2];
       const pose = x => [0,0,0,0,0,0,1, x,0,0,0,0,0,1];
       const motion = (x, rotation=[0,0,0,1]) => [x,0,0,...rotation];
-      const data = {clip01:new Float32Array([...pose(0),...pose(1),...motion(0),...motion(1)]),
+      // Like game clips, the first one also sits away from the origin when it starts.
+      const data = {clip01:new Float32Array([...pose(3),...pose(4),...motion(3),...motion(4)]),
                     clip02:new Float32Array([...pose(5),...pose(6),...motion(5,turn),...motion(6,turn)])};
       const urls = [];
       const respond = id => { const url = URL.createObjectURL(new Blob([data[id]])); urls.push(url);
@@ -568,10 +569,15 @@ def test_sequence_steps_carry_root_motion_and_return_to_origin_each_pass(module_
       runtime.seek(.75);
       await new Promise(r=>setTimeout(r,20));
       const seeked = {step:runtime.snapshot().step,body:body()};
+      await runtime.select('clip02');
+      const single = [body()];
+      scheduled(500);
+      single.push(body());
       runtime.stop();
       urls.forEach(url=>URL.revokeObjectURL(url));
-      return {started,entered,travelled,wrapped,seeked};
+      return {started,entered,travelled,wrapped,seeked,single};
     }''')
+    # The first step's root motion starts at the origin instead of its authored placement.
     assert result['started'] == [0, 0, 0]
     # The second clip starts its root motion 5 units away and turned 90 degrees; the
     # body continues from where the first step left it instead of jumping there.
@@ -582,6 +588,8 @@ def test_sequence_steps_carry_root_motion_and_return_to_origin_each_pass(module_
     assert result['wrapped'] == {'step': 0, 'body': [0, 0, 0]}
     # Seeking replays the travel that the earlier resident steps carry.
     assert result['seeked'] == {'step': 1, 'body': [.5, -.25, 0]}
+    # A single clip also starts at the origin facing forward, then travels from there.
+    assert result['single'] == [[0, 0, 0], [0, -.5, 0]]
 
 def test_merged_clip_morphs_keep_each_clips_deltas_and_reject_conflicts(module_page):
     result = module_page.evaluate('''async () => {
@@ -1294,3 +1302,58 @@ def test_secondary_motion_hangs_under_gravity_and_clears_leg_capsules(module_pag
     assert result['before'] < result['radius'] - 0.04
     assert result['after'] > result['before'] + 0.01
     assert result['finite']
+
+
+def test_game_props_load_once_skin_by_rig_deltas_and_exist_only_while_a_clip_is_applied(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three');
+      const {createAnimationProps} = await import('./js/weight-rig/rig-animation-props.js');
+      // One triangle skinned fully to rig bone 2; layout prop-v1 (records, joints, weights, indices).
+      const vertices = 3, buffer = new ArrayBuffer(vertices * 56 + 12);
+      new Float32Array(buffer, 0, 24).set([0,0,1, 0,0,1, 0,0,  1,0,1, 0,0,1, 1,0,  0,1,1, 0,0,1, 0,1]);
+      new Uint16Array(buffer, 96, 12).set([2,0,0,0, 2,0,0,0, 2,0,0,0]);
+      new Float32Array(buffer, 120, 12).set([1,0,0,0, 1,0,0,0, 1,0,0,0]);
+      new Uint32Array(buffer, 168, 3).set([0,1,2]);
+      const url = URL.createObjectURL(new Blob([buffer]));
+      let loads = 0, released = 0;
+      const scene = new T.Scene();
+      const props = createAnimationProps({
+        loadProps: async token => { loads++; return {status:'ok', props:[{id:'prop-01', name:'Prop01',
+          layout:'prop-v1', vertex_count:3, index_count:3, data:{url, length:buffer.byteLength},
+          textures:{diffuse:'/texture/prop01.dds'}}]}; },
+        getScene: () => scene, requestRender: () => {},
+        // A textured prop gets the injected game material; disposal releases its textures.
+        materialFor: (descriptor, reference, session) => ({material: new T.MeshBasicMaterial(),
+          bind: mesh => { mesh.userData.bound = [descriptor.textures.diffuse, reference === props.reference, session]; },
+          dispose: () => { released++; }}),
+      });
+      const rig = {id:'rig01', bones:[{},{},{}], animation_session:'session01', animation_props:[{id:'prop-01', name:'Prop01'}]};
+      const reference = new T.Object3D();
+      reference.position.set(5, 0, 0);
+      reference.updateMatrixWorld();
+      props.reference = reference;
+      props.prepare(rig, reference);
+      props.prepare(rig, reference);
+      await new Promise(r => setTimeout(r, 50));
+      const hiddenAtRest = scene.children.length;
+      const delta = new T.Matrix4().makeTranslation(0, 0, 2);
+      props.apply(new Map([[0, new T.Matrix4()], [1, new T.Matrix4()], [2, delta]]));
+      const mesh = scene.children[0];
+      scene.updateMatrixWorld();
+      // CPU reference of the GPU skin: identity bind, bone matrix = the clip's asset-space delta.
+      const skinned = mesh.applyBoneTransform(0, new T.Vector3().fromBufferAttribute(mesh.geometry.attributes.position, 0));
+      const world = skinned.clone().applyMatrix4(mesh.matrixWorld);
+      props.hide();
+      const afterStop = scene.children.length;
+      props.dispose();
+      URL.revokeObjectURL(url);
+      return {loads, hiddenAtRest, shown: mesh.isSkinnedMesh, bones: mesh.skeleton.bones.length,
+              skinned: skinned.toArray(), world: world.toArray(), afterStop, bound: mesh.userData.bound,
+              basic: mesh.material.isMeshBasicMaterial, released};
+    }''')
+    assert result['loads'] == 1 and result['hiddenAtRest'] == 0 and result['afterStop'] == 0
+    assert result['shown'] and result['bones'] == 1
+    assert result['basic'] and result['bound'] == ['/texture/prop01.dds', True, 'session01'] and result['released'] == 1
+    assert result['skinned'] == [0, 0, 3]
+    # The prop follows the body mesh's model transform.
+    assert result['world'] == [5, 0, 3]

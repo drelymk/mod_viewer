@@ -31,6 +31,10 @@ native geometry/animation verification. The helper bundles .NET 10.0.13.
 Build-time adaptations remove unused image and unrelated game helpers, make
 parser failures fatal, preserve duplicate internal CAB scopes, restrict external
 resource reads to the current bundle, and permit exact bundle-offset reads.
+Prop materials and textures are read without decoding: renderer reads list each
+material's texture slots and pointers, and Texture2D reads return the stored image
+bytes for the caller to wrap. ZZZ scans may also list every serialized file holding
+a Material or Texture2D so those pointers can be located.
 Avatar reads stop after the skeleton, reference pose and path-hash table: optional
 HumanDescription authoring metadata is unnecessary for skinning and varies across
 native asset layouts. Mesh shapes filter unrelated outfit families before opening

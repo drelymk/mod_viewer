@@ -317,8 +317,12 @@ def rest_worlds(bones, *, affine=False):
     return worlds
 
 
-def sub_skeleton_map(primary, mesh, *, affine=False):
-    """Prove named bones, the induced parent hierarchy and identical world reference transforms."""
+def sub_skeleton_map(primary, mesh, *, affine=False, worlds_for=None):
+    """Prove named bones, the induced parent hierarchy and identical world reference transforms.
+
+    ``worlds_for`` limits the reference-world comparison to those ``mesh`` bone ordinals;
+    names and hierarchy are always proven for every bone.
+    """
     import numpy as np
 
     index = {bone["name"]: number for number, bone in enumerate(primary["bones"])}
@@ -339,7 +343,8 @@ def sub_skeleton_map(primary, mesh, *, affine=False):
         while ancestor >= 0 and primary["bones"][ancestor]["name"] not in names:
             ancestor = primary["bones"][ancestor]["parent"]
         expected = primary["bones"][ancestor]["name"] if ancestor >= 0 else None
-        if parent != expected or not np.allclose(primary_worlds[target], mesh_worlds[ordinal], rtol=0, atol=1e-4):
+        if parent != expected or ((worlds_for is None or ordinal in worlds_for)
+                                  and not np.allclose(primary_worlds[target], mesh_worlds[ordinal], rtol=0, atol=1e-4)):
             return None
         result.append(target)
     return result

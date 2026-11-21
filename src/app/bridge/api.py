@@ -310,6 +310,12 @@ class ModViewerAPI:
     def get_model_animation(self, token, clip_id):
         return self._mod_preview.get_animation(token, clip_id)
 
+    def get_asset_animation_props(self, token):
+        return self._asset_preview.get_animation_props(token)
+
+    def get_model_animation_props(self, token):
+        return self._mod_preview.get_animation_props(token)
+
     def get_memory_diagnostics(self):
         return self._mod_preview.get_memory_diagnostics()
 

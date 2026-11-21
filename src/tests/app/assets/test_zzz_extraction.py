@@ -17,7 +17,8 @@ import pytest
 from app.assets import index
 from app.assets.animations import AnimationSessions, read_clip
 from app.assets.animation_morphs import read_morphs
-from app.assets.game_extract import zzz_animation, zzz_index, zzz_morphs, zzz_native, zzz_pipeline, zzz_runtime
+from app.assets.game_extract import (zzz_animation, zzz_index, zzz_morphs, zzz_native, zzz_pipeline,
+                                     zzz_prop_textures, zzz_runtime)
 from app.assets.game_extract.pipeline import rest_worlds
 from app.assets.game_extract.runtime import ExtractionCancelled
 from app.assets.loader.hash_asset import load_hash_asset
@@ -315,6 +316,29 @@ def test_zzz_serialized_inverse_binds_preserve_affine_placement(tmp_path):
     assert zzz_native.mesh_placement(changed, avatar) is None
 
 
+@pytest.mark.parametrize("weight,drift,accepted", [
+    (.005, .008, True),
+    (.005, .03, False),
+    (.05, .008, False),
+    (.005, float("nan"), False),
+])
+def test_zzz_placement_tolerates_small_inverse_bind_drift_only_on_lightly_weighted_bones(tmp_path, weight, drift, accepted):
+    _root, _asset, _record, avatar, mesh, _rows, _client = fixture(tmp_path)
+    avatar["bones"].append(dict(path="Root/Joint02", hash=200, parent=0,
+        translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
+    bind = np.eye(4)
+    bind[0, 3] = drift
+    mesh["bone_hashes"].append(200)
+    mesh["bind_poses"].append(bind.ravel(order="C").tolist())
+    mesh["weights"][0] = [.75 - weight, .25, weight, 0]
+    mesh["bone_indices"][0] = [0, 1, 2, 0]
+    placed = zzz_native.mesh_placement(mesh, avatar)
+    assert (placed is not None) == accepted
+    if accepted:
+        # The heavily weighted bones define the placement, never the drifting one.
+        np.testing.assert_allclose(placed[1], np.eye(4), atol=1e-12)
+
+
 def test_zzz_native_proof_rejects_wrong_rest_weights_topology_and_ambiguous_palettes(tmp_path):
     root, _asset, record, avatar, mesh, _rows, _client = fixture(tmp_path)
     part = zzz_native.capture(root, record)[0][0]
@@ -362,10 +386,122 @@ def test_zzz_native_uv_layout_must_prove_two_coordinates_per_vertex(tmp_path, uv
     assert bool(zzz_native.match_component_candidates(part, mesh)) == accepted
 
 
+def test_zzz_extraction_adds_textured_props_driven_only_by_uncaptured_bones(tmp_path, monkeypatch):
+    import zlib
+
+    root, asset, record, avatar, mesh, rows, client = fixture(tmp_path)
+    # Renderers route by CRC32 bone paths, as the game hashes them.
+    joint, prop_path = zlib.crc32(b"Root/Joint01"), zlib.crc32(b"Root/Prop01")
+    avatar["bones"][1]["hash"] = joint
+    mesh["bone_hashes"] = [0, joint]
+    avatar["bones"].append(dict(path="Root/Prop01", hash=prop_path, parent=0,
+        translation=[0, 0, 1], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
+    bind = np.eye(4)
+    bind[2, 3] = -1
+    prop = dict(name="SeparateMesh_Avatar_Type01_Character01_Model_Prop01", vertices=[0, 0, 1, 1, 0, 1, 0, 1, 1],
+        normals=[0, 0, 1] * 3, uv=[0, 0, 1, 0, 0, 1], indices=[0, 1, 2], weights=[[1, 0, 0, 0]] * 3,
+        bone_indices=[[0, 0, 0, 0]] * 3, bone_hashes=[prop_path], bind_poses=[bind.ravel(order="C").tolist()],
+        sections=[dict(first=0, count=3, vertex_first=0, vertex_count=3)])
+    # An uncaptured mesh driven by a captured bone (like a hair shadow) is not a prop,
+    # and a static effect mesh has no skin to follow the rig.
+    driven = {**deepcopy(prop), "name": prop["name"] + "_Shadow", "bone_hashes": [joint],
+              "bind_poses": [np.diag([1, .5, 1, 1]).ravel().tolist()]}
+    static = {**deepcopy(prop), "name": prop["name"] + "_Glow", "weights": None, "bone_indices": None,
+              "bind_poses": None, "bone_hashes": []}
+    extra = {}
+    for number, value in enumerate((prop, driven, static), start=10):
+        rows.append({**rows[1], "name": value["name"], "path_id": number})
+        extra[number] = value
+    # The captured body diffuse is a BC1 block; the body material's _MainTex holds the same
+    # bytes, which proves that slot's role. _OtherTex matches nothing and stays unused.
+    body_block, prop_block, other_block = bytes(range(8)), bytes(range(8, 16)), bytes(8)
+    metadata = json.loads((asset / "hash.json").read_text())
+    metadata[0]["texture_hashes"] = [[["Diffuse", ".dds", "33333333", "body-diffuse.dds"]]]
+    (asset / "hash.json").write_text(json.dumps(metadata))
+    (asset / "body-diffuse.dds").write_bytes(zzz_prop_textures.unity_dds.encode(4, 4, 10, body_block, srgb=True))
+    record = index.build_index("ZZMI", root)["assets"][0]
+    textures = {20: body_block, 21: prop_block, 22: other_block}
+
+    def material(texture):
+        return dict(pointer=dict(cab="CAB-01", path_id=40 + texture, file_ordinal=0, offset=0), name="Material01",
+                    textures=[dict(name="_MainTex", texture=dict(cab="CAB-Textures", path_id=texture),
+                                   scale=[1, 1], offset=[0, 0]),
+                              dict(name="_OtherTex", texture=dict(cab="CAB-Textures", path_id=22),
+                                   scale=[1, 1], offset=[0, 0])],
+                    floats=[], colors=[])
+    for number, (bones, texture) in enumerate(((["", "Root/Joint01"], 20), (["Root/Prop01"], 21)), start=30):
+        rows.append({**rows[0], "type": "SkinnedMeshRenderer", "name": "", "path_id": number, "material": material(texture),
+                     "renderer": dict(path="", bone_paths=bones, avatar=dict(cab="CAB-01", path_id=rows[0]["path_id"]))})
+    files = {"cab-textures": [(rows[0]["block"], 4096, 0, "CAB-Textures")]}
+    read = client.read
+
+    def read_row(row):
+        if row["path_id"] in extra:
+            return deepcopy(extra[row["path_id"]])
+        if row.get("type") == "SkinnedMeshRenderer":
+            return dict(mesh=dict(cab="CAB-01", path_id=0), materials=[row["material"]])
+        if row["cab"] == "CAB-Textures":
+            (client.work / "texture-1.bin").write_bytes(textures[row["path_id"]])
+            return dict(name="Texture", width=4, height=4, format=10, format_name="DXT1", mip_count=1,
+                        file="texture-1.bin", size=8)
+        value = read(row)
+        for binding in value.get("bindings", []):
+            binding["path"] = joint if binding["path"] == 100 else binding["path"]
+        return value
+    client.read = read_row
+    output = tmp_path / "output"
+    report, _ = zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, threading.Event(),
+                                   zzz_index.IndexRows(rows, files))
+    assert report["props"] == [dict(id=report["props"][0]["id"], name=prop["name"],
+                                    source=zzz_index.identity(rows[3]), textures=["diffuse"])]
+    assert report["skipped_props"] == []
+    entry = json.loads((output / "Animation/manifest.json").read_text())["props"][0]
+    data = (output / "Animation" / entry["file"]).read_bytes()
+    assert entry["vertex_count"] == 3 and entry["index_count"] == 3 and hashlib.sha256(data).hexdigest() == entry["sha256"]
+    diffuse = (output / "Animation" / entry["textures"]["diffuse"]["file"]).read_bytes()
+    # The prop's own texture, wrapped as a single-mip sRGB BC1 DDS.
+    assert set(entry["textures"]) == {"diffuse"} and diffuse[-8:] == prop_block
+    assert struct.unpack_from("<I", diffuse, 128)[0] == 72
+    rig = validate_rig(json.loads((output / "Rig.json").read_text()))
+    records = np.frombuffer(data, "<f4", count=24).reshape(3, 8)
+    # Asset space equals the native rest geometry here; UVs flip like captured ones.
+    np.testing.assert_allclose(records[:, :3], np.reshape(prop["vertices"], (3, 3)), atol=1e-6)
+    np.testing.assert_allclose(records[:, 6:], [[0, 1], [1, 1], [0, 0]], atol=1e-6)
+    joints = np.frombuffer(data, "<u2", count=12, offset=96).reshape(3, 4)
+    assert rig["bones"][joints[0, 0]]["name"].endswith("Prop01")
+    assert np.frombuffer(data, "<u4", count=3, offset=168).tolist() == [0, 1, 2]
+    shutil.copytree(output, asset, dirs_exist_ok=True)
+    published, released = [], []
+    monkeypatch.setattr("app.assets.animations.server.publish_geometry",
+                        lambda blob, **_: published.append(blob) or f"/geometry/{len(published)}")
+    monkeypatch.setattr("app.assets.animations.server.release_geometry", released.append)
+    sessions = AnimationSessions()
+    catalog = sessions.catalog(root, "Character01", rig, lambda: True)
+    assert catalog["animation_props"] == [dict(id=entry["id"], name=prop["name"])]
+    token = catalog["animation_session"]
+    first = sessions.load_props(token)["props"][0]
+    assert first["data"] == {"url": "/geometry/1", "length": len(data)} and set(first["textures"]) == {"diffuse"}
+    assert first["textures"]["diffuse"].endswith(".dds")
+    # Geometry URLs are single-use, so every load publishes fresh ones and releases the last.
+    second = sessions.load_props(token)["props"][0]
+    assert second["data"]["url"] == "/geometry/2" and released == ["/geometry/1"]
+    assert second["textures"] == first["textures"] and published.count(data) == 2
+    sessions.clear()
+    assert "/geometry/2" in released
+    tampered = bytearray(data)
+    tampered[0] ^= 1
+    (asset / "Animation" / entry["file"]).write_bytes(tampered)
+    token = sessions.catalog(root, "Character01", rig, lambda: True)["animation_session"]
+    assert sessions.load_props(token)["status"] == "error"
+    assert sessions.load_props("invented")["status"] == "error"
+
+
 def test_zzz_extraction_rejects_uvless_candidate_and_keeps_verified_rig_and_clips(tmp_path):
     root, asset, record, _avatar, _mesh, rows, client = fixture(tmp_path)
     helper = {**rows[1], "name": rows[1]["name"] + "_Helper", "path_id": 99}
-    rows.insert(1, helper)
+    # A shape-compatible static mesh exports without skin data and must be skipped.
+    static = {**rows[1], "name": rows[1]["name"] + "_Static", "path_id": 98}
+    rows[1:1] = [helper, static]
     read = client.read
     visited = []
     def read_candidate(row):
@@ -373,13 +509,15 @@ def test_zzz_extraction_rejects_uvless_candidate_and_keeps_verified_rig_and_clip
         visited.append(zzz_index.identity(row))
         if row is helper:
             data["uv"] = None
+        elif row is static:
+            data.update(weights=None, bone_indices=None, bind_poses=None, bone_hashes=[])
         return data
     client.read = read_candidate
     before = {file.name: file.read_bytes() for file in asset.iterdir()}
     output = tmp_path / "output"
     report, _ = zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, threading.Event(), rows)
-    assert zzz_index.identity(helper) in visited
-    assert report["meshes"] == [zzz_index.identity(rows[2])]
+    assert {zzz_index.identity(helper), zzz_index.identity(static)} <= set(visited)
+    assert report["meshes"] == [zzz_index.identity(rows[3])]
     assert report["proven_components"] == report["imported"] == report["clips"] == 1
     rig = validate_rig(json.loads((output / "Rig.json").read_text()))
     entry = json.loads((output / "Animation/manifest.json").read_text())["clips"][0]
@@ -484,22 +622,29 @@ def test_zzz_shape_fallback_keeps_body_avatar_when_a_prop_has_an_extra_legacy_me
     assert chosen["matched"][1]["bone_map"] == {"8": 1, "12": 3}
 
 
-@pytest.mark.parametrize("difference", ["roundoff", "rest", "family"])
+@pytest.mark.parametrize("difference", ["roundoff", "rest", "family", "model_helper", "model_hierarchy"])
 def test_zzz_equivalent_native_avatar_copies_and_genuine_ambiguity(tmp_path, difference):
     root, _asset, record, avatar, mesh, rows, client = fixture(tmp_path)
     mesh["name"] = rows[1]["name"] = "Character01_Body"
     rows[1]["shape"] = [[3, 3]]
-    if difference == "rest":
+    if difference in ("rest", "model_helper", "model_hierarchy"):
         avatar["bones"].append(dict(path="Root/Unused01", hash=200, parent=0,
             translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
     duplicate = deepcopy(avatar)
     duplicate_row = {**rows[0], "path_id": 50}
     if difference == "roundoff":
         duplicate["bones"][1]["translation"][0] = 2e-7
-    elif difference == "rest":
-        duplicate["bones"][-1]["translation"][0] = .01
+    elif difference in ("rest", "model_helper"):
+        duplicate["bones"][2]["translation"][0] = .01
+    elif difference == "model_hierarchy":
+        duplicate["bones"][2]["parent"] = 1
     else:
         duplicate["name"] = duplicate_row["name"] = "Avatar_Type01_Character01_Variant_ModelAvatar"
+    if difference.startswith("model_"):
+        # A larger animation Avatar of the same family drives the model Avatar's mesh.
+        duplicate["name"] = duplicate_row["name"] = "Avatar_Type01_Character01_Avatar"
+        duplicate["bones"].append(dict(path="Root/Extra01", hash=300, parent=0,
+            translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
     original_read = client.read
     def read(row):
         return deepcopy(duplicate) if row["path_id"] == 50 else original_read(row)
@@ -511,6 +656,13 @@ def test_zzz_equivalent_native_avatar_copies_and_genuine_ambiguity(tmp_path, dif
         reordered = zzz_pipeline.verify_candidates(client, captured, list(reversed(candidates)), "Character01", threading.Event())
         assert len(chosen["matched"]) == 1 and chosen["rig"]["id"] == reordered["rig"]["id"]
         assert chosen["source"] == min(zzz_index.identity(row) for row in (rows[0], duplicate_row))
+    elif difference == "model_helper":
+        # Only an unskinned helper's rest differs, so the animation Avatar's rig is adopted.
+        for ordered in (candidates, list(reversed(candidates))):
+            chosen = zzz_pipeline.verify_candidates(client, captured, ordered, "Character01", threading.Event())
+            assert chosen["source"] == zzz_index.identity(duplicate_row)
+            assert chosen["avatar_sources"] == {zzz_index.identity(row) for row in (rows[0], duplicate_row)}
+            assert chosen["rig"]["bones"][3]["translation"][0] == pytest.approx(.01, abs=1e-6)
     else:
         with pytest.raises(ValueError, match="ambiguous"):
             zzz_pipeline.verify_candidates(client, captured, candidates, "Character01", threading.Event())
@@ -741,14 +893,13 @@ def test_zzz_index_pools_exact_renderer_paths_and_reuses_complete_cache(tmp_path
     with pytest.raises(ValueError, match="size limit"):
         zzz_index.build(client, folder, lambda *_: None, cancel)
     assert file.read_bytes() == before
-    # A ready unpooled index remains compatible with the lossless storage change.
+    # Indexes from before the material/texture file table need one rescan.
     monkeypatch.setattr(zzz_index, "MAX_BYTES", 4 * 1024 * 1024)
     saved.pop("bone_paths")
     saved["format"] = 3
     saved["rows"] = expected
     file.write_text(json.dumps(saved))
-    with patch.object(client, "scan_many", side_effect=AssertionError("Legacy cache must be reused.")):
-        assert zzz_index.ensure(client, folder, lambda *_: None, cancel) == expected
+    assert zzz_index.read(folder)[0] == "stale"
 
 
 @pytest.mark.parametrize("case", ["missing", "table", "entry", "negative", "range", "boolean", "mixed", "budget"])

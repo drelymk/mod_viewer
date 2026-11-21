@@ -83,8 +83,18 @@ def avatar_bones(avatar):
     return bones
 
 
+# Game data can leave a lightly weighted bone's inverse bind slightly off its Avatar
+# rest. Such bones may disagree with the placement only within these bounds.
+DRIFT_WEIGHT_SHARE = .01
+DRIFT_LIMIT = .02
+
+
 def mesh_placement(mesh, avatar, tolerance=2e-4):
-    """Require every used inverse bind to prove one common mesh-to-Avatar placement."""
+    """Require the used inverse binds to prove one common mesh-to-Avatar placement.
+
+    Bones carrying at least 99% of the positive skin weight must agree within
+    ``tolerance``; the remaining used bones may drift from it by at most DRIFT_LIMIT.
+    """
     bones = avatar_bones(avatar)
     worlds = rest_worlds(bones, affine=True)
     by_hash = {bone["hash"]: index for index, bone in enumerate(avatar["bones"])}
@@ -94,16 +104,31 @@ def mesh_placement(mesh, avatar, tolerance=2e-4):
     mapping = [by_hash.get(value) for value in hashes]
     if any(value is None for value in mapping) or len(set(mapping)) != len(mapping):
         return None
-    used = {bone for indices, weights in zip(mesh["bone_indices"], mesh["weights"])
-            for bone, weight in zip(indices, weights) if weight > 0}
-    if not used or any(type(bone) is not int or not 0 <= bone < len(mapping) for bone in used):
+    load = Counter()
+    for indices, weights in zip(mesh["bone_indices"], mesh["weights"]):
+        for bone, weight in zip(indices, weights):
+            if weight > 0:
+                load[bone] += weight
+    if not load or any(type(bone) is not int or not 0 <= bone < len(mapping) for bone in load):
         return None
+    used = sorted(load, key=lambda bone: (-load[bone], bone))
     # ReadMatrix and the native indexer preserve ZZZ's serialized row-major
     # float order despite Matrix4x4's column-major field names.
-    matrices = [worlds[mapping[bone]] @ np.asarray(poses[bone]).reshape(4, 4) for bone in used]
-    if not all(np.allclose(matrix, matrices[0], rtol=0, atol=tolerance) for matrix in matrices):
-        return None
-    return mapping, matrices[0]
+    matrices = np.stack([worlds[mapping[bone]] @ np.asarray(poses[bone]).reshape(4, 4) for bone in used])
+    shares = np.array([load[bone] for bone in used], dtype=float)
+    shares /= shares.sum()
+    rejected = 0.0
+    # Try anchors from the heaviest bone down; rejected anchors are drifting bones,
+    # so the search stops once they exceed the share drift may carry.
+    for anchor, share in enumerate(shares):
+        if rejected > DRIFT_WEIGHT_SHARE:
+            break
+        deviation = np.abs(matrices - matrices[anchor]).reshape(len(used), -1).max(axis=1)
+        # Negated comparisons count a non-finite bind as disagreement.
+        if shares[~(deviation <= tolerance)].sum() <= DRIFT_WEIGHT_SHARE and np.all(deviation <= DRIFT_LIMIT):
+            return mapping, matrices[anchor]
+        rejected += share
+    return None
 
 
 def match_component(part, mesh):

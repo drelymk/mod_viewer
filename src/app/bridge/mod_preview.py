@@ -515,6 +515,9 @@ class ModPreview:
     def get_animation(self, token, clip_id):
         return self._animations.load(token, clip_id)
 
+    def get_animation_props(self, token):
+        return self._animations.load_props(token)
+
     @staticmethod
     def _migrate_merged_weight_selection(saved_bones, manifest):
         """Translate legacy offset IDs only for loaded, verified shared sources."""

@@ -1,0 +1,67 @@
+using AnimeStudio;
+
+namespace ModViewer.ZzzExtract;
+
+// Texture slots of uncaptured props (weapons). Pointers resolve only inside the loaded
+// bundle; external ones stay descriptors for the metadata index to locate.
+internal static class PropMaterials
+{
+    private static string Cab<T>(SerializedFile owner, PPtr<T> pointer) where T : AnimeStudio.Object
+    {
+        if (pointer.m_FileID < 0 || pointer.m_FileID > owner.m_Externals.Count) throw new InvalidDataException();
+        return pointer.m_FileID == 0 ? owner.fileName : owner.m_Externals[pointer.m_FileID - 1].fileName;
+    }
+
+    private static object Reference<T>(SerializedFile owner, PPtr<T> pointer, IReadOnlyList<SerializedFile> files)
+        where T : AnimeStudio.Object
+    {
+        string cab = Cab(owner, pointer);
+        var matches = files.Select((file, ordinal) => (file, ordinal)).Where(item => item.file.fileName == cab).ToArray();
+        if (matches.Length == 1)
+            return new { cab, path_id = pointer.m_PathID, file_ordinal = matches[0].ordinal, offset = matches[0].file.offset };
+        return new { cab, path_id = pointer.m_PathID };
+    }
+
+    internal static object Renderer(SkinnedMeshRenderer renderer, IReadOnlyList<SerializedFile> files, Game game)
+    {
+        if (renderer.m_Materials.Count > 64) throw new InvalidDataException();
+        return new
+        {
+            materials = renderer.m_Materials.Select(pointer =>
+            {
+                var reference = Reference(renderer.assetsFile, pointer, files);
+                var file = files.Where(item => item.fileName == Cab(renderer.assetsFile, pointer)).ToArray();
+                if (pointer.m_PathID == 0 || file.Length != 1) return (object)new { pointer = reference };
+                var objects = file[0].m_Objects.Where(o => o.m_PathID == pointer.m_PathID).ToArray();
+                if (objects.Length != 1 || (ClassIDType)objects[0].classID != ClassIDType.Material) throw new InvalidDataException();
+                return Describe(new Material(new ObjectReader(file[0].reader, file[0], objects[0], game)), files, reference);
+            }).ToArray()
+        };
+    }
+
+    internal static object Describe(Material material, IReadOnlyList<SerializedFile> files, object? pointer = null)
+    {
+        var textures = material.m_SavedProperties.m_TexEnvs;
+        if (textures.Count > 256) throw new InvalidDataException();
+        return new
+        {
+            pointer,
+            textures = textures.Where(entry => entry.Value.m_Texture.m_PathID != 0).Select(entry => new
+            {
+                name = entry.Key,
+                texture = Reference(material.assetsFile, entry.Value.m_Texture, files)
+            })
+        };
+    }
+
+    // Raw image bytes (all mips, as stored) go to a work file; the caller keeps the top mip.
+    internal static object Texture(Texture2D texture, string work, int id)
+    {
+        if (texture.m_Width is < 1 or > 16384 || texture.m_Height is < 1 or > 16384) throw new InvalidDataException();
+        var data = texture.image_data.GetData();
+        if (data.Length is < 1 or > 256 * 1024 * 1024) throw new InvalidDataException();
+        string file = $"texture-{id}.bin";
+        File.WriteAllBytes(Path.Combine(work, file), data);
+        return new { width = texture.m_Width, height = texture.m_Height, format = (int)texture.m_TextureFormat, file };
+    }
+}

@@ -18,7 +18,8 @@ MAX_BYTES = 256 * 1024 * 1024
 MAX_BONE_REFERENCES = 16 * 1024 * 1024
 MAX_BONE_PATHS = 1000000
 MAX_BONE_PATH_LENGTH = 128 * 1024
-FORMAT = 4
+FORMAT = 5
+MAX_FILES = 2000000
 LOCATOR_KEYS = ("block", "offset", "cab", "file_ordinal", "path_id")
 SCAN_BATCH = 16
 # Block scans are CPU-bound per process; more helpers than this stop scaling on typical disks.
@@ -41,6 +42,48 @@ def fingerprint(folder):
 def index_path(folder):
     key = os.path.normcase(os.path.realpath(folder))
     return Path(paths.asset_index_dir()) / f"game-zzmi-{hashlib.sha256(key.encode()).hexdigest()[:32]}.json"
+
+
+class IndexRows(list):
+    """Indexed object rows plus the bundle locations of files holding materials or textures.
+
+    ``files`` maps a case-folded CAB name to its (block, offset, file_ordinal, cab)
+    copies, so pointers into bundles without indexed objects can still be read.
+    """
+
+    def __init__(self, rows=(), files=None):
+        super().__init__(rows)
+        self.files = files or {}
+
+
+def _file_table(entries):
+    files = {}
+    for block, offset, ordinal, cab in entries:
+        files.setdefault(cab.casefold(), []).append((block, offset, ordinal, cab))
+    return files
+
+
+def _pack_files(files):
+    blocks = sorted({copy[0] for copies in files.values() for copy in copies})
+    number = {block: index for index, block in enumerate(blocks)}
+    entries = [[number[block], offset, ordinal, cab] for _key, copies in sorted(files.items())
+               for block, offset, ordinal, cab in copies]
+    return dict(blocks=blocks, entries=entries)
+
+
+def _unpack_files(value):
+    blocks, entries = (value.get("blocks"), value.get("entries")) if isinstance(value, dict) else (None, None)
+    if (not isinstance(blocks, list) or not isinstance(entries, list) or len(entries) > MAX_FILES
+            or any(not isinstance(block, str) or len(block) > 1024 for block in blocks)):
+        raise ValueError("The ZZZ file table is invalid.")
+    files = []
+    for entry in entries:
+        if (not isinstance(entry, list) or len(entry) != 4 or type(entry[0]) is not int or not 0 <= entry[0] < len(blocks)
+                or type(entry[1]) is not int or entry[1] < 0 or type(entry[2]) is not int or not 0 <= entry[2] < 4096
+                or not isinstance(entry[3], str) or not 0 < len(entry[3]) <= 256):
+            raise ValueError("The ZZZ file table is invalid.")
+        files.append((blocks[entry[0]], entry[1], entry[2], entry[3]))
+    return _file_table(files)
 
 
 def valid_rows(rows):
@@ -144,10 +187,10 @@ def read(folder):
         if file.stat().st_size > MAX_BYTES:
             return "stale", None, 0
         value = json.loads(file.read_text(encoding="utf-8"))
-        if (not isinstance(value, dict) or value.get("format") not in (3, FORMAT) or not valid_rows(value.get("rows"))
+        if (not isinstance(value, dict) or value.get("format") != FORMAT or not valid_rows(value.get("rows"))
                 or value.get("fingerprint") != fingerprint(folder)):
             return "stale", None, 0
-        rows = _unpack_rows(value)
+        rows = IndexRows(_unpack_rows(value), _unpack_files(value.get("files")))
         return "ready", rows, sum(row["type"] == "Mesh" for row in rows)
     except FileNotFoundError:
         return "missing", None, 0
@@ -237,11 +280,16 @@ def scan(client, folder, progress, cancel):
     root = validate_folder(folder)
     files = archives(root)
     rows = []
+    entries = []
     strings = {}
     references = 0
 
     def consume(batch):
         nonlocal references
+        entries.extend((row["block"], row["offset"], row["file_ordinal"], row["cab"]) for row in batch if row["type"] == "File")
+        if len(entries) > MAX_FILES:
+            raise ValueError("The ZZZ file table exceeds its limits.")
+        batch = [row for row in batch if row["type"] != "File"]
         for renderer, bones in _bone_lists(batch):
             references += len(bones)
             if references > MAX_BONE_REFERENCES:
@@ -255,7 +303,7 @@ def scan(client, folder, progress, cancel):
     progress("index", len(files), len(files))
     if not valid_rows(rows):
         raise ValueError("The ZZZ metadata index is incomplete or ambiguous.")
-    return rows
+    return IndexRows(rows, _file_table(entries))
 
 
 def build(client, folder, progress, cancel):
@@ -264,7 +312,8 @@ def build(client, folder, progress, cancel):
     if fingerprint(folder) != current:
         raise ValueError("The ZZZ installation changed during indexing. Retry after the game update finishes.")
     packed, strings = _pack_rows(rows)
-    payload = json.dumps(dict(format=FORMAT, fingerprint=current, rows=packed, bone_paths=strings), separators=(",", ":")).encode()
+    payload = json.dumps(dict(format=FORMAT, fingerprint=current, rows=packed, bone_paths=strings,
+                              files=_pack_files(rows.files)), separators=(",", ":")).encode()
     if len(payload) > MAX_BYTES:
         raise ValueError("The ZZZ index exceeds its size limit.")
     file = index_path(folder)

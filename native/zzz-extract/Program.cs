@@ -1,6 +1,7 @@
 using AnimeStudio;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace ModViewer.ZzzExtract;
@@ -26,6 +27,7 @@ internal static class Program
             _ = GameManager.GetGame(GameType.ZZZ);
             _ = GameManager.GetGame(GameType.GI);
             AvatarPaths.SelfTest();
+            StaticMeshSelfTest();
             Console.WriteLine("ZZZ and GI extraction ABI checks passed.");
             return 0;
         }
@@ -93,7 +95,7 @@ internal static class Program
                 {
                     block,
                     rows = JObject.FromObject(
-                Execute(root, work, game, new JObject { ["op"] = "scan", ["block"] = block }, blendShapeClamp))["rows"]
+                Execute(root, work, game, new JObject { ["op"] = "scan", ["block"] = block, ["files"] = request["files"] }, blendShapeClamp))["rows"]
                 }).ToArray()
             };
         }
@@ -107,6 +109,9 @@ internal static class Program
         int groups = 0;
         if (operation == "read") manager.FilterData.Items.Add(new AssetsManager.AssetFilterDataItem
         { Source = block, Offset = (long?)request["offset"] ?? throw new InvalidDataException() });
+        // ZZZ indexes serialized files holding materials or textures so prop material
+        // and texture pointers into bundles without indexed objects can be located.
+        bool files = operation == "scan" && (bool?)request["files"] == true;
         manager.AfterBundleLoaded = () =>
         {
             groups++;
@@ -115,18 +120,27 @@ internal static class Program
                 for (int ordinal = 0; ordinal < manager.assetsFileList.Count; ordinal++)
                 {
                     var file = manager.assetsFileList[ordinal];
+                    if (files && file.m_Objects.Any(o => (ClassIDType)o.classID is ClassIDType.Material or ClassIDType.Texture2D))
+                        rows.Add(new { name = "", type = "File", offset = file.offset, cab = file.fileName, file_ordinal = ordinal, path_id = 0L });
                     foreach (var info in file.m_Objects)
                     {
                         var type = (ClassIDType)info.classID;
                         // Renderer routes prove facial curve targets in both games; both games index controllers (authored sequences).
                         if (type is not (ClassIDType.Mesh or ClassIDType.Avatar or ClassIDType.AnimationClip
-                            or ClassIDType.SkinnedMeshRenderer or ClassIDType.AnimatorController)) continue;
+                            or ClassIDType.SkinnedMeshRenderer or ClassIDType.AnimatorController)
+                            && !(operation == "read" && type is (ClassIDType.Texture2D or ClassIDType.Material))) continue;
                         if (operation == "read" && (file.fileName != (string?)request["cab"]
                             || ordinal != (int?)request["file_ordinal"] || info.m_PathID != (long?)request["path_id"])) continue;
                         var reader = new ObjectReader(file.reader, file, info, game);
+                        if (type == ClassIDType.SkinnedMeshRenderer && operation == "read")
+                        {
+                            // Prop materials: texture slots and their pointers.
+                            if (gi || exported is not null) throw new InvalidDataException();
+                            exported = PropMaterials.Renderer(new SkinnedMeshRenderer(reader), manager.assetsFileList, game);
+                            continue;
+                        }
                         if (type == ClassIDType.SkinnedMeshRenderer)
                         {
-                            if (operation != "scan") throw new InvalidDataException();
                             var renderer = MorphSources.Renderer(new SkinnedMeshRenderer(reader), manager.assetsFileList, game);
                             rows.Add(new
                             {
@@ -172,6 +186,8 @@ internal static class Program
                                 (true, ClassIDType.Avatar) => GiExport.ReadAvatar(new Avatar(reader)),
                                 (true, ClassIDType.AnimationClip) => GiExport.ExportClip(new AnimationClip(reader), work, (int)request["id"]!, blendShapeClamp.Value),
                                 (false, ClassIDType.AnimatorController) => GiExport.ReadController(new AnimatorController(reader), file),
+                                (false, ClassIDType.Texture2D) => PropMaterials.Texture(new Texture2D(reader), work, (int)request["id"]!),
+                                (false, ClassIDType.Material) => PropMaterials.Describe(new Material(reader), manager.assetsFileList),
                                 (true, ClassIDType.AnimatorController) => GiExport.ReadController(new AnimatorController(reader), file),
                                 _ => throw new InvalidDataException()
                             };
@@ -190,17 +206,39 @@ internal static class Program
         return exported ?? throw new InvalidDataException();
     }
 
+    private static void StaticMeshSelfTest()
+    {
+        // A shape-compatible static mesh must export without skin instead of failing the read.
+        var shapes = (BlendShapeData)RuntimeHelpers.GetUninitializedObject(typeof(BlendShapeData));
+        shapes.vertices = [];
+        shapes.shapes = [];
+        shapes.channels = [];
+        shapes.fullWeights = [];
+        var mesh = (Mesh)RuntimeHelpers.GetUninitializedObject(typeof(Mesh));
+        mesh.m_Shapes = shapes;
+        mesh.m_SubMeshes = [];
+        mesh.m_Indices = [];
+        mesh.m_BoneNameHashes = [];
+        var exported = JObject.FromObject(ExportMesh(mesh));
+        if (new[] { "weights", "bone_indices", "bind_poses" }.Any(key => exported[key]?.Type != JTokenType.Null))
+            throw new InvalidDataException();
+    }
+
     internal static object ExportMesh(Mesh mesh) => new
     {
         name = mesh.m_Name,
         blend_shapes = MorphSources.Shapes(mesh),
         vertices = mesh.m_Vertices,
+        // Normals let extraction export uncaptured props (weapons) with their authored shading.
+        normals = mesh.m_Normals,
         uv = mesh.m_UV0,
         indices = mesh.m_Indices,
-        weights = mesh.m_Skin.Select(s => s.weight),
-        bone_indices = mesh.m_Skin.Select(s => s.boneIndex),
+        // Unskinned (static) meshes have no skin or bind poses; export them as null so
+        // the candidate search skips them instead of failing the whole read.
+        weights = mesh.m_Skin?.Select(s => s.weight),
+        bone_indices = mesh.m_Skin?.Select(s => s.boneIndex),
         bone_hashes = mesh.m_BoneNameHashes,
-        bind_poses = mesh.m_BindPose.Select(m => Enumerable.Range(0, 16).Select(i => m[i]).ToArray()),
+        bind_poses = mesh.m_BindPose?.Select(m => Enumerable.Range(0, 16).Select(i => m[i]).ToArray()),
         sections = mesh.m_SubMeshes.Select((s, i) => new
         {
             first = mesh.m_SubMeshes.Take(i).Sum(p => (long)p.indexCount),

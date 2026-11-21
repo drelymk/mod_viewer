@@ -67,6 +67,8 @@ EXPECTED_API_METHODS = {
     "get_asset_skinning_preview",
     "get_asset_animation",
     "get_model_animation",
+    "get_asset_animation_props",
+    "get_model_animation_props",
     "get_toggle_details",
     "has_pending_changes",
     "list_asset_subfolders",
