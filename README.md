@@ -602,6 +602,9 @@ python src/build.py
 
 Build output is written to `dist/`.
 
+Native extraction helpers are rebuilt only when their sources, pinned
+dependencies or .NET SDK change; pass `--rebuild-helpers` to force a rebuild.
+
 Before building, `src/features.ini` can hide optional Export, Toggle editing,
 disabled-mod loading, and mesh-editing actions in the portable executable. The
 checked-in settings enable mesh editing and hide disabled-mod loading. These are

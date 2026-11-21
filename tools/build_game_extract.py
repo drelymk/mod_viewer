@@ -123,6 +123,84 @@ def resolve_dotnet(project, requested="dotnet"):
     )
 
 
+def sdk_version(dotnet, project):
+    """Return the SDK version .NET selects in *project* (part of the build inputs)."""
+    result = subprocess.run(
+        [str(dotnet), "--version"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        env={**os.environ, "DOTNET_CLI_TELEMETRY_OPTOUT": "1"},
+    )
+    return result.stdout.strip()
+
+
+def inputs_fingerprint(project, sdk, scripts=()):
+    """Digest everything that determines a helper publish.
+
+    Covers the project's sources and dependency locks, the pinned upstream
+    downloads, the build scripts and bundled notices, and the selected SDK.
+    Build outputs (bin/obj) and the lock copies restore writes are excluded.
+    """
+    project = Path(project)
+    digest = hashlib.sha256()
+    digest.update(json.dumps({"sdk": sdk, "pins": PINS}, sort_keys=True).encode())
+    named = [
+        ("tool:" + Path(path).name, Path(path))
+        for path in (Path(__file__), *scripts, ROOT / "docs/THIRD_PARTY_NOTICES.md")
+    ]
+    for path in sorted(project.rglob("*")):
+        relative = path.relative_to(project)
+        if (
+            path.is_file()
+            and not {"bin", "obj"} & set(relative.parts[:-1])
+            and not path.name.endswith("packages.lock.json")
+        ):
+            named.append((relative.as_posix(), path))
+    for name, path in named:
+        digest.update(
+            name.encode()
+            + b"\0"
+            + hashlib.sha256(path.read_bytes()).hexdigest().encode()
+            + b"\n"
+        )
+    return digest.hexdigest()
+
+
+def up_to_date(destination, fingerprint, verify_format=False):
+    """True when *destination* holds an intact publish built from *fingerprint*."""
+    destination = Path(destination)
+    try:
+        manifest = json.loads(
+            (destination / "runtime.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return False
+    if not isinstance(manifest, dict):
+        return False
+    files = manifest.get("files")
+    if (
+        manifest.get("inputs") != fingerprint
+        or not isinstance(files, dict)
+        or not files
+        or (verify_format and manifest.get("format_verified") is not True)
+    ):
+        return False
+    root = destination.resolve()
+    for relative, expected in files.items():
+        path = (destination / relative).resolve()
+        if (
+            not path.is_relative_to(root)
+            or not path.is_file()
+            or hashlib.sha256(path.read_bytes()).hexdigest() != expected
+        ):
+            return False
+    return True
+
+
 def dependency_notices(package_cache, output):
     """Keep upstream license texts and package metadata alongside the helper."""
     notices = output / "licenses/packages"
@@ -156,8 +234,15 @@ def dependency_notices(package_cache, output):
     )
 
 
-def build(dotnet="dotnet", *, update_locks=False, verify_format=False):
+def build(dotnet="dotnet", *, update_locks=False, verify_format=False, force=False):
     dotnet = resolve_dotnet(PROJECT, dotnet)
+    sdk = sdk_version(dotnet, PROJECT)
+    destination = ROOT / "src/assets/game-extract"
+    if not (force or update_locks) and up_to_date(
+        destination, inputs_fingerprint(PROJECT, sdk), verify_format
+    ):
+        print(f"Helper {VERSION} is up to date; skipping rebuild", flush=True)
+        return
     cache = ROOT / ".quality-reports/game-extract-build"
     cache.mkdir(parents=True, exist_ok=True)
     parser, acl, rtm = (source(name, cache) for name in ("parser", "acl", "rtm"))
@@ -170,8 +255,12 @@ def build(dotnet="dotnet", *, update_locks=False, verify_format=False):
         "CUE4ParseRoot": str(parser),
     }
     # Preserve the established wrapper's security patch without changing parser code.
+    # Upstream compiler warnings are silenced so the build log stays readable; package
+    # vulnerability advisories (NU19xx) are not compiler warnings and remain visible.
     (parser / "Directory.Build.targets").write_text(
-        '<Project><ItemGroup><PackageReference Include="Microsoft.Bcl.Memory" '
+        "<Project><PropertyGroup><WarningLevel>0</WarningLevel>"
+        "<RunAnalyzers>false</RunAnalyzers></PropertyGroup>"
+        '<ItemGroup><PackageReference Include="Microsoft.Bcl.Memory" '
         'VersionOverride="9.0.14" /></ItemGroup></Project>\n',
         encoding="utf-8",
     )
@@ -264,12 +353,18 @@ def build(dotnet="dotnet", *, update_locks=False, verify_format=False):
     }
     (output / "runtime.json").write_text(
         json.dumps(
-            {"version": VERSION, "parser": PARSER_COMMIT, "files": files}, indent=2
+            {
+                "version": VERSION,
+                "parser": PARSER_COMMIT,
+                "inputs": inputs_fingerprint(PROJECT, sdk),
+                "format_verified": bool(verify_format),
+                "files": files,
+            },
+            indent=2,
         )
         + "\n",
         encoding="utf-8",
     )
-    destination = ROOT / "src/assets/game-extract"
     # Replace only this generated asset directory after all build checks pass.
     if not destination.resolve().is_relative_to(ROOT.resolve()):
         raise ValueError("Generated helper directory escaped the workspace")
@@ -293,6 +388,11 @@ def main():
         action="store_true",
         help="check the required SDK without building",
     )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="rebuild even when the published helper matches its inputs",
+    )
     args = ap.parse_args()
     try:
         if args.check_sdk:
@@ -302,6 +402,7 @@ def main():
                 args.dotnet,
                 update_locks=args.update_locks,
                 verify_format=args.verify_format,
+                force=args.force,
             )
     except MissingDotnetSdk as error:
         ap.exit(1, f"[build] WARNING: {error}\n")

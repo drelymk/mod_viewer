@@ -119,3 +119,37 @@ def test_changed_publish_files_fail_packaging(tmp_path):
     (assets / "game-extract/CUE4Parse.dll").write_bytes(b"changed")
     with pytest.raises(ValueError, match="checksum"):
         packer().pack_helpers(assets, tmp_path / "extractors.zip")
+
+
+def test_packed_helper_archive_is_reused_until_a_manifest_changes(tmp_path, monkeypatch):
+    import build
+
+    assets = published(tmp_path)
+    (assets / "three.core.js").write_text("browser asset")
+    cache = tmp_path / "packed-cache"
+    monkeypatch.setattr(build, "ASSETS", str(assets))
+    monkeypatch.setattr(build, "PACKED_HELPERS_CACHE", str(cache))
+    monkeypatch.setattr(build, "log", lambda _message: None)
+
+    def prepare(name):
+        destination = tmp_path / name
+        destination.mkdir()
+        build.prepare_packaged_assets(str(destination))
+        assert (destination / "three.core.js").read_text() == "browser asset"
+        return destination / "extractors.zip"
+
+    first = prepare("first")
+    cached = list(cache.iterdir())
+    assert len(cached) == 1 and cached[0].read_bytes() == first.read_bytes()
+
+    # Unchanged manifests reuse the cached archive instead of repacking.
+    cached[0].write_bytes(b"cached archive")
+    assert prepare("second").read_bytes() == b"cached archive"
+
+    # Any manifest change repacks and replaces the stale cache entry.
+    manifest = assets / "zzz-extract/runtime.json"
+    manifest.write_text(manifest.read_text().replace("}}", "}, \"rebuilt\": true}"))
+    third = prepare("third")
+    with zipfile.ZipFile(third) as archive:
+        assert "catalog.json" in archive.namelist()
+    assert [entry.read_bytes() for entry in cache.iterdir()] == [third.read_bytes()]

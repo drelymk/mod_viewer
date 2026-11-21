@@ -146,8 +146,34 @@ def test_pyinstaller_command_bundles_third_party_notices(monkeypatch):
         "--add-data", notice_data]
     assert not any(command[index:index + 2] == ["--exclude-module", "numpy"]
                    for index in range(len(command) - 1))
+    for name in ("cryptography", "setuptools", "PIL._avif", "PIL.AvifImagePlugin"):
+        assert any(command[index:index + 2] == ["--exclude-module", name]
+                   for index in range(len(command) - 1))
+    specpath_index = command.index("--specpath")
+    assert command[specpath_index:specpath_index + 2] == [
+        "--specpath", os.path.join(build.HERE, "build")]
     metadata_index = command.index("--copy-metadata")
     assert command[metadata_index:metadata_index + 2] == ["--copy-metadata", "numpy"]
+
+
+def test_clean_keeps_other_version_builds(tmp_path, monkeypatch):
+    monkeypatch.setattr(build, "HERE", str(tmp_path))
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "x").write_text("work")
+    dist = tmp_path / "dist"
+    (dist / build.BUILD_NAME).mkdir(parents=True)
+    (dist / build.BUILD_NAME / "a").write_text("onedir")
+    (dist / (build.BUILD_NAME + ".exe")).write_text("onefile")
+    (dist / "OtherApp-0.0.1.exe").write_text("other")
+    (tmp_path / f"{build.BUILD_NAME}.spec").write_text("spec")
+
+    build.clean()
+
+    assert not (tmp_path / "build").exists()
+    assert not (dist / build.BUILD_NAME).exists()
+    assert not (dist / (build.BUILD_NAME + ".exe")).exists()
+    assert not (tmp_path / f"{build.BUILD_NAME}.spec").exists()
+    assert (dist / "OtherApp-0.0.1.exe").read_text() == "other"
 
 
 def test_fetch_assets_rejects_tampered_cached_asset(tmp_path, monkeypatch):

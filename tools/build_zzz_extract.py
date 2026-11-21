@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+from pathlib import Path
 import shutil
 import zipfile
 
@@ -12,9 +13,12 @@ from build_game_extract import (
     ROOT,
     dependency_notices,
     download,
+    inputs_fingerprint,
     resolve_dotnet,
     run,
+    sdk_version,
     source,
+    up_to_date,
     PINS,
     MissingDotnetSdk,
 )
@@ -139,9 +143,17 @@ def curate(root):
     replace(oodle, "numWrite = Ooz_Decompress(", "numWrite = (int)Ooz_Decompress(")
 
 
-def build(dotnet, update_locks=False, verify_format=False):
+def build(dotnet, update_locks=False, verify_format=False, force=False):
     project = ROOT / "native/zzz-extract"
     dotnet = resolve_dotnet(project, dotnet)
+    sdk = sdk_version(dotnet, project)
+    destination = ROOT / "src/assets/zzz-extract"
+    scripts = (Path(__file__),)
+    if not (force or update_locks) and up_to_date(
+        destination, inputs_fingerprint(project, sdk, scripts), verify_format
+    ):
+        print(f"Helper {VERSION} is up to date; skipping rebuild", flush=True)
+        return
     cache = ROOT / ".quality-reports/zzz-extract-build"
     cache.mkdir(parents=True, exist_ok=True)
     upstream = source("animestudio", cache)
@@ -304,9 +316,18 @@ def build(dotnet, update_locks=False, verify_format=False):
         if file.is_file() and file.name != "runtime.json"
     }
     (output / "runtime.json").write_text(
-        json.dumps(dict(version=VERSION, parser=COMMIT, files=files), indent=2) + "\n"
+        json.dumps(
+            dict(
+                version=VERSION,
+                parser=COMMIT,
+                inputs=inputs_fingerprint(project, sdk, scripts),
+                format_verified=bool(verify_format),
+                files=files,
+            ),
+            indent=2,
+        )
+        + "\n"
     )
-    destination = ROOT / "src/assets/zzz-extract"
     if not destination.resolve().is_relative_to(ROOT.resolve()):
         raise ValueError("Generated helper directory escaped the workspace")
     if destination.exists():
@@ -324,11 +345,16 @@ if __name__ == "__main__":
         action="store_true",
         help="check the required SDK without building",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="rebuild even when the published helper matches its inputs",
+    )
     args = parser.parse_args()
     try:
         if args.check_sdk:
             resolve_dotnet(ROOT / "native/zzz-extract", args.dotnet)
         else:
-            build(args.dotnet, args.update_locks, args.verify_format)
+            build(args.dotnet, args.update_locks, args.verify_format, force=args.force)
     except MissingDotnetSdk as error:
         parser.exit(1, f"[build] WARNING: {error}\n")

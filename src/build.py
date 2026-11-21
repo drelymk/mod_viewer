@@ -9,6 +9,7 @@ Three.js is vendored, no internet connection.
     py -3 build.py --skip-deps    # don't touch pip
     py -3 build.py --refresh-assets   # re-download pinned browser assets
     py -3 build.py --rebuild-bootloader   # recompile PyInstaller's bootloader
+    py -3 build.py --rebuild-helpers   # rebuild native helpers even if unchanged
 
 --rebuild-bootloader compiles PyInstaller's bootloader from source in an
 isolated venv. The stock prebuilt bootloader is byte-identical across every
@@ -31,7 +32,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
+
+_STARTED = time.monotonic()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -49,6 +53,8 @@ FEATURES_FILE = os.path.join(HERE, "features.ini")
 # sitting next to a distributed build.
 BAKED_FEATURES_MODULE = os.path.join(
     HERE, "app", "settings", "_baked_features.py")
+# Last packed native-helper archive, keyed by its inputs (see prepare_packaged_assets).
+PACKED_HELPERS_CACHE = os.path.join(HERE, "..", ".quality-reports", "packed-helpers")
 APP_NAME = "3DMigotoModViewer"
 APP_PUBLISHER = "3DMigoto Mod Viewer"
 APP_DESCRIPTION = "3DMigoto Mod Viewer - preview mod meshes in 3D"
@@ -58,6 +64,14 @@ ENTRY = "viewer_app.py"
 BUILD_NAME = f"{APP_NAME}-{APP_VERSION}"
 REQUIREMENTS_FILE = os.path.join(HERE, "requirements.txt")
 MIN_PYTHON = (3, 10, 1)
+
+# Modules PyInstaller would otherwise collect but the app never uses. Each entry
+# is only reachable through an optional code path:
+#   cryptography -- pywebview's ssl=True certificate generation (we serve plain localhost)
+#   setuptools/pkg_resources -- cffi's compile-time shim; clr_loader only uses cffi at runtime
+#   PIL.AvifImagePlugin/PIL._avif -- AVIF codec (~7.5 MB); Pillow skips plugins that fail to import
+EXCLUDED_MODULES = ("tkinter", "matplotlib", "pytest", "cryptography", "setuptools",
+                    "pkg_resources", "PIL.AvifImagePlugin", "PIL._avif")
 
 # Pinned so the compiled bootloader always matches the PyInstaller doing the
 # packaging — a mismatch produces subtly broken executables.
@@ -121,7 +135,7 @@ ASSET_FILES = {
 }
 
 def log(msg):
-    print(f"[build] {msg}", flush=True)
+    print(f"[build] [{time.monotonic() - _STARTED:5.0f}s] {msg}", flush=True)
 
 
 def run(cmd, env=None, cwd=None):
@@ -522,13 +536,26 @@ def write_version_file():
 
 
 def clean():
-    for d in ("build", "dist"):
-        p = os.path.join(HERE, d)
-        if os.path.isdir(p):
-            log(f"removing {d}/")
-            shutil.rmtree(p, ignore_errors=True)
+    """Remove the work directory and this version's outputs; other versions in dist/ stay."""
+    def relative(path):
+        return os.path.relpath(path, HERE).replace(os.sep, "/")
+
+    work = os.path.join(HERE, "build")
+    if os.path.isdir(work):
+        log(f"removing {relative(work)}/")
+        shutil.rmtree(work, ignore_errors=True)
+    dist = os.path.join(HERE, "dist")
+    for name in (BUILD_NAME, BUILD_NAME + ".exe"):
+        path = os.path.join(dist, name)
+        if os.path.isdir(path):
+            log(f"removing {relative(path)}/")
+            shutil.rmtree(path, ignore_errors=True)
+        elif os.path.isfile(path):
+            log(f"removing {relative(path)}")
+            os.remove(path)
     spec = os.path.join(HERE, f"{BUILD_NAME}.spec")
     if os.path.isfile(spec):
+        log(f"removing {relative(spec)}")
         os.remove(spec)
 
 
@@ -547,9 +574,29 @@ def prepare_packaged_assets(destination):
             shutil.copytree(source, target)
         else:
             shutil.copy2(source, target)
-    result = packer.pack_helpers(ASSETS, os.path.join(destination, "extractors.zip"))
+    target = os.path.join(destination, "extractors.zip")
+    # LZMA-packing ~200 MiB of helpers dominates an otherwise quick build, so reuse
+    # the archive while the packer and every helper manifest (which pins each
+    # file's SHA-256) are unchanged.
+    key = hashlib.sha256()
+    for path in (script, *(os.path.join(ASSETS, kind, "runtime.json")
+                           for kind in packer.KINDS)):
+        key.update(sha256_file(path).encode() + b"\n")
+    cached = os.path.join(PACKED_HELPERS_CACHE, key.hexdigest() + ".zip")
+    if os.path.isfile(cached):
+        shutil.copy2(cached, target)
+        log(f"Native helper payload: reused {os.path.getsize(target) / 1048576:.1f} MiB "
+            "archive (helpers unchanged)")
+        return
+    result = packer.pack_helpers(ASSETS, target)
     log(f"Native helper payload: {result['original'] / 1048576:.1f} MiB -> "
         f"{result['packed'] / 1048576:.1f} MiB (shared compressed files)")
+    if os.path.isdir(PACKED_HELPERS_CACHE):
+        shutil.rmtree(PACKED_HELPERS_CACHE, ignore_errors=True)
+    os.makedirs(PACKED_HELPERS_CACHE, exist_ok=True)
+    staging = cached + ".tmp"
+    shutil.copy2(target, staging)
+    os.replace(staging, cached)
 
 
 def build(onedir=False, console=False, python=None, *, distpath=None, workpath=None):
@@ -585,16 +632,15 @@ def build(onedir=False, console=False, python=None, *, distpath=None, workpath=N
             # Include the installed NumPy distribution's license notices.
             "--copy-metadata", "numpy",
             # Trimming these keeps the single-file payload from ballooning.
-            "--exclude-module", "tkinter",
-            "--exclude-module", "matplotlib",
-            "--exclude-module", "pytest",
+            *[arg for name in EXCLUDED_MODULES for arg in ("--exclude-module", name)],
             os.path.join(HERE, ENTRY),
         ]
         icon = os.path.join(HERE, "icon.ico")
         if distpath:
             cmd += ["--distpath", os.fspath(distpath)]
-        if workpath:
-            cmd += ["--workpath", os.fspath(workpath), "--specpath", os.fspath(workpath)]
+        # Keep the generated .spec with the work directory instead of in src/.
+        work = os.fspath(workpath) if workpath else os.path.join(HERE, "build")
+        cmd += ["--workpath", work, "--specpath", work]
         if os.path.isfile(icon):
             cmd += ["--icon", icon]
         run(cmd)
@@ -634,6 +680,8 @@ def main():
                          "(clears most antivirus false positives; needs a C compiler). "
                          "Reuses the existing build environment if already compiled; "
                          "remove it to redo.")
+    ap.add_argument("--rebuild-helpers", action="store_true",
+                    help="rebuild the native extraction helpers even when their inputs are unchanged")
     args = ap.parse_args()
     if os.path.dirname(args.dotnet):
         args.dotnet = os.path.abspath(args.dotnet)
@@ -656,7 +704,8 @@ def main():
     verify_web()
     verify_features()
     for helper in helpers:
-        run([sys.executable, helper, "--verify-format", "--dotnet", args.dotnet])
+        run([sys.executable, helper, "--verify-format", "--dotnet", args.dotnet,
+             *(["--force"] if args.rebuild_helpers else [])])
     clean()
     build(onedir=args.onedir, console=args.console, python=python)
     report(args.onedir)
