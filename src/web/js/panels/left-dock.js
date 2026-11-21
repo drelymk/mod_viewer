@@ -1,5 +1,6 @@
 // Navigation state for the Meshes, Mod Library and Assets panels.
-import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { LANGUAGE_CHANGED } from '../i18n/index.js';
+import { syncDockCollapseButton } from '../ui/panel-utils.js';
 
 export const LEFT_TABS = new Set(['meshes', 'mod-library', 'assets']);
 
@@ -21,21 +22,11 @@ function tabCanOpen(tab) {
   return tab !== 'meshes' || meshesAvailable;
 }
 
-function syncCollapseButton(visible) {
-  const button = document.getElementById('left-dock-collapse');
-  if (!button) return;
-  const label = t(visible ? 'panels.hideLeft' : 'panels.showLeft');
-  button.setAttribute('aria-expanded', String(visible));
-  button.setAttribute('aria-label', label);
-  button.title = label;
-  button.querySelector('use')?.setAttribute('href', visible ? '#icon-chevron-left' : '#icon-chevron-right');
-}
-
 function render() {
   const { dock, tabs, panels } = elements();
   const visible = !!activeTab && tabCanOpen(activeTab);
   if (visible) lastTab = activeTab;
-  syncCollapseButton(visible);
+  syncDockCollapseButton(document.getElementById('left-dock-collapse'), 'left', visible);
   tabs.forEach((tab) => {
     const name = tab.dataset.leftTab;
     const active = visible && name === activeTab;
@@ -85,12 +76,6 @@ export function toggleLeftDock() {
   if (isLeftDockOpen()) activeTab = null;
   else activeTab = lastTab && tabCanOpen(lastTab) ? lastTab : meshesAvailable ? 'meshes' : 'mod-library';
   render();
-  return isLeftDockOpen();
-}
-
-export function openLeftDock() {
-  if (!isLeftDockOpen()) toggleLeftDock();
-  return isLeftDockOpen();
 }
 
 export function setMeshesAvailable(value) {
@@ -113,9 +98,7 @@ export function initLeftDock() {
       toggleLeftDockTab(tab.dataset.leftTab);
     }),
   );
-  document.getElementById('left-dock-collapse')?.addEventListener('click', () => {
-    toggleLeftDock();
-  });
+  document.getElementById('left-dock-collapse')?.addEventListener('click', toggleLeftDock);
   window.addEventListener(LANGUAGE_CHANGED, render);
   ready = true;
   render();

@@ -82,7 +82,6 @@ export function initEnvironmentControl(onChange = () => {}) {
   function openPopover() {
     if (!popover) return;
     closeHeaderPopovers('environment-popover');
-    document.dispatchEvent(new CustomEvent('mod-viewer-close-tool-popovers'));
     popover.replaceChildren();
     Object.values(ENVIRONMENT_PRESETS).forEach((preset) => {
       const option = document.createElement('button');
@@ -222,7 +221,6 @@ export function initToolPopovers(onChange = () => {}) {
     const wasOpen = !texturePopover.hidden;
     closeAll();
     if (wasOpen) return;
-    closeHeaderPopovers();
     renderTextureOptions();
     texturePopover.hidden = false;
     textureButton?.setAttribute('aria-expanded', 'true');
@@ -257,7 +255,6 @@ export function initToolPopovers(onChange = () => {}) {
     const wasOpen = !lightPopover.hidden;
     closeAll();
     if (wasOpen) return;
-    closeHeaderPopovers();
     updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
     lightPopover.hidden = false;
     lightButton?.setAttribute('aria-expanded', 'true');
@@ -271,7 +268,6 @@ export function initToolPopovers(onChange = () => {}) {
     const wasOpen = !aoPopover.hidden;
     closeAll();
     if (wasOpen) return;
-    closeHeaderPopovers();
     updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
     aoPopover.hidden = false;
     aoButton?.setAttribute('aria-expanded', 'true');
@@ -285,7 +281,6 @@ export function initToolPopovers(onChange = () => {}) {
     const wasOpen = !glossyPopover.hidden;
     closeAll();
     if (wasOpen) return;
-    closeHeaderPopovers();
     updateGlossyControl();
     glossyPopover.hidden = false;
     glossyButton?.setAttribute('aria-expanded', 'true');
@@ -361,7 +356,6 @@ export function initToolPopovers(onChange = () => {}) {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeAll();
   });
-  document.addEventListener('mod-viewer-close-tool-popovers', closeAll);
   window.addEventListener('resize', () => {
     if (activeToolPopover) {
       positionPopover(activeToolPopover.popover, activeToolPopover.button);

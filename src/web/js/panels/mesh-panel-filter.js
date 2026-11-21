@@ -3,7 +3,6 @@ import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { meshUnderlyingVisible } from '../mesh/mesh-state.js';
 import { meshForPanelRow } from './mesh-panel-rows.js';
 
-const MODES = new Set(['all', 'visible', 'hidden']);
 const $ = (id) => document.getElementById(id);
 
 let query = '';
@@ -12,11 +11,11 @@ let initialized = false;
 let frame = 0;
 let lastCounts = null;
 
-export function isMeshPanelFilterActive() {
+function isMeshPanelFilterActive() {
   return !!query || mode !== 'all';
 }
 
-export function scheduleMeshPanelFilter() {
+function scheduleMeshPanelFilter() {
   if (frame) return;
   frame = requestAnimationFrame(() => applyFilter());
 }
@@ -42,7 +41,6 @@ export function initMeshPanelFilter() {
     applyFilter();
   };
   input.addEventListener('input', onQuery);
-  input.addEventListener('search', onQuery);
   input.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape' || !input.value) return;
     event.preventDefault();
@@ -54,15 +52,14 @@ export function initMeshPanelFilter() {
 
   document.querySelectorAll('#mesh-visibility-filter [data-mesh-filter]').forEach((button) => {
     button.addEventListener('click', () => {
-      const value = button.dataset.meshFilter;
-      if (!MODES.has(value)) return;
-      mode = value;
+      mode = button.dataset.meshFilter;
       syncModeButtons();
       applyFilter();
     });
   });
 
-  // Observe structure and text only: applyFilter changes classes, so attributes stay unobserved.
+  // Rebuilt, renamed or recounted rows re-filter. Only structure and text are observed:
+  // applyFilter changes classes, so attributes stay unobserved and cannot loop.
   new MutationObserver(scheduleMeshPanelFilter).observe(list, {
     childList: true,
     subtree: true,

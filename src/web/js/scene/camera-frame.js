@@ -1,4 +1,4 @@
-// Camera/model framing, clipping, orientation and unobstructed viewport math.
+// Camera/model framing, clipping and orientation over the whole canvas.
 
 import * as THREE from 'three';
 import { computeModelBounds } from './model-bounds.js';
@@ -36,15 +36,9 @@ export function createCameraFrame({
   let modelPivot = null;
   const modelTranslation = new THREE.Vector3();
 
-  /** Frame against the whole canvas: floating docks overlay the viewport and
-   * never shift, resize or re-centre the projection. */
+  /** Floating docks overlay the canvas and never affect the projection. */
   function updateViewport() {
-    const canvas = renderer.domElement.getBoundingClientRect();
-    const width = Math.max(canvas.width, 1);
-    const viewport = { fullWidth: width, fullHeight: Math.max(canvas.height, 1), width };
-    camera.clearViewOffset();
     camera.updateProjectionMatrix();
-    return viewport;
   }
 
   function resize(width, height) {
@@ -81,8 +75,8 @@ export function createCameraFrame({
     const center = box.getCenter(new THREE.Vector3());
     center.y += targetYOffset;
     const radius = Math.max(size.length() * 0.5, 0.001);
-    const viewport = updateViewport();
-    const narrowScale = Math.max(1, viewport.fullHeight / viewport.width);
+    updateViewport();
+    const narrowScale = Math.max(1, 1 / camera.aspect);
     const distance = (radius / Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))) * 1.15 * narrowScale;
     const offset = direction ? direction.clone().normalize() : camera.position.clone().sub(controls.target).normalize();
     if (offset.lengthSq() < 0.01) offset.set(0.3, 0.5, 1).normalize();

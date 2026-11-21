@@ -399,7 +399,6 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-glb-choic
 #tool-buttons { display: flex; align-items: center; gap: 6px; }
 .tool-group { display: flex; align-items: center; gap: 6px; }
 .tool-group + .tool-group { padding-left: 7px; margin-left: 1px; border-left: 1px solid var(--border); }
-#environment-btn svg { width: 22px; height: 22px; }
 #tool-buttons.collapsed { display: none; }
 .tool-btn {
   width: 40px; height: 40px; padding: 0;
@@ -1737,26 +1736,22 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   border-right: 1px solid rgba(139,148,158,.45); border-radius: 8px;
   box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
 }
-#left-dock-tabs {
-  flex: 0 0 auto; width: auto; padding: 0; gap: 4px;
-  background: transparent; border: 0; border-radius: 0; backdrop-filter: none; box-shadow: none;
-}
+#left-dock-tabs { display: grid; grid-template-columns: 1fr; gap: 4px; }
 #left-dock-tabs .dock-tab { width: 36px; min-height: 36px; padding: 0; }
 #left-dock-tabs .dock-tab .ui-icon { width: 18px; height: 18px; }
 .dock-tab-label {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
-#left-dock-collapse {
-  flex: 0 0 auto; width: 36px; min-height: 32px; margin-top: auto;
-  background: transparent; border: 0; border-radius: var(--radius-sm); backdrop-filter: none; box-shadow: none;
-}
-#left-dock-collapse:focus-visible { box-shadow: var(--focus-ring); }
+#left-dock-collapse { width: 36px; min-height: 32px; margin-top: auto; border-radius: var(--radius-sm); }
 #left-dock.ui-visible .left-dock-panel { border-radius: 0 8px 8px 0; }
 .right-dock-header { display: flex; align-items: stretch; gap: 4px; }
 .right-dock-header > .right-dock-tabs { flex: 1; min-width: 0; }
 .dock-collapse-btn {
-  flex: 0 0 30px; width: 30px; min-height: 38px; padding: 0; display: grid; place-items: center;
-  color: var(--text-muted); cursor: pointer;
+  padding: 0; display: grid; place-items: center; color: var(--text-muted); cursor: pointer;
+  background: transparent; border: 0;
+}
+#right-dock-collapse {
+  flex: 0 0 30px; width: 30px; min-height: 38px;
   background: var(--panel-background); border: 1px solid rgba(139,148,158,.45);
   border-radius: var(--radius-md); backdrop-filter: blur(var(--panel-blur));
   box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
@@ -1783,8 +1778,8 @@ body.dock-resizing, body.dock-resizing * { cursor: col-resize !important; user-s
 
 /* Focus mode hides dock chrome but keeps the viewport toolbar and playback (both live in #left-dock). */
 body.focus-mode #left-dock { width: 0; }
-body.focus-mode #left-dock-header, body.focus-mode #left-dock-tabs, body.focus-mode #left-dock-collapse,
-body.focus-mode #left-panel-container, body.focus-mode #right-dock { display: none !important; }
+body.focus-mode #left-dock-header, body.focus-mode #left-panel-container,
+body.focus-mode #right-dock { display: none !important; }
 /* In focus mode the rail collapses into this single icon at the rail's position. */
 .focus-exit-btn {
   position: fixed; top: calc(var(--toolbar-height) + 4px); left: 12px; z-index: 120;
@@ -1803,7 +1798,6 @@ body.focus-mode #left-panel-container, body.focus-mode #right-dock { display: no
   border-radius: var(--radius-md); backdrop-filter: blur(var(--panel-blur));
   box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
 }
-.left-dock-tabs { grid-template-columns: 1fr; }
 .mesh-selection-modes {
   position: absolute; left: calc(100% + 8px); top: 0;
   display: flex; align-items: center; gap: 2px; width: max-content;

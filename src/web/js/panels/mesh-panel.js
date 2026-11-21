@@ -36,7 +36,7 @@ import {
   meshRowWrap,
   buildCountBadge,
 } from './mesh-panel-rows.js';
-import { initMeshPanelFilter, resetMeshPanelFilter, scheduleMeshPanelFilter } from './mesh-panel-filter.js';
+import { initMeshPanelFilter, resetMeshPanelFilter } from './mesh-panel-filter.js';
 import { initializeComponentMeshEdit, resetMeshPanelEditing } from './mesh-panel-edit.js';
 export { hasUnappliedMeshChanges } from './mesh-panel-edit.js';
 
@@ -325,7 +325,6 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   }
 
   syncMeshPanel();
-  scheduleMeshPanelFilter();
   if (isRecording()) showRecordingSourceRows();
   document.getElementById('camera-panel').style.display = 'none';
 }
