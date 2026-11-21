@@ -103,6 +103,16 @@ def _valid_transforms(data, size, width):
     return bool((np.abs(length - 1) <= 0.001).all())
 
 
+def _root_motion_bone(value, bones):
+    """The bone whose local space holds a clip's root-motion track, or None without one."""
+    if value is None:
+        return None
+    bone = value.get("bone") if isinstance(value, dict) and set(value) == {"bone"} else None
+    if type(bone) is not int or not 0 <= bone < bones:
+        raise ValueError("Animation root motion does not match the loaded rig.")
+    return bone
+
+
 def _read_clip(directory, entry, rig, *, validated_morphs=None, full_validation=True):
     """Read bounded playback data, with full validation for extraction."""
     raw = _json(paths.safe_asset_path(directory, entry["file"]))
@@ -120,7 +130,10 @@ def _read_clip(directory, entry, rig, *, validated_morphs=None, full_validation=
         raise ValueError("Animation does not match the loaded rig.")
     bone_size = frames * bones * width * 4
     names = morph_names(raw.get("morphs"))
-    size = bone_size + frames * len(names) * 4
+    morph_size = frames * len(names) * 4
+    # An optional per-frame MotionT.xyz/MotionQ.xyzw track follows the morph weights.
+    motion = _root_motion_bone(raw.get("root_motion"), bones)
+    size = bone_size + morph_size + (frames * 7 * 4 if motion is not None else 0)
     if size > _MAX_BYTES:
         raise ValueError("Animation data is too large.")
     file = raw.get("data_file")
@@ -133,9 +146,11 @@ def _read_clip(directory, entry, rig, *, validated_morphs=None, full_validation=
         raise ValueError("Animation data is incomplete or has changed.")
     if full_validation and not _valid_transforms(data, bone_size, width):
         raise ValueError("Animation contains invalid transforms.")
+    if full_validation and motion is not None and not _valid_transforms(data[bone_size + morph_size:], frames * 7 * 4, 7):
+        raise ValueError("Animation contains an invalid root-motion track.")
     morph_data = None
     if names:
-        if full_validation and not bounded(np.frombuffer(data, "<f4", offset=bone_size)):
+        if full_validation and not bounded(np.frombuffer(data, "<f4", count=morph_size // 4, offset=bone_size)):
             raise ValueError("Animation contains invalid morph weights.")
         morph_data = read_morphs(directory, raw["morphs"], validated=validated_morphs, full_validation=full_validation)
     return raw, data, morph_data
@@ -277,6 +292,8 @@ class AnimationSessions:
                 secondary = sorted(set(session["runtime"]) - set(keyed))
                 if secondary:
                     clip["secondary_bones"] = secondary
+            if raw.get("root_motion") is not None:
+                clip["root_motion"] = {"bone": raw["root_motion"]["bone"]}
             if morph_data is not None:
                 clip["morphs"] = {"names": raw["morphs"]["names"], "components": raw["morphs"]["components"],
                                   "data": {"url": morph_url, "length": len(morph_data)}}

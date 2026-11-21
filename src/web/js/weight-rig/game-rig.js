@@ -59,10 +59,11 @@ export function mergeGameRigBindings(members = []) {
     }
     if (!skeletons.get(candidate.bones)) return null;
     for (const bone of member.boneIds) {
-      const target = candidate.boneMap?.[bone];
+      if (!Number.isInteger(bone) || bone < 0) return null;
+      // IDs the member's proven palette lacks stay unaliased and at rest.
+      if (!Object.hasOwn(candidate.boneMap || {}, bone)) continue;
+      const target = candidate.boneMap[bone];
       if (
-        !Number.isInteger(bone) ||
-        bone < 0 ||
         !Number.isInteger(target) ||
         target < 0 ||
         target >= reference.bones.length ||
@@ -126,7 +127,8 @@ export function buildGameRigReconciliation(sourceRigs = []) {
   const aliases = new Map();
   for (const source of sourceRigs) {
     for (const boneId of source.boneIds || []) {
-      const target = source.gameRig.boneMap?.[boneId];
+      if (!Object.hasOwn(source.gameRig.boneMap || {}, boneId)) continue;
+      const target = source.gameRig.boneMap[boneId];
       if (!Number.isInteger(target) || target < 0 || target >= joints.length) return null;
       const key = sourceBoneKey(source.sourceKey, boneId);
       if (aliases.has(key) && aliases.get(key) !== target) return null;

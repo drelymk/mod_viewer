@@ -31,6 +31,10 @@ def test_shared_source_rig_palette_admission_matrix(module_page, variant):
     if variant in ('disjoint', 'overlap', 'superset', 'detached'):
         assert result['map'] == result['reversed'] == {'7': 1, '9': 2}
         assert result['aliases'] == [['Weights01.buf#bone=7', 1], ['Weights01.buf#bone=9', 2]]
+    elif variant == 'missing':
+        # An ID absent from its member's proven palette stays unaliased instead of rejecting the rig.
+        assert result['map'] == result['reversed'] == {'7': 1}
+        assert result['aliases'] == [['Weights01.buf#bone=7', 1]]
     else:
         assert result['map'] is result['reversed'] is result['aliases'] is None
 
@@ -124,7 +128,8 @@ def test_game_rig_source_identity_rest_pose_and_fallback_lifecycle(module_page):
       rebuildModelRestFrames(rig,{components:rig.components});
       const unchanged = rig.jointPivotByJointId.get(2).every((v,i)=>v===originalPivot[i]);
       const missing = buildGameRigReconciliation([{...sources[0],gameRig:null}]);
-      const incomplete = buildGameRigReconciliation([{...sources[0],boneIds:[99]}]);
+      const incomplete = buildGameRigReconciliation([{...sources[0],boneIds:[2,99]}]);
+      const invalid = buildGameRigReconciliation([{...sources[0],gameRig:{...sources[0].gameRig,boneMap:{2:9}}}]);
       const mixed = buildGameRigReconciliation([sources[0],{...sources[1],gameRig:{...sources[1].gameRig,id:'other'}}]);
       const cyclic = buildGameRigReconciliation([{...sources[0],gameRig:{...sources[0].gameRig,bones:[{...bones[0],parent:0}]}}]);
       const saved={model_rig_builder_version:MODEL_RIG_BUILDER_VERSION,
@@ -136,7 +141,8 @@ def test_game_rig_source_identity_rest_pose_and_fallback_lifecycle(module_page):
       const previousAuthoredMapping=resolveHumanoidControlMappings({savedOverrides:{...saved,model_rig_builder_version:4},modelRig:originalModel});
       const fallbackMapping=resolveHumanoidControlMappings({savedOverrides:saved,modelRig:rig});
       return {names:rig.joints.map(j=>j.name),aliases,rest,bent,reset,unchanged,
-        fallback:[missing,incomplete,mixed,cyclic].every(v=>v===null),
+        fallback:[missing,invalid,mixed,cyclic].every(v=>v===null),
+        incomplete:incomplete&&[...incomplete.sourceBoneToModelJointMap],
         root:rig.components[0].rootId,legacyJoint,frame:rig.restFrameByJointId.get(2).toArray(),
         savedMappingSizes:[oldMapping.size,matchingMapping.size,fallbackMapping.size],previousAuthoredMapping:previousAuthoredMapping.size};
     }''')
@@ -152,6 +158,7 @@ def test_game_rig_source_identity_rest_pose_and_fallback_lifecycle(module_page):
     assert result['bent'] == pytest.approx([10, -1, 0], abs=1e-6)
     assert result['frame'] == pytest.approx([0, 0, 2 ** -.5, 2 ** -.5])
     assert result['unchanged'] and result['fallback']
+    assert result['incomplete'] == [['First/Blend.buf|offset=0#bone=2', 2]]
     assert result['savedMappingSizes'] == [0, 1, 0]
     assert result['previousAuthoredMapping'] == 1
 

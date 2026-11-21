@@ -446,6 +446,9 @@ class ModPreview:
                             }
                         entry["game_rig_id"] = rig_id
                         entry["game_bone_map"] = game_rig["bone_map"]
+                        if game_rig["unmapped_bone_ids"]:
+                            # Used IDs the proven palette lacks stay at rest during playback.
+                            entry["game_unmapped_bone_ids"] = game_rig["unmapped_bone_ids"]
                         if game_rig["morph_binding"]:
                             entry["game_morph_binding"] = game_rig["morph_binding"]
                 except SkinningPreviewError as error:
