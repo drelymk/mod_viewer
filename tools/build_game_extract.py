@@ -19,7 +19,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / "native/game-extract"
 PARSER_COMMIT = "cb909733773daea9015a67f6955d6f2ec24d3629"
-VERSION = "direct-4-" + PARSER_COMMIT[:12]
+VERSION = "direct-5-" + PARSER_COMMIT[:12]
 PINS = {
     "keys": (
         "https://raw.githubusercontent.com/yarik0chka/wuwa-keys/21757cc025d5c7660fa4ad485411f4c5e35aa025/keys.json",

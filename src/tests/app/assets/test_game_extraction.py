@@ -9,10 +9,11 @@ import threading
 import time
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from app.assets import index
-from app.assets.game_extract import native, pipeline, runtime
+from app.assets.game_extract import native, pipeline, runtime, wuwa_props
 from app.assets.game_extract.native import capture, read_mesh, match_components, make_rig, humanoid_controls
 from app.assets.rig import validate_rig
 from app.bridge.api import ModViewerAPI
@@ -1170,6 +1171,32 @@ def test_native_batch_rejects_incomplete_or_uncontained_results(tmp_path, respon
         client.batch("json", [MESH], tmp_path)
 
 
+@pytest.mark.parametrize("request_kind,response", [
+    ("config-name", None),
+    ("texture-tier", None),
+    ("texture-absent-tier", None),
+    ("texture-metadata", dict(texture=dict(width=0, height=4, format="PF_BC7", srgb=True))),
+    ("texture-metadata", dict(texture=dict(width=4, height=4, format="PF_BC7"))),
+])
+def test_configuration_and_texture_exports_reject_unsafe_requests_and_incomplete_results(tmp_path, request_kind, response):
+    client = object.__new__(runtime.Client)
+    client.paks = tmp_path / "Paks"
+    (tmp_path / "HD").mkdir()
+    file = tmp_path / "Texture01.mip"
+    file.write_bytes(bytes(16))
+    calls = []
+    client.call = lambda *args, **kwargs: calls.append(kwargs) or {"rootFiles": [str(file)], **(response or {})}
+    with pytest.raises(ValueError):
+        if request_kind == "config-name":
+            client.config("../db_role", tmp_path)
+        elif request_kind == "texture-tier":
+            client.texture(MESH, tmp_path, "LOW")
+        else:
+            client.texture(MESH, tmp_path, "UHD" if request_kind == "texture-absent-tier" else "HD")
+    # Unsafe names, unknown tiers and tiers absent beside Paks never reach the native helper.
+    assert bool(calls) == (request_kind == "texture-metadata")
+
+
 @pytest.mark.parametrize("curve_mode", ["supported", "weighted", "interpolation"])
 def test_morph_extraction_maps_native_vertices_and_upgrades_existing_clips(tmp_path, curve_mode):
     from app.assets.animations import read_clip
@@ -1320,3 +1347,143 @@ def test_character_ribbon_layers_pair_with_shared_clips_by_name_and_exact_timing
     data = (output / "Animation" / entry["file"]).read_bytes()
     assert hashlib.sha256(data).hexdigest() == entry["sha256"]
     assert list(struct.iter_unpack("<7f", data)) == [(1, 2, 3, 0, 0, 1, 0)] * 2
+
+
+def flatbuffer(ints=(), vectors=()):
+    """A minimal FlatBuffer root table of int32 fields and int32 vector fields."""
+    ints, vectors = dict(ints), dict(vectors)
+    numbers = sorted([*ints, *vectors])
+    vtable = 4 + 2 * (numbers[-1] + 1)
+    table = 4 + vtable + (-vtable % 4)
+    slots = {number: 4 + 4 * ordinal for ordinal, number in enumerate(numbers)}
+    blob = bytearray(table + 4 + 4 * len(numbers))
+    struct.pack_into("<IHH", blob, 0, table, vtable, 4 + 4 * len(numbers))
+    for number in range(numbers[-1] + 1):
+        struct.pack_into("<H", blob, 8 + 2 * number, slots.get(number, 0))
+    struct.pack_into("<i", blob, table, table - 4)
+    for number, value in ints.items():
+        struct.pack_into("<i", blob, table + slots[number], value)
+    for number, values in vectors.items():
+        position = table + slots[number]
+        struct.pack_into("<I", blob, position, len(blob) - position)
+        blob += struct.pack(f"<I{len(values)}i", len(values), *values)
+    return bytes(blob)
+
+
+@pytest.mark.parametrize("scenario", ["signature", "fallback", "unavailable"])
+def test_weapon_props_follow_game_configuration_sockets_and_learned_textures(tmp_path, scenario):
+    import sqlite3
+    from app.assets import animations
+
+    root, asset, record, client, _ = fixture(tmp_path)
+    weapon_root = "Client/Content/Aki/Character/Weapon/Type01/R5Weapon01/"
+    weapon, pair = weapon_root + "Model/R5Weapon01", weapon_root + "Pair/R5Pair01"
+    starter = "Client/Content/Aki/Character/Weapon/Type01/R2Weapon00/Model/R2Weapon00"
+    body_material, weapon_material = CHARACTER + "/Skin01/Model/Material01", weapon_root + "Model/Material02"
+    body_texture, weapon_texture = CHARACTER + "/Skin01/Model/Texture01", weapon_root + "Model/Texture02"
+    # BC7 4x4 top mips: the captured diffuse matches the body's native texture byte for byte.
+    pixels = {body_texture: bytes(range(16)), weapon_texture: bytes(range(16, 32))}
+    geometry = asset / "11111111"
+    header = bytearray(148)
+    header[:4], header[84:88] = b"DDS ", b"DX10"
+    (geometry / "Component 0 t=aaaaaaaa.dds").write_bytes(bytes(header) + pixels[body_texture])
+    metadata = json.loads((geometry / "Metadata.json").read_text())
+    metadata["components"][0]["texture_hashes"] = [[["Diffuse", ".dds", "aaaaaaaa", "Component 0 t=aaaaaaaa.dds"]]]
+    (geometry / "Metadata.json").write_text(json.dumps(metadata))
+
+    def row(mesh, description, sockets=()):
+        game = "/Game/" + mesh.removeprefix("Client/Content/")
+        return {"网格体_1_" + "A" * 32: dict(AssetPathName=game + "." + mesh.rsplit("/", 1)[-1]),
+                "描述_2_" + "B" * 32: description, "BattleSockets_3_" + "C" * 32: list(sockets)}
+
+    rows = {"21010016": row(weapon, "5星-Character01" + ("专武" if scenario == "signature" else "")),
+            "21110016": row(pair, "Pair01"), "21010011": row(starter, "Starter01")}
+    if scenario != "unavailable":
+        rows["100001"] = row(MESH, "Character01", ["Secondary01", "Root"])
+    level = attributes(dict(
+        VERTICES=struct.pack("<i9f", 3, 0, 0, 0, 1, 0, 0, 0, 0, 1),
+        NORMALS=struct.pack("<i12f", 3, *[1, 0, 1, 0] * 3),
+        INDICES=struct.pack("<i3i", 3, 0, 1, 2),
+        TEXCOORDS=struct.pack("<i", 1) + string("UV0") + struct.pack("<i6f", 3, 0, 0, 1, 0, 0, 1),
+        MATERIALS=struct.pack("<i", 1) + string("Material02") + string("Material02") + struct.pack("<ii", 0, 1),
+        WEIGHTS=struct.pack("<i", 3) + b"".join(struct.pack("<Hif", 0, vertex, 1) for vertex in range(3))))
+    skeleton = struct.pack("<i", 1) + string("Bone01") + struct.pack("<i3f4f3f", -1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1)
+    weapon_mesh = b"UEFORMAT" + string("UEMODEL") + b"\x0a" + string("R5Weapon01") + string(weapon) + b"\x00" + attributes(dict(
+        LODS=struct.pack("<i", 1) + string("LOD0") + level, SKELETON=attributes(dict(BONES=skeleton))))
+
+    def mesh_document(material):
+        return [dict(Type="SkeletalMesh", Properties=dict(Skeleton=dict(ObjectPath=SKELETON + ".0")),
+                     SkeletalMaterials=[dict(Material=dict(ObjectPath=material + ".0"))],
+                     LODModels=[dict(Sections=[dict(MaterialIndex=0, BaseIndex=0)])])]
+
+    documents = {wuwa_props.MODEL_CONFIG: [dict(Type="CompositeDataTable", Rows=rows)], MESH: mesh_document(body_material),
+                 weapon: mesh_document(weapon_material), pair: mesh_document(weapon_material)}
+    for material, texture in ((body_material, body_texture), (weapon_material, weapon_texture)):
+        documents[material] = [dict(Properties=dict(TextureParameterValues=[
+            dict(ParameterInfo=dict(Name="MainTex"), ParameterValue=dict(ObjectPath=texture + ".0"))]))]
+    original_export, tiers = client.export, []
+
+    def export(kind, package, destination, format=None):
+        if kind == "mesh" and package in (weapon, pair):
+            destination.mkdir(parents=True, exist_ok=True)
+            file = destination / (package.rsplit("/", 1)[-1] + ".uemodel")
+            file.write_bytes(weapon_mesh)
+            return [file]
+        if kind == "json" and package in documents:
+            destination.mkdir(parents=True, exist_ok=True)
+            file = destination / (package.rsplit("/", 1)[-1] + ".json")
+            file.write_text(json.dumps(documents[package], ensure_ascii=False), encoding="utf-8")
+            return [file]
+        return original_export(kind, package, destination, format)
+
+    def texture(package, destination, tier):
+        tiers.append(tier)
+        destination.mkdir(parents=True, exist_ok=True)
+        file = destination / (package.rsplit("/", 1)[-1] + ".mip")
+        file.write_bytes(pixels[package] if tier == "HD" else bytes(16))
+        return file, dict(width=4, height=4, format="PF_BC7", srgb=True)
+
+    def config(name, destination):
+        destination.mkdir(parents=True, exist_ok=True)
+        file = destination / (name + ".db")
+        file.unlink(missing_ok=True)
+        connection = sqlite3.connect(file)
+        connection.execute("CREATE TABLE roleinfo (Id INT, BinData BLOB)")
+        connection.execute("CREATE TABLE weaponconf (ItemId INT, BinData BLOB)")
+        # A role on the verified model whose starter weapon id encodes its own weapon type,
+        # and a malformed role that must be ignored.
+        connection.execute("INSERT INTO roleinfo VALUES (1, ?), (2, ?)",
+                           (flatbuffer({23: 100001, 42: 21010011, 43: 1}), b"\x00"))
+        connection.execute("INSERT INTO weaponconf VALUES (21010016, ?)",
+                           (flatbuffer({0: 21010016}, {7: [21010016, 21110016]}),))
+        connection.commit()
+        connection.close()
+        return file
+
+    client.export, client.texture, client.config = export, texture, config
+    output = tmp_path / "output"
+    report, _ = pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    assert [entry["id"] for entry in manifest["clips"]] == ["Clip01"]
+    if scenario == "unavailable":
+        # Props never block clips.
+        assert "props" not in manifest and report["props"] == []
+        assert report["prop_error"] == "No game model configuration uses the verified mesh."
+        return
+    assert report["weapon"] == dict(choice=scenario, models=[21010016, 21110016], sockets=["Secondary01", "Root"],
+                                    texture_tier="HD")
+    assert tiers == ["HD", "HD"]
+    rig = validate_rig(json.loads((output / "Rig.json").read_text()))
+    props = animations._props(manifest)
+    assert [prop["name"] for prop in props.values()] == ["R5Weapon01", "R5Pair01"]
+    for prop, socket, offset in zip(props.values(), (1, 0), ([1, 2, 3], [0, 0, 0])):
+        data = animations._read_prop(str(output / "Animation"), prop, len(rig["bones"]))
+        records = np.frombuffer(data, "<f4", count=24).reshape(3, 8)
+        # Rigid at the socket's rest transform, fully weighted to the socket bone.
+        assert records[:, :3].tolist() == (np.array([[0, 0, 0], [1, 0, 0], [0, 0, 1]]) + offset).tolist()
+        assert records[:, 3:6].tolist() == [[0, 1, 0]] * 3 and records[:, 6:].tolist() == [[0, 0], [1, 0], [0, 1]]
+        assert np.frombuffer(data, "<u2", count=12, offset=96).tolist() == [socket, 0, 0, 0] * 3
+        assert np.frombuffer(data, "<f4", count=12, offset=120).tolist() == [1, 0, 0, 0] * 3
+        # The learned MainTex slot feeds the weapon's own diffuse texture, written unchanged as sRGB BC7.
+        dds = (output / "Animation" / prop["textures"]["diffuse"]["file"]).read_bytes()
+        assert dds[148:] == pixels[weapon_texture] and struct.unpack_from("<I", dds, 128)[0] == 99

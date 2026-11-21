@@ -63,7 +63,8 @@ class Reader(BytesIO):
         return result
 
 
-def read_mesh(file):
+def read_mesh(file, *, normals=False):
+    """Highest-detail UEFormat geometry; ``normals`` also reads per-vertex unit normals when present."""
     reader = Reader(read_limited(file, MAX_MESH_BYTES, "Native mesh"))
     if reader.take(8) != b"UEFORMAT" or reader.string() != "UEMODEL" or reader.take(1) != b"\x0a":
         raise ValueError("Unsupported native mesh format.")
@@ -148,8 +149,16 @@ def read_mesh(file):
                 seen.add(vertex)
                 rows.append(values)
             morphs[morph_name] = rows
-    return dict(name=name, package=package, bones=bones, positions=positions,
-                indices=indices, uv=uv, sections=sections, weights=weights, morphs=morphs)
+    result = dict(name=name, package=package, bones=bones, positions=positions,
+                  indices=indices, uv=uv, sections=sections, weights=weights, morphs=morphs)
+    if normals and "NORMALS" in level:
+        # UEFormat stores each normal as (sign, x, y, z).
+        source = Reader(level["NORMALS"])
+        if source.count(MAX_VERTICES) == len(positions):
+            values = [struct.unpack("<4f", source.take(16))[1:] for _ in positions]
+            if all(math.isfinite(v) for row in values for v in row):
+                result["normals"] = values
+    return result
 
 
 def capture(root, record):
