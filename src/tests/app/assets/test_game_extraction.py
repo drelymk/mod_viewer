@@ -1276,3 +1276,47 @@ def test_morph_curves_sample_authored_interpolation(mode, expected):
     keys[0]["Value"] = float("nan")
     with pytest.raises(ValueError, match="Invalid morph curve"):
         sample_curves(sequence, {"Shape01"})
+
+
+def test_character_ribbon_layers_pair_with_shared_clips_by_name_and_exact_timing(tmp_path):
+    from .test_shared_animations import write_library
+
+    root, _, record, client, _ = fixture(tmp_path)
+    # The shared library animates only the root; the character's Secondary01 chain is its own.
+    library = write_library(root, "BodyType01-BaseAnim-0123456789", label="BaseAnim",
+                            bones=[dict(name="Root", parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1],
+                                        scale=[1, 1, 1])],
+                            clips={"Walk01": [0], "Run01": [0]})
+    walk, run = CHARACTER + "/Skin01/RibbonAnim/Rib_Walk01", CHARACTER + "/Skin01/RibbonAnim3/Rib_Run01"
+    layer = dict(Skeleton=dict(ObjectPath=SKELETON + ".0"), AdditiveAnimType="AAT_LocalSpaceBase",
+                 RefPoseType="ABPT_RefPose", TrackToSkeletonMapTable=[dict(BoneTreeIndex=1)])
+    extra = {walk: dict(NumFrames=2, SequenceLength=1), run: dict(NumFrames=3, SequenceLength=2)}
+    bones = [dict(name="Root", parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1]),
+             dict(name="Secondary01", parent=0, translation=[1, 2, 3], rotation=[0, 0, 0, 1])]
+    rows = [(0, 0, 0, 0, 0, 0, 1), (1, 2, 3, 0, 0, 1, 0)] * 2
+    search, batch = client.search, client.batch
+    client.search = lambda query, kind, under: search(query, kind, under) + (sorted(extra) if kind == "AnimSequence" else [])
+
+    def layered_batch(kind, packages, destination, format=None):
+        result = batch(kind, [package for package in packages if package not in extra], destination, format)
+        for package in packages:
+            if package in extra:
+                file = destination / (package.rsplit("/", 1)[-1] + (".json" if kind == "json" else ".psa"))
+                file.write_bytes(json.dumps([dict(Type="AnimSequence", Name=package.rsplit("/", 1)[-1],
+                                                  Properties={**layer, **extra[package]})]).encode()
+                                 if kind == "json" else psa(bones, rows))
+                result[package] = dict(state="completed", rootFiles=[str(file)], failures=[])
+        return result
+
+    client.batch = layered_batch
+    output = tmp_path / "output"
+    report, _ = pipeline.build(client, str(root), record, output, "", lambda *_: None, threading.Event())
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    # Rib_Walk01 matches Walk01 exactly; Rib_Run01's frame count differs, so Run01 keeps physics only.
+    [entry] = manifest["shared_layers"]
+    assert report["shared_layers"] == 1 and entry["clip"] == "Walk01" and entry["source"] == walk
+    assert entry["library"] == library.name and entry["fingerprint"] == "build-1"
+    assert manifest["shared_layer_masks"][entry["mask"]] == [1] and 1 in manifest["layer_bones"]
+    data = (output / "Animation" / entry["file"]).read_bytes()
+    assert hashlib.sha256(data).hexdigest() == entry["sha256"]
+    assert list(struct.iter_unpack("<7f", data)) == [(1, 2, 3, 0, 0, 1, 0)] * 2

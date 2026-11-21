@@ -39,6 +39,7 @@ export default {
     'Se guardaron {bones} huesos y {clips} clips de animación ({secondary} con movimiento secundario). Se omitieron {skipped} clips o capas no compatibles.',
   'rigExtract.phase.prepare': 'Preparando extracción…',
   'rigExtract.phase.index': 'Indexando archivos del juego…',
+  'rigExtract.phase.shared': 'Extrayendo animaciones compartidas del tipo de cuerpo…',
   'gameIndex.title': 'Indexar archivos del juego',
   'gameIndex.button': 'Indexar archivos del juego',
   'gameIndex.confirm':
@@ -252,6 +253,7 @@ export default {
   'animation.type': 'Tipo de animación',
   'animation.filterAll': 'Todas',
   'animation.filterClips': 'Clips',
+  'animation.filterShared': 'Compartidas',
   'animation.noMatches': 'No hay animaciones coincidentes',
   'animation.stepCount': '{count} pasos',
   'animation.showControls': 'Mostrar controles de animación',

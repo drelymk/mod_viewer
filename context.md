@@ -1050,7 +1050,47 @@ of documentation, comments and tests; use portable fixtures instead.
   trailing bones; explicit other modes remain unsupported. Validate PSA reference
   bones against that source skeleton. Preserve authored absolute-local keys;
   omitted tracks use the mesh reference transform only when their exported keys
-  match the source reference. Unproven skeleton differences remain unsupported.
+  match the source reference. Unproven skeleton differences remain unsupported,
+  except for the shared body-type libraries below.
+- Shared animation libraries live once per WWMI Asset Folder root in
+  `SharedAnimation/<BodyType>-<Set>-<skeleton-package-hash>/` (`app/assets/shared_animations.py`),
+  never inside an Asset; Asset indexing ignores that folder. Each holds one game
+  set (`Role/<BodyType>/BaseAnim*`) on one source skeleton: a manifest with that
+  skeleton, its fingerprint, label (the set, plus the skeleton owner when a set
+  spans skeletons) and per-clip keyed bones, and v1 TQ clips in source-skeleton
+  space. Clips are never duplicated per character. Playback lists them after the
+  Asset's own clips as `<label> / <clip>` for every rig that proves them, with or
+  without an Asset catalog, and maps each load onto the rig in memory. A source
+  bone maps only when the rig has its name, its parent maps to the rig bone's
+  parent (roots to roots) and the reference rotation, translation and scale agree;
+  name-only matches and everything below them stay unmapped. Structural bones are
+  the root plus keyed bones with a keyed child. A library applies only when the
+  structural chain of the bones keyed by more than half of its clips maps (other
+  body types fail on their own Bip proportions); a clip is offered only when its
+  own structural chain maps. Unmapped bones, including unproven keyed end bones
+  such as corrective helpers and weapon props, hold the rig's rest pose. Shared
+  clips carry no morphs or root motion, may use the library blink, and report
+  only mapped keyed bones. Invalid libraries are skipped independently; catalog
+  discovery validates manifests without per-clip file checks, and loads keep the
+  bounded contained reads.
+  Which set a character plays is gameplay configuration the extractor cannot read,
+  so every compatible set is listed; overlapping clip names stay distinct per set.
+  Catalog entries for shared clips carry `shared: true`; both clip pickers list
+  them after the Asset's clips and sequences in their own Shared group (the
+  playback picker also has a Shared filter), and Previous/Next stay within it.
+  Character extraction bakes the character's own ribbon layers for the shared
+  clips it can play: `<skin>/RibbonAnim*/Rib_<sequence>` pairs with every proven
+  shared clip of that sequence name and identical frame count and duration, which
+  may be several sets' variants; two matching layers for one clip pair with none.
+  Only the layer's tracks outside the clip's mapped joints are stored, under the
+  Asset's `Animation/SharedLayers/` (content-addressed, frame-major TQ rows), and
+  listed in the manifest as `shared_layers` with deduplicated `shared_layer_masks`
+  and the library fingerprint; a layer applies only to that exact library build
+  and never overlaps mapped joints. The manifest's `layer_bones` (every bone any
+  Asset or shared-clip layer authors) plus `runtime_bones`, minus the library's
+  mapped joints, are the shared clips' secondary-motion pool: a clip's
+  `secondary_bones` are that pool minus its mapped keys and baked layer, so chains
+  without a baked layer get physics. Asset clips keep `runtime_bones` minus keys.
 - Game-folder extraction is an explicit indexed-WWMI-Asset action. Native game
   picker grants use opaque tokens independent of Mod/Asset folder access. Pin
   and verify the native runtime; run it with argument arrays and hidden consoles.
@@ -1118,6 +1158,17 @@ of documentation, comments and tests; use portable fixtures instead.
   Building is explicit (Settings confirm dialog or index button) or automatic
   when extracting without a ready index; the extraction Browse pick is saved to
   Settings, and clearing the WWMI folder deletes its index.
+  The index build also extracts the shared animation libraries
+  (`game_extract/shared_library.py`) into every enabled WWMI Asset Folder root
+  before writing the index, so a failed or cancelled library build leaves the
+  index stale for a retry. Sets are `Role/<BodyType>/BaseAnim*` folders; complete
+  non-additive clips are grouped by declared source skeleton, whose BoneTree must
+  use only Animation retargeting (extra trailing entries are inert there; the
+  converter verifies every exported bone). A library is reused while its
+  fingerprint (converter version, skeleton fingerprint and every package's
+  metadata digest) is unchanged, otherwise rebuilt in a staging directory and
+  renamed into place; libraries of a rebuilt set/skeleton that no longer exists
+  are retired, and interrupted staging leftovers are removed.
 - WuWa authored sequences are single AnimMontage timelines: one slot, contiguous
   segments at play rate 1, loop counts expanded, explicit section links only, and a
   link back to the first section repeats (hard cuts). Combo order between montages

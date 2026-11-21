@@ -39,6 +39,7 @@ export default {
     '{bones} 個のボーンと {clips} 個のアニメーションクリップ（うち {secondary} 個は揺れ物の動きを含む）を保存しました。未対応のクリップまたはレイヤーを {skipped} 個スキップしました。',
   'rigExtract.phase.prepare': '抽出を準備中…',
   'rigExtract.phase.index': 'ゲームファイルを索引作成中…',
+  'rigExtract.phase.shared': '体型共通のアニメーションを抽出中…',
   'gameIndex.title': 'ゲームファイルの索引を作成',
   'gameIndex.button': 'ゲームファイルの索引を作成',
   'gameIndex.confirm':
@@ -251,6 +252,7 @@ export default {
   'animation.type': 'アニメーションの種類',
   'animation.filterAll': 'すべて',
   'animation.filterClips': 'クリップ',
+  'animation.filterShared': '共通',
   'animation.noMatches': '一致するアニメーションはありません',
   'animation.stepCount': '{count} ステップ',
   'animation.showControls': 'アニメーション コントロールを表示',

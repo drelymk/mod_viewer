@@ -10,7 +10,7 @@ from threading import RLock
 import numpy as np
 
 from app.runtime import server
-from . import animation_keys, paths
+from . import animation_keys, paths, shared_animations
 from .animation_morphs import bounded, idle_blink, morph_names, read_morphs
 
 
@@ -162,6 +162,65 @@ def read_clip(directory, entry, rig, *, validated_morphs=None):
     return raw, data
 
 
+_LAYER_FILE = re.compile(r"SharedLayers/[0-9a-f]{32}\.bin")
+
+
+def _shared_layers(raw, bone_count):
+    """The Asset's baked ribbon layers for shared clips by (library, clip); invalid data yields none."""
+    try:
+        masks = raw.get("shared_layer_masks", [])
+        layers = raw.get("shared_layers", [])
+        if not isinstance(masks, list) or not isinstance(layers, list) or len(masks) > 4096 or len(layers) > 4096:
+            return {}
+        masks = [animation_keys.bone_list(mask, bone_count) for mask in masks]
+        if any(not mask for mask in masks):
+            return {}
+        result = {}
+        for layer in layers:
+            library, clip, mask = layer.get("library"), layer.get("clip"), layer.get("mask")
+            fingerprint, file, frames = layer.get("fingerprint"), layer.get("file"), layer.get("frame_count")
+            if (not isinstance(library, str) or not shared_animations.LIBRARY_NAME.fullmatch(library)
+                    or not isinstance(clip, str) or not _ID.fullmatch(clip)
+                    or not isinstance(fingerprint, str) or not isinstance(file, str) or not _LAYER_FILE.fullmatch(file)
+                    or type(frames) is not int or not 2 <= frames <= 60000
+                    or type(mask) is not int or not 0 <= mask < len(masks) or (library, clip) in result):
+                return {}
+            result[library, clip] = dict(fingerprint=fingerprint, file=file, frame_count=frames, bone_ids=masks[mask])
+        return result
+    except (AttributeError, TypeError):
+        return {}
+
+
+def _read_shared_clip(library, entry, rig, animation_dir=None):
+    """Read a source-skeleton clip, map it onto the loaded rig's proven joints and add the Asset's ribbon layer."""
+    raw, data, morph_data = _read_clip(library["directory"], entry, library["source"], full_validation=False)
+    if raw["version"] != 1 or morph_data is not None or raw.get("root_motion") is not None:
+        raise ValueError("Shared animations carry only skeletal tracks.")
+    keyed = animation_keys.bone_list(raw.get("keyed_bones"), raw["bone_count"])
+    mapping = library["mapping"]
+    if keyed is None or not shared_animations.structural_bones(library["source"]["bones"], keyed) <= set(mapping):
+        raise ValueError("Shared animation does not match the loaded rig.")
+    frames = shared_animations.retarget(data, raw["frame_count"], library, rig)
+    keyed = {mapping[bone] for bone in keyed if bone in mapping}
+    layer = entry.get("layer")
+    if layer is not None:
+        if layer["frame_count"] != raw["frame_count"] or not animation_dir:
+            raise ValueError("The ribbon layer does not match its shared animation.")
+        bones = layer["bone_ids"]
+        size = raw["frame_count"] * len(bones) * 28
+        path = paths.safe_asset_path(animation_dir, layer["file"])
+        if not path:
+            raise ValueError("The ribbon layer is unavailable.")
+        with open(path, "rb") as stream:
+            rows = stream.read(size + 1)
+        if len(rows) != size:
+            raise ValueError("The ribbon layer is incomplete or has changed.")
+        frames[:, bones] = np.frombuffer(rows, "<f4").reshape(raw["frame_count"], len(bones), 7)
+        keyed.update(bones)
+    raw = {**raw, "skeleton_id": rig["id"], "bone_count": len(rig["bones"]), "keyed_bones": sorted(keyed)}
+    return raw, frames.tobytes(), None
+
+
 def _idle_face(session):
     """Blink shapes shared by a library, for clips that carry no facial curves.
 
@@ -174,6 +233,8 @@ def _idle_face(session):
         if source is None:
             source = False
             for entry in session["entries"].values():
+                if entry.get("shared"):
+                    continue
                 try:
                     raw = _json(paths.safe_asset_path(session["directory"], entry["file"]))
                     blink = idle_blink(raw["morphs"])
@@ -213,33 +274,62 @@ class AnimationSessions:
                     server.release_geometry(url)
             self._sessions.clear()
 
+    @staticmethod
+    def _asset_catalog(root, asset, rig):
+        """The Asset's own clips, or no entries when it has no catalog for this rig."""
+        directory = paths.safe_asset_dir(root, asset)
+        animation_dir = paths.safe_asset_dir(directory, "Animation") if directory else None
+        manifest = paths.safe_asset_path(animation_dir, "manifest.json") if animation_dir else None
+        if not manifest:
+            return None, {}, None
+        raw = _json(manifest)
+        if (not isinstance(raw, dict) or raw.get("format") != "mod-viewer-animations" or type(raw.get("version")) is not int or raw["version"] != 1
+                or raw.get("skeleton_id") != rig["id"] or not isinstance(raw.get("clips"), list)
+                or len(raw["clips"]) > 1024):
+            return None, {}, None
+        entries = {}
+        for entry in raw["clips"]:
+            if not isinstance(entry, dict):
+                raise ValueError("Invalid animation catalog.")
+            key = entry.get("id")
+            name, file, duration = entry.get("name"), entry.get("file"), entry.get("duration")
+            if (not isinstance(key, str) or not _ID.fullmatch(key) or key in entries
+                    or not isinstance(name, str) or not 1 <= len(name) <= 128
+                    or type(duration) not in (int, float) or not math.isfinite(duration) or not 0 < duration <= 3600
+                    or not isinstance(file, str) or not paths.safe_asset_path(animation_dir, file)):
+                raise ValueError("Invalid animation catalog entry.")
+            entries[key] = dict(entry)
+        return animation_dir, entries, raw
+
     def catalog(self, root, asset, rig, is_current):
         """Issue opaque clip IDs only after the caller proved its loaded rig."""
         empty = {"animations": [], "animation_session": None, "animation_sequences": []}
         try:
-            directory = paths.safe_asset_dir(root, asset)
-            animation_dir = paths.safe_asset_dir(directory, "Animation") if directory else None
-            raw = _json(paths.safe_asset_path(animation_dir, "manifest.json") if animation_dir else None)
-            if (not isinstance(raw, dict) or raw.get("format") != "mod-viewer-animations" or type(raw.get("version")) is not int or raw["version"] != 1
-                    or raw.get("skeleton_id") != rig["id"] or not isinstance(raw.get("clips"), list)
-                    or len(raw["clips"]) > 1024):
-                return empty
-            entries = {}
-            for entry in raw["clips"]:
-                if not isinstance(entry, dict):
-                    raise ValueError("Invalid animation catalog.")
-                key = entry.get("id")
-                name, file, duration = entry.get("name"), entry.get("file"), entry.get("duration")
-                if (not isinstance(key, str) or not _ID.fullmatch(key) or key in entries
-                        or not isinstance(name, str) or not 1 <= len(name) <= 128
-                        or type(duration) not in (int, float) or not math.isfinite(duration) or not 0 < duration <= 3600
-                        or not isinstance(file, str) or not paths.safe_asset_path(animation_dir, file)):
-                    raise ValueError("Invalid animation catalog entry.")
-                entries[key] = dict(entry)
+            animation_dir, entries, raw = self._asset_catalog(root, asset, rig)
+            sequences = _sequences(raw.get("sequences"), entries) if raw else []
+            runtime = animation_keys.bone_list(raw.get("runtime_bones"), len(rig["bones"])) if raw else None
+            layers = _shared_layers(raw, len(rig["bones"])) if raw else {}
+            layer_bones = (animation_keys.bone_list(raw.get("layer_bones"), len(rig["bones"])) or []) if raw else []
+            # Game-wide libraries at the Asset Folder root follow the Asset's own clips.
+            for library in shared_animations.discover(root, rig):
+                targets = set(library["mapping"].values())
+                # Shared clips drive the Asset's runtime and layer-authored chains with physics where no
+                # baked layer covers them; mapped body joints always follow the clip.
+                library["secondary_pool"] = sorted((set(runtime or ()) | set(layer_bones)) - targets)
+                for clip in library["clips"]:
+                    key = shared_animations.catalog_id(library["name"], clip["id"])
+                    if key in entries or len(entries) >= 4096:
+                        continue
+                    entry = dict(id=key, name=f"{library['label']} / {clip['name']}"[:128], file=clip["file"],
+                                 duration=clip["duration"], shared=library)
+                    layer = layers.get((library["name"], clip["id"]))
+                    # A layer baked against an older library build, or one overlapping the body, never applies.
+                    if (layer is not None and layer["fingerprint"] == library["fingerprint"]
+                            and not targets.intersection(layer["bone_ids"])):
+                        entry["layer"] = layer
+                    entries[key] = entry
             if not entries or not is_current():
                 return empty
-            sequences = _sequences(raw.get("sequences"), entries)
-            runtime = animation_keys.bone_list(raw.get("runtime_bones"), len(rig["bones"]))
             token = uuid.uuid4().hex
             with self._lock:
                 if len(self._sessions) >= 32:
@@ -249,7 +339,8 @@ class AnimationSessions:
                 self._sessions[token] = dict(directory=animation_dir, entries=entries, rig=rig,
                                               is_current=is_current, urls=set(), runtime=runtime)
             return {"animation_session": token,
-                    "animations": [{"id": e["id"], "name": e["name"], "duration": e["duration"]}
+                    "animations": [{"id": e["id"], "name": e["name"], "duration": e["duration"],
+                                    **({"shared": True} if e.get("shared") else {})}
                                    for e in entries.values()],
                     "animation_sequences": sequences}
         except (OSError, ValueError, TypeError, KeyError, RecursionError):
@@ -264,7 +355,11 @@ class AnimationSessions:
                 entry = session["entries"].get(clip_id) if isinstance(clip_id, str) else None
                 if not entry:
                     raise ValueError("Choose an animation from the current Asset.")
-            raw, data, morph_data = _read_clip(session["directory"], entry, session["rig"], full_validation=False)
+            shared = entry.get("shared")
+            if shared:
+                raw, data, morph_data = _read_shared_clip(shared, entry, session["rig"], session["directory"])
+            else:
+                raw, data, morph_data = _read_clip(session["directory"], entry, session["rig"], full_validation=False)
             idle = _idle_face(session) if morph_data is None else None
             with self._lock:
                 if self._sessions.get(token) is not session or not session["is_current"]():
@@ -288,8 +383,9 @@ class AnimationSessions:
                     "data": {"url": url, "length": len(data)}}
             # Bones the game leaves to runtime physics that this clip does not key.
             keyed = animation_keys.bone_list(raw.get("keyed_bones"), raw["bone_count"])
-            if session["runtime"] and keyed is not None:
-                secondary = sorted(set(session["runtime"]) - set(keyed))
+            pool = shared["secondary_pool"] if shared else session["runtime"]
+            if pool and keyed is not None:
+                secondary = sorted(set(pool) - set(keyed))
                 if secondary:
                     clip["secondary_bones"] = secondary
             if raw.get("root_motion") is not None:

@@ -38,6 +38,7 @@ export default {
     '본 {bones}개와 애니메이션 클립 {clips}개(보조 움직임 포함 {secondary}개)를 저장했습니다. 지원하지 않는 클립 또는 레이어 {skipped}개를 건너뛰었습니다.',
   'rigExtract.phase.prepare': '추출 준비 중…',
   'rigExtract.phase.index': '게임 파일 색인 생성 중…',
+  'rigExtract.phase.shared': '체형 공용 애니메이션 추출 중…',
   'gameIndex.title': '게임 파일 색인 생성',
   'gameIndex.button': '게임 파일 색인 생성',
   'gameIndex.confirm':
@@ -250,6 +251,7 @@ export default {
   'animation.type': '애니메이션 유형',
   'animation.filterAll': '전체',
   'animation.filterClips': '클립',
+  'animation.filterShared': '공용',
   'animation.noMatches': '일치하는 애니메이션이 없습니다',
   'animation.stepCount': '{count}단계',
   'animation.showControls': '애니메이션 컨트롤 표시',

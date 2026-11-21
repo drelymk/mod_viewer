@@ -6,11 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.assets import index as asset_index, shared_animations
 from app.assets.game_extract import game_index, pipeline, runtime
 from app.assets.game_extract.runtime import SearchTruncated
 from app.bridge.rig_extraction import RigExtraction
 from app.settings import game_folders, paths
-from .test_game_extraction import MESH, fixture
+from .test_game_extraction import MESH, fixture, psa
 
 
 def game_folder(tmp_path):
@@ -163,3 +164,84 @@ def test_runtime_folder_listing_rejects_path_like_names(tmp_path):
     except ValueError:
         return
     raise AssertionError("path-like folder names must be rejected")
+
+
+SHARED_SET = pipeline.ROLE_ROOT + "/BodyType01/BaseAnim"
+SHARED_CLIP = SHARED_SET + "/Walk01"
+SHARED_SKELETON = pipeline.ROLE_ROOT + "/BodyType01/Character02/Skin01/Model/Skeleton02"
+SHARED_BONES = [dict(name="Root", parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1]),
+                dict(name="Secondary01", parent=0, translation=[1, 2, 3], rotation=[0, 0, 0, 1])]
+
+
+class SharedClient:
+    """One body-type set on its own source skeleton."""
+
+    def __init__(self, work):
+        self.work, self.revision, self.batches = work, 1, []
+
+    def folders(self, folder):
+        return {pipeline.ROLE_ROOT: ["BodyType01"],
+                pipeline.ROLE_ROOT + "/BodyType01": ["BaseAnim", "Character02"]}.get(folder, [])
+
+    def search(self, query, kind, under, *, recursive=True):
+        if kind == "SkeletalMesh":
+            return []
+        assert kind == "AnimSequence"
+        return [SHARED_CLIP] if under == SHARED_SET else []
+
+    def export(self, kind, package, destination, format=None):
+        assert (kind, package) == ("json", SHARED_SKELETON)
+        destination.mkdir(parents=True, exist_ok=True)
+        file = destination / "Skeleton02.json"
+        file.write_text(json.dumps([dict(Type="Skeleton", Properties=dict(BoneTree=[
+            dict(TranslationRetargetingMode="EBoneTranslationRetargetingMode::Animation")]),
+            ReferenceSkeleton=dict(
+                FinalRefBoneInfo=[dict(Name=bone["name"], ParentIndex=bone["parent"]) for bone in SHARED_BONES],
+                FinalRefBonePose=[dict(Translation=dict(zip("XYZ", bone["translation"])),
+                                       Rotation=dict(zip("XYZW", bone["rotation"])),
+                                       Scale3D=dict(X=1, Y=1, Z=1)) for bone in SHARED_BONES]))]))
+        return [file]
+
+    def batch(self, kind, packages, destination, format=None):
+        assert packages == [SHARED_CLIP]
+        self.batches.append(kind)
+        destination.mkdir(parents=True, exist_ok=True)
+        if kind == "anim":
+            file = destination / "Walk01.psa"
+            file.write_bytes(psa(SHARED_BONES, [(0, 0, frame, 0, 0, 0, 1) for frame in range(2) for _bone in SHARED_BONES]))
+        else:
+            file = destination / "Walk01.json"
+            file.write_text(json.dumps([dict(Type="AnimSequence", Name="Walk01", Properties=dict(
+                Skeleton=dict(ObjectPath=SHARED_SKELETON + ".Skeleton02"), NumFrames=2, SequenceLength=1,
+                RawDataGuid=self.revision, TrackToSkeletonMapTable=[dict(BoneTreeIndex=0), dict(BoneTreeIndex=1)]))]))
+        return {SHARED_CLIP: dict(state="completed", rootFiles=[str(file)], failures=[])}
+
+
+def test_index_stage_extracts_shared_body_type_libraries_once_per_game_version(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "asset_index_dir", lambda: str(tmp_path / "asset-index"))
+    root, _, _, _, _ = fixture(tmp_path)
+    game, _ = game_folder(tmp_path)
+    work = tmp_path / "index-work"
+    work.mkdir()
+    client, progress = SharedClient(work), []
+    game_index.build(client, game, lambda *row: progress.append(row), threading.Event(), roots=[str(root)])
+    assert ("shared", 1, 1) in progress
+    shared = root / shared_animations.DIRECTORY
+    [directory] = list(shared.iterdir())
+    library = shared_animations.read_library(str(directory))
+    assert library["label"] == "BaseAnim" and [clip["name"] for clip in library["clips"]] == ["Walk01"]
+    assert directory.name.startswith("BodyType01-BaseAnim-")
+    # The root's shared directory is not an Asset and is not counted as a skipped one.
+    stats = asset_index.build_index("WWMI", str(root))["stats"]
+    assert stats["assetCount"] == 1 and stats["skippedCount"] == 0
+
+    # An unchanged game version reuses the installed library without converting again.
+    client.batches.clear()
+    game_index.build(client, game, lambda *_: None, threading.Event(), roots=[str(root)])
+    assert client.batches == ["json"]
+    # Changed game metadata replaces the library in place, leaving no staging or retired copies.
+    previous = json.loads((directory / "manifest.json").read_text())["fingerprint"]
+    client.revision = 2
+    game_index.build(client, game, lambda *_: None, threading.Event(), roots=[str(root)])
+    assert "anim" in client.batches and [item.name for item in shared.iterdir()] == [directory.name]
+    assert json.loads((directory / "manifest.json").read_text())["fingerprint"] != previous

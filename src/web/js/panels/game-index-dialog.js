@@ -14,9 +14,8 @@ export function initGameIndexDialog() {
   let kind = null;
   let state = null;
   const labels = () => {
-    $('progress').textContent = busy
-      ? t('gameIndex.running') + (state?.total ? ` (${state.current}/${state.total})` : '')
-      : '';
+    const running = state?.phase === 'shared' ? t('rigExtract.phase.shared') : t('gameIndex.running');
+    $('progress').textContent = busy ? running + (state?.total ? ` (${state.current}/${state.total})` : '') : '';
   };
   window.addEventListener(LANGUAGE_CHANGED, labels);
 

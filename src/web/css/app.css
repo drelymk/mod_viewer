@@ -1581,6 +1581,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   border: 1px solid var(--border); border-radius: 999px; cursor: pointer;
 }
 .animation-filter:hover { color: var(--text); background: var(--panel-fill-hover); }
+.animation-filter[hidden] { display: none; }
 .animation-filter[aria-pressed="true"] { color: #fff; background: var(--accent); border-color: transparent; }
 .animation-filter-count { font-weight: 500; opacity: .75; font-variant-numeric: tabular-nums; }
 .animation-options {
