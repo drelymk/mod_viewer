@@ -221,6 +221,92 @@ def _read_shared_clip(library, entry, rig, animation_dir=None):
     return raw, frames.tobytes(), None
 
 
+_PROP_FILE = re.compile(r"Props/[0-9a-f]{32}\.bin")
+PROP_LAYOUT = "prop-v1"
+# Per vertex: f32 position/normal/uv record (32 bytes), u16x4 joints, f32x4 weights; then u32 indices.
+_PROP_VERTEX_BYTES = 56
+MAX_PROPS = 16
+MAX_PROP_VERTICES = 250000
+MAX_PROP_INDICES = 1500000
+_PROP_TEXTURE_FILE = re.compile(r"Props/[0-9a-f]{32}\.dds")
+# Roles the viewer's game material binds; extraction maps the game's texture slots onto them.
+_PROP_TEXTURE_ROLES = ("diffuse", "light_map", "material_map", "normal_map")
+_MAX_PROP_TEXTURE_BYTES = 96 * 1024 * 1024
+
+
+def _props(raw):
+    """The catalog's game props (weapons shown during playback); invalid data yields none."""
+    try:
+        props = raw.get("props", [])
+        if not isinstance(props, list) or len(props) > MAX_PROPS:
+            return {}
+        result = {}
+        for prop in props:
+            key, name, file = prop.get("id"), prop.get("name"), prop.get("file")
+            vertices, indices, digest = prop.get("vertex_count"), prop.get("index_count"), prop.get("sha256")
+            if (not isinstance(key, str) or not _ID.fullmatch(key) or key in result
+                    or not isinstance(name, str) or not 1 <= len(name) <= 128
+                    or not isinstance(file, str) or not _PROP_FILE.fullmatch(file) or prop.get("layout") != PROP_LAYOUT
+                    or type(vertices) is not int or not 0 < vertices <= MAX_PROP_VERTICES
+                    or type(indices) is not int or not 0 < indices <= MAX_PROP_INDICES or indices % 3
+                    or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+                return {}
+            textures = prop.get("textures", {})
+            if not isinstance(textures, dict) or any(
+                    role not in _PROP_TEXTURE_ROLES or not isinstance(texture, dict)
+                    or not isinstance(texture.get("file"), str) or not _PROP_TEXTURE_FILE.fullmatch(texture["file"])
+                    or not isinstance(texture.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", texture["sha256"])
+                    for role, texture in textures.items()):
+                return {}
+            result[key] = dict(id=key, name=name, file=file, vertex_count=vertices, index_count=indices, sha256=digest,
+                               textures={role: dict(file=texture["file"], sha256=texture["sha256"])
+                                         for role, texture in textures.items()})
+        return result
+    except (AttributeError, TypeError):
+        return {}
+
+
+def _read_prop(directory, prop, bone_count):
+    """Bounded, checksummed prop geometry whose joints and triangles stay in range."""
+    vertices, indices = prop["vertex_count"], prop["index_count"]
+    size = vertices * _PROP_VERTEX_BYTES + indices * 4
+    path = paths.safe_asset_path(directory, prop["file"])
+    if not path:
+        raise ValueError("The prop geometry is unavailable.")
+    with open(path, "rb") as stream:
+        data = stream.read(size + 1)
+    if len(data) != size or hashlib.sha256(data).hexdigest() != prop["sha256"]:
+        raise ValueError("The prop geometry is incomplete or has changed.")
+    records = np.frombuffer(data, "<f4", count=vertices * 8)
+    joints = np.frombuffer(data, "<u2", count=vertices * 4, offset=vertices * 32)
+    weights = np.frombuffer(data, "<f4", count=vertices * 4, offset=vertices * 40)
+    triangles = np.frombuffer(data, "<u4", count=indices, offset=vertices * 56)
+    if (not bounded(records) or not bounded(weights) or int(joints.max()) >= bone_count
+            or int(triangles.max()) >= vertices):
+        raise ValueError("The prop geometry does not match the loaded rig.")
+    return data
+
+
+def _prop_textures(directory, prop):
+    """Checksummed prop texture paths by role; a changed or missing texture is left out."""
+    result = {}
+    for role, texture in prop["textures"].items():
+        path = paths.safe_asset_path(directory, texture["file"])
+        if not path:
+            continue
+        with open(path, "rb") as stream:
+            data = stream.read(_MAX_PROP_TEXTURE_BYTES + 1)
+        if len(data) <= _MAX_PROP_TEXTURE_BYTES and hashlib.sha256(data).hexdigest() == texture["sha256"]:
+            result[role] = path
+    return result
+
+
+def _release(session):
+    for url in (*session["urls"], *session["prop_urls"]):
+        server.release_geometry(url)
+    server.release_texture_publication(session["prop_textures"])
+
+
 def _idle_face(session):
     """Blink shapes shared by a library, for clips that carry no facial curves.
 
@@ -270,8 +356,7 @@ class AnimationSessions:
     def clear(self):
         with self._lock:
             for session in self._sessions.values():
-                for url in session["urls"]:
-                    server.release_geometry(url)
+                _release(session)
             self._sessions.clear()
 
     @staticmethod
@@ -310,6 +395,7 @@ class AnimationSessions:
             runtime = animation_keys.bone_list(raw.get("runtime_bones"), len(rig["bones"])) if raw else None
             layers = _shared_layers(raw, len(rig["bones"])) if raw else {}
             layer_bones = (animation_keys.bone_list(raw.get("layer_bones"), len(rig["bones"])) or []) if raw else []
+            props = _props(raw) if raw else {}
             # Game-wide libraries at the Asset Folder root follow the Asset's own clips.
             for library in shared_animations.discover(root, rig):
                 targets = set(library["mapping"].values())
@@ -333,18 +419,52 @@ class AnimationSessions:
             token = uuid.uuid4().hex
             with self._lock:
                 if len(self._sessions) >= 32:
-                    old = self._sessions.pop(next(iter(self._sessions)))
-                    for url in old["urls"]:
-                        server.release_geometry(url)
+                    _release(self._sessions.pop(next(iter(self._sessions))))
                 self._sessions[token] = dict(directory=animation_dir, entries=entries, rig=rig,
-                                              is_current=is_current, urls=set(), runtime=runtime)
+                                              is_current=is_current, urls=set(), runtime=runtime,
+                                              props=props, prop_urls=[], prop_textures=None)
             return {"animation_session": token,
                     "animations": [{"id": e["id"], "name": e["name"], "duration": e["duration"],
                                     **({"shared": True} if e.get("shared") else {})}
                                    for e in entries.values()],
-                    "animation_sequences": sequences}
+                    "animation_sequences": sequences,
+                    "animation_props": [{"id": prop["id"], "name": prop["name"]} for prop in props.values()]}
         except (OSError, ValueError, TypeError, KeyError, RecursionError):
             return empty
+
+    def load_props(self, token):
+        """Publish the session's props: fresh single-use geometry URLs on each call, and
+        textures through one session texture publication released with the session."""
+        try:
+            with self._lock:
+                session = self._sessions.get(token) if isinstance(token, str) else None
+                if not session or not session["is_current"]():
+                    raise ValueError("The animation preview is no longer active.")
+                props = list(session["props"].values())
+            loaded = [(prop, _read_prop(session["directory"], prop, len(session["rig"]["bones"])),
+                       _prop_textures(session["directory"], prop)) for prop in props]
+            with self._lock:
+                if self._sessions.get(token) is not session or not session["is_current"]():
+                    raise ValueError("The animation preview is no longer active.")
+                if session["prop_textures"] is None and any(textures for _prop, _data, textures in loaded):
+                    publication = server.begin_texture_publication()
+                    publication.commit(replace=False)
+                    session["prop_textures"] = publication
+                for url in session["prop_urls"]:
+                    server.release_geometry(url)
+                session["prop_urls"] = []
+                result = []
+                for prop, data, textures in loaded:
+                    url = server.publish_geometry(data, replace=False)
+                    session["prop_urls"].append(url)
+                    urls = {role: session["prop_textures"].register(path, role) for role, path in textures.items()}
+                    result.append({"id": prop["id"], "name": prop["name"], "layout": PROP_LAYOUT,
+                                   "vertex_count": prop["vertex_count"], "index_count": prop["index_count"],
+                                   "data": {"url": url, "length": len(data)},
+                                   "textures": {role: url for role, url in urls.items() if url}})
+            return {"status": "ok", "props": result}
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            return {"status": "error", "error": str(error)}
 
     def load(self, token, clip_id):
         try:

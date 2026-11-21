@@ -25,7 +25,7 @@ from build_game_extract import (
 
 
 COMMIT = "76234e9f6f5a839504f41f9612719529fe2309a5"
-VERSION = "zzz-7-" + COMMIT[:12]
+VERSION = "zzz-8-" + COMMIT[:12]
 PINS["animestudio"] = (
     f"https://codeload.github.com/Escartem/AnimeStudio/zip/{COMMIT}",
     "46c186a273af125bf9ab9a005997809d9ebf6678f3a4f6aa917f989323039023",
@@ -214,6 +214,7 @@ def build(dotnet, update_locks=False, verify_format=False, force=False):
                 "MorphSources.cs",
                 "BlendShapePolicy.cs",
                 "GiExport.cs",
+                "PropMaterials.cs",
             ],
             cwd=project,
             env=environment,

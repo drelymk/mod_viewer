@@ -1001,9 +1001,12 @@ of documentation, comments and tests; use portable fixtures instead.
   the entering clip's root motion starts at the leaving one's rigid transform,
   applied as an offset on that bone; a crossfade blends each side with its own
   offset, and a step without a shared root-motion space keeps the offset.
-  Entering the first step (a cyclic wrap or replay) returns to the origin.
-  Seeking replays the carry through resident steps only; otherwise the step keeps
-  its own placement. Single clips and clips without a track keep their placement.
+  A single clip, and the first step whenever it is entered (selection, a cyclic
+  wrap or replay), starts with its root motion at the origin facing forward: its
+  entry-time rigid transform is undone, since authored placements can sit metres
+  away. Seeking replays the carry from that origin through resident steps only;
+  otherwise the seeked step starts at the origin at its own start. Clips without a
+  track keep their placement.
   A frame that crosses a step's leave plays its remainder in the entering step (and
   its fade), so handoff frames advance as far as any other frame.
   Playback may use one uniquely identified verified skeleton's compatible mesh
@@ -1197,7 +1200,11 @@ of documentation, comments and tests; use portable fixtures instead.
   Reuse a valid persisted ZZZ index across extractions and client lifetimes.
   Pool repeated renderer bone-path strings losslessly in the persisted index;
   restore the exact ordered paths for facial proof, with bounded tables and
-  references. Keep existing unpooled indexes reusable without another full scan.
+  references. The index also keeps a file table (every serialized file holding a
+  Material or Texture2D, by block, bundle offset and ordinal; only ZZZ scans request
+  it) so prop material and texture pointers into bundles without indexed objects can
+  be read; a CAB in several bundles is read from each copy and must agree. Indexes
+  from before that table are stale and need one rescan.
   Index compatibility has its own reader version; clip-only runtime changes
   do not invalidate unchanged discovery metadata.
   An index schema/runtime change requires one successful rebuild. ZZZ index
@@ -1213,14 +1220,22 @@ of documentation, comments and tests; use portable fixtures instead.
   Prove captured positions,
   UV triangles and positive float weights before adopting a sparse
   palette; Avatar path hashes and all used inverse binds must establish one common
-  mesh-to-Avatar basis. Preserve that basis with an extra root instead of rewriting
+  mesh-to-Avatar basis. Bones carrying at least 99% of the positive skin weight
+  must agree within the placement tolerance and fix that basis; the remaining
+  lightly weighted bones may drift from it only within a small bounded limit
+  (game data can leave such a bone's inverse bind off its Avatar rest), and a
+  non-finite bind never agrees. Preserve that basis with an extra root instead of rewriting
   captured geometry. Resolve symmetric component coordinate hypotheses across
   the model using one common basis. Native bind-pose arrays retain ZZZ's serialized
   row-major float order through ReadMatrix and indexer export; do not transpose
   them based on the reader's internal column-major field names.
   Equally supported incompatible placements
   remain ambiguous. A larger animation Avatar may replace a model Avatar only
-  with identical induced ancestry, reference worlds and remapped palettes.
+  with identical names, induced ancestry and remapped palettes, and identical
+  reference worlds for the model's proven palette bones and their ancestors;
+  unskinned model helpers (such as effect anchors) may keep their own rest. Two
+  model Avatars, or two animation Avatars, still need identical reference worlds
+  for every bone.
   When incompatible equally supported Avatars are versions of one Avatar object (same
   CAB and path id) in different blocks, the most recently written block wins; an
   unreadable or tied block time stays ambiguous.
@@ -1281,7 +1296,7 @@ of documentation, comments and tests; use portable fixtures instead.
   then uses the shared morph-before-skinning playback and restoration lifecycle.
   Preserve compatible libraries and user files in the
   existing staging transaction. Extraction/indexing stays off ordinary load paths.
-  ZZZ also indexes AnimatorControllers (index version `zzz-3`) and reads them with the
+  ZZZ also indexes AnimatorControllers (index version `zzz-4`) and reads them with the
   Genshin controller graph. Authored sequences come only from the family's controllers
   (`<family>…_Controller…`, compared without the family's internal underscores and
   ending on a token boundary, since `Name_Variant` clips use `NameVariant_Controller`);
@@ -1289,6 +1304,38 @@ of documentation, comments and tests; use portable fixtures instead.
   several blocks) are one controller; different objects sharing a name are skipped,
   never guessed. Leaves bind by pointer to converted clips whose copies share one clip
   key, and sequence names carry the controller suffix.
+  ZZZ extraction also exports props the capture never draws (weapons) into
+  `Animation/Props/` (content-addressed `prop-v1` blocks: f32 position/normal/UV
+  records, u16x4 rig joints, f32x4 weights, u32 triangles), listed as manifest
+  `props`. A prop is a skinned native model mesh of the verified family that no
+  captured component came from, whose inverse binds prove a placement against the
+  verified Avatar, and whose positive skin weight lies only on bones no captured
+  palette uses; names only discover candidates, so hair shadows, outfit variants
+  and other meshes driven by captured bones never qualify, and static effect meshes
+  are ignored. Geometry is converted to asset space through the rig root and that
+  placement, with UVs and triangle order following the captured parts' convention.
+  Different native copies under one name are skipped, never guessed. Prop failures
+  never block clips (`prop_error`, `skipped_props` in the report). Catalogs expose
+  `animation_props`. Each prop load publishes fresh single-use geometry URLs
+  (releasing the previous ones) after checksum and range checks; prop textures go
+  through one texture publication per animation session, released with it.
+  Prop textures come from the game material of renderers proven to draw the prop
+  (complete ordered bone paths plus an Animator Avatar among the verified copies).
+  Which material slot feeds which viewer role (diffuse, light_map, material_map) is
+  learned per extraction, never assumed from slot names: a slot takes a role only
+  when its top mip is byte-identical to a captured texture of that role on a proven
+  body part, with no competing slot or role. The prop's routed materials must agree
+  on each slot's content; its top mip is written unchanged as a single-mip DX10 DDS
+  (`Props/<digest>.dds`, sRGB only for diffuse) and listed under the prop's
+  `textures`. Normal maps stay unproven (captures do not hold the game's normal
+  texture), so props keep their authored mesh normals. Multi-material props, and
+  props without a proven slot, stay untextured with `texture_error` in the report.
+  Playback skins them with each clip's bone deltas outside the editable rig and
+  shows them only while a clip is applied: never at rest, in manual posing or after
+  Stop. They follow the body mesh's model transform; textured props use the body
+  mesh's game material profile and the shared texture registry under prop-scoped
+  keys released on disposal. Clips may park a prop under the floor or away from the
+  hands, as the game does.
 - Genshin Impact (GIMI) extraction runs the same pinned reader in `--gi` mode with the
   database ACL decoder rebuilt from the same unmodified source. Accept only the
   global `GenshinImpact_Data` layout; the effective block set is

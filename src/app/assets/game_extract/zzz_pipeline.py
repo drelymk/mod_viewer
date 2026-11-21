@@ -10,7 +10,7 @@ import numpy as np
 from app.assets import animation_keys
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
-from . import animator_sequences, zzz_animation, zzz_index, zzz_morphs
+from . import animator_sequences, zzz_animation, zzz_index, zzz_morphs, zzz_props
 from .native import humanoid_controls
 from .pipeline import clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
 from .runtime import ExtractionCancelled, check_cancelled
@@ -95,11 +95,26 @@ def index_shape(shape):
     return None, shape[1]
 
 
+def _skinning_bones(candidate):
+    """Rig ordinals of the proven palette bones and all of their ancestors."""
+    bones, found = candidate["rig"]["bones"], set()
+    for palette in candidate["matched"].values():
+        for bone in palette["bone_map"].values():
+            while bone >= 0 and bone not in found:
+                found.add(bone)
+                bone = bones[bone]["parent"]
+    return found
+
+
 def _unified_candidate(candidates):
     """The largest candidate when every other one is a proven equivalent sub-skeleton, else None."""
     largest = min(candidates, key=lambda item: (-len(item["rig"]["bones"]), item["source"]))
     for item in candidates:
-        mapping = sub_skeleton_map(largest["rig"], item["rig"], affine=True)
+        # The animation Avatar drives a model Avatar's mesh. Unskinned model helpers
+        # (such as effect anchors) may keep their own rest, but every name, the
+        # hierarchy and each skinning bone's reference world must still agree.
+        worlds = _skinning_bones(item) if item["model"] and not largest["model"] else None
+        mapping = sub_skeleton_map(largest["rig"], item["rig"], affine=True, worlds_for=worlds)
         if mapping is None:
             return None
         primary = largest["matched"]
@@ -227,6 +242,7 @@ def verify_candidates(client, captured, rows, query, cancel, *,
                 rig = _rig(avatar, group["basis"], [matches[i] for i in sorted(matches)])
                 score = sum(captured[i]["index_count"] for i in matches)
                 candidates.append(dict(rig=rig, avatar=avatar, family=family, score=score, matched=matches,
+                                       model=avatar_row["name"].endswith("_ModelAvatar"),
                                        source=zzz_index.identity(avatar_row), meshes=sorted(group["sources"]),
                                        avatar_copies=seen_avatars[avatar_key],
                                        native={i: group["native"][i] for i in matches}))
@@ -440,13 +456,30 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     if not imported:
         raise ValueError("No compatible ZZZ animation clips could be converted. Existing Asset files were preserved.")
     sequences = _sequences(client, index, chosen["family"], clips, converted, cancel)
-    write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
-                                                   clips=list(entries.values()), sequences=sequences,
-                                                   runtime_bones=animation_keys.runtime_bones(rig, existing.values())), 1024 * 1024)
+    # Weapons the capture never drew; a failure leaves the clips unaffected.
+    props, skipped_props, prop_error = [], [], None
+    try:
+        props, skipped_props = zzz_props.extract(client, chosen, rig, index, library, cancel,
+                                                 lambda family, row: _mesh_family_hint(family, row["name"]),
+                                                 captured, asset)
+    except ExtractionCancelled:
+        raise
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        prop_error = str(error) if isinstance(error, ValueError) else "The props could not be extracted."
+    manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
+                    clips=list(entries.values()), sequences=sequences,
+                    runtime_bones=animation_keys.runtime_bones(rig, existing.values()))
+    if props:
+        manifest["props"] = [{key: value for key, value in prop.items() if key not in ("source", "texture_error")}
+                             for prop in props]
+    write_document(library / "manifest.json", manifest, 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="zzz", skeleton_id=rig["id"], skeleton=chosen["source"],
                   meshes=chosen["meshes"], proven_components=len(chosen["matched"]), unmatched_components=len(captured) - len(chosen["matched"]),
                   bones=len(rig["bones"]), clips=len(entries), imported=imported, secondary=0, sequences=len(sequences), skipped=len(skipped),
-                  skipped_details=skipped, animations=provenance)
+                  skipped_details=skipped, animations=provenance,
+                  props=[dict(id=prop["id"], name=prop["name"], source=prop["source"], textures=sorted(prop.get("textures", {})),
+                              **({"texture_error": prop["texture_error"]} if "texture_error" in prop else {})) for prop in props],
+                  skipped_props=skipped_props, **({"prop_error": prop_error} if prop_error else {}))
     write_document(output / "RigExtraction.json", report, 4 * 1024 * 1024)
     return report, fingerprints

@@ -133,6 +133,13 @@ function rootMotionAt({ clip, values }, time, out) {
 }
 
 // Clips place the character absolutely, while the game moves it by root-motion deltas.
+// The offset that starts a clip's root motion at the origin, facing forward, at a clip time;
+// null for a clip without a track, which keeps its own placement.
+function anchorRootMotion(entry, time) {
+  const bone = entry.clip.root_motion?.bone;
+  return bone === undefined ? null : { bone, matrix: rootMotionAt(entry, time, new Matrix4()).invert() };
+}
+
 // Carry the travel across a step change so the entering clip's root motion starts where
 // the leaving one was. A step without a shared root-motion space keeps the offset.
 function carryRootMotion(offset, leaving, leaveTime, entering, enterTime) {
@@ -384,14 +391,15 @@ export function createRigAnimation({
     const current = ++generation;
     const shown = { clip, values };
     const apply = (entry) => {
-      // Replay the travel the earlier steps carry. Steps no longer resident cannot be
-      // replayed, so the seeked step then keeps its own placement.
+      // Replay the travel the earlier steps carry from the first step's origin. Steps no
+      // longer resident cannot be replayed, so the seeked step then starts at the origin.
       const resident = (id) => (id === entry.clip.id ? entry : id === shown.clip.id ? shown : cache?.get(id));
-      motion = null;
-      for (let number = 0; number < index; number++) {
+      const head = resident(sequence.steps[0].clip);
+      motion = head ? anchorRootMotion(head, sequence.steps[0].start) : undefined;
+      for (let number = 0; number < index && motion !== undefined; number++) {
         const [leaving, entering] = [number, number + 1].map((at) => resident(sequence.steps[at].clip));
         if (!leaving || !entering) {
-          motion = null;
+          motion = undefined;
           break;
         }
         motion = carryRootMotion(
@@ -402,6 +410,7 @@ export function createRigAnimation({
           sequence.steps[number + 1].start,
         );
       }
+      if (motion === undefined) motion = anchorRootMotion(entry, target.start);
       ({ clip, values } = entry);
       step = index;
       time = target.start + remaining;
@@ -432,7 +441,10 @@ export function createRigAnimation({
     const index = (step + 1) % sequence.steps.length;
     const enterTime = index === 0 && sequence.cyclic ? sequence.restart : sequence.steps[index].start;
     // Returning to the first step puts the character back at its origin once per pass.
-    const carried = index === 0 ? null : carryRootMotion(motion, { clip, values }, leaving.leave, next, enterTime);
+    const carried =
+      index === 0
+        ? anchorRootMotion(next, enterTime)
+        : carryRootMotion(motion, { clip, values }, leaving.leave, next, enterTime);
     outgoing = leaving.fade > 0 ? { clip, values, time: leaving.leave, motion } : null;
     fadeElapsed = 0;
     fadeDuration = leaving.fade;
@@ -633,6 +645,8 @@ export function createRigAnimation({
       values = first.values;
       idle = first.blink;
       time = chosen ? chosen.steps[0].start : 0;
+      // Every clip and sequence starts its root motion at the origin, as the game plays it.
+      motion = anchorRootMotion(first, time);
       idleTime = 0;
       loading = false;
       secondary.reset();

@@ -250,10 +250,15 @@ class AssetPreview:
         except (OSError, ValueError, TypeError, KeyError) as error:
             return {"status": "error", "error": str(error), "meshes": {}}
 
+    def _animation_owner(self, token):
+        return next((state["weights"]["animations"] for state in list(self._asset_fill_sessions.values())
+                     if token in state["weights"]["animations"]), self._animations)
+
     def get_animation(self, token, clip_id):
-        owner = next((state["weights"]["animations"] for state in list(self._asset_fill_sessions.values())
-                      if token in state["weights"]["animations"]), self._animations)
-        return owner.load(token, clip_id)
+        return self._animation_owner(token).load(token, clip_id)
+
+    def get_animation_props(self, token):
+        return self._animation_owner(token).load_props(token)
 
     def pick_asset_texture_file(self, window, folder_path, texture_role=None):
         """Register a chosen Asset texture using the facade-owned window."""

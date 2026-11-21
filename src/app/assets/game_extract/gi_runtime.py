@@ -53,6 +53,8 @@ def archives(root):
 
 
 class Client(zzz_runtime.Client):
+    index_files = False
+
     def __init__(self, executable, folder, work, cancel):
         self.root = validate_folder(folder)
         self.executable, self.work, self.cancel = Path(executable), Path(work), cancel
