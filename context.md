@@ -492,9 +492,18 @@ of documentation, comments and tests; use portable fixtures instead.
   Decodability alone does not prove asset membership. Direct geometry defaults
   to excluded unless explicitly selected, except GIMI's supported direct facial
   candidates: retain all of those for manual cleanup, including missing-material
-  candidates, closed-eye expressions, alternate passes and complete overlay shells.
-  These are capture candidates, not a claim of one character's semantic identity.
-  Do not rank open-eye anchors, suppress facial passes or split away eye overlays.
+  candidates, closed-eye expressions and other overlay shells. Passes that rebind
+  the same position/UV resource versions, payloads and index range form one
+  candidate that keeps every draw's provenance, even when only auxiliary
+  position-stream declarations such as TANGENT differ; POSITION/NORMAL layout
+  differences stay separate. A direct face whose TEXCOORD2.x > 0.05 vertices form
+  a vertex-disjoint contiguous triangle run, with every other vertex's TEXCOORD2
+  exactly zero, holds the alternate shell the captured face shader collapses:
+  split it into its own candidate in the base's family and position-hash folder,
+  excluded by default and explicitly selectable. Mixed or non-contiguous shells
+  stay intact. These are capture candidates, not a claim of one character's
+  semantic identity. Do not rank open-eye anchors, suppress other facial passes or
+  split away other eye overlays.
   Matching diffuse/light payloads group captured-matrix placement evidence only;
   candidates without that pair validate independently. Keep unresolved placement
   visible, preserve its captured coordinates and mark the extraction partial.
