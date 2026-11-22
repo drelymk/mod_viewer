@@ -16,6 +16,8 @@ LABEL = "Genshin Impact"
 # agreement (about 0.25 mm), and eye bones sit about 0.0015 off their mesh's common
 # bind placement; 2e-3 stays about 2 mm and 0.11 degrees.
 PLACEMENT_TOLERANCE = 2e-3
+# Baked face placement carries that same inverse-bind noise (about 0.09 mm seen), so a
+# weightless face capture may sit one shared translation within it off the native rest.
 # Some Genshin Blend streams drift from the native weights by up to this much per influence.
 WEIGHT_DRIFT = 0.02
 
@@ -30,7 +32,7 @@ def _verify(client, captured, index, query, cancel):
     # not the captured component's vertex count; only index counts narrow meshes.
     return zzz_pipeline.verify_candidates(client, captured, index, query, cancel, mesh_hint=colocated, label=LABEL,
                                           placement_tolerance=PLACEMENT_TOLERANCE, shape_key=zzz_pipeline.index_shape,
-                                          weight_drift=WEIGHT_DRIFT)
+                                          weight_drift=WEIGHT_DRIFT, attachment_offset=PLACEMENT_TOLERANCE)
 
 
 def prove_rig(client, root, record, query, progress, cancel, index):

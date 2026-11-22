@@ -81,12 +81,17 @@ def capture_skinning(root, file, layout, vertices):
     return CapturedSkinning(relative, layout.stride, tuple(channels), tuple(vertices)) if channels and relative else None
 
 
-def decode_captured_skinning(root, manifest):
+def decode_captured_skinning(root, manifest, dumps=None):
+    """Decode one part's weights; ``dumps`` shares parsed text dumps between parts of one file."""
     file = paths.safe_asset_path(root, manifest.file)
     if not file:
         raise ValueError("The captured skin-weight resource is unavailable.")
     if isinstance(manifest, CapturedDumpSkinning):
-        dump = parse_vertex_dump(file, include_skinning=True)
+        dump = dumps.get(manifest.file) if dumps is not None else None
+        if dump is None:
+            dump = parse_vertex_dump(file, skinning_only=True)
+            if dumps is not None:
+                dumps[manifest.file] = dump
         if dump.blend_data is None:
             raise ValueError("The captured vertex dump has no supported skin weights.")
         source = SkinningSource(manifest.file, 32, 4, "gimi_f32_u32_4")

@@ -10,7 +10,9 @@ import pytest
 from app.assets import animation_keys, animations
 from app.assets.animations import AnimationSessions
 from app.assets.animation_conversion import reference_layer_timing
-from app.assets.skinning import capture_skinning, decode_captured_skinning
+from app.assets import skinning
+from app.assets.skinning import CapturedDumpSkinning, capture_skinning, decode_captured_skinning
+from core.geometry.migoto_dump import parse_vertex_dump
 from core.geometry.migoto_format import MigotoBinaryLayout, MigotoElement
 from app.assets.index import build_index
 from app.bridge.asset_preview import AssetPreview
@@ -448,6 +450,35 @@ def test_captured_weights_follow_geometry_vertex_compaction(tmp_path):
     assert source.influence_count == 4
     assert decoded.bone_ids == (0, 4, 5)
     assert list(struct.unpack("<8I", decoded.indices)) == [4, 5, 6, 7, 0, 1, 2, 3]
+
+
+def test_text_dump_weights_parse_once_for_parts_sharing_a_file(tmp_path, monkeypatch):
+    dump = tmp_path / "Shared-vb0.txt"
+    dump.write_text("\n".join(["stride: 72", "vertex count: 3", "vertex-data:", *(
+        line for vertex, (ids, weights) in enumerate(
+            (("7, 9, 0, 0", ".75, .25, 0, 0"), ("2, 0, 0, 0", "1, 0, 0, 0"),
+             ("4, 5, 0, 0", ".5, .5, 0, 0")))
+        for line in (f"vb0[{vertex}]+000 POSITION: 1, 2, 3",
+                     f"vb0[{vertex}]+012 BLENDINDICES: {ids}",
+                     f"vb0[{vertex}]+044 TEXCOORD: .25, .75",
+                     f"vb0[{vertex}]+056 BLENDWEIGHTS: {weights}"))]) + "\n", encoding="utf-8")
+    # Skinning-only parsing yields the same weights without position, normal or UV data.
+    full = parse_vertex_dump(dump, include_skinning=True)
+    only = parse_vertex_dump(dump, skinning_only=True)
+    assert only.blend_data == full.blend_data
+    assert (only.positions, only.normals, only.uvs) == (None, None, None)
+
+    calls = []
+    real = skinning.parse_vertex_dump
+    monkeypatch.setattr(skinning, "parse_vertex_dump", lambda *a, **k: calls.append(a) or real(*a, **k))
+    parts = [CapturedDumpSkinning(dump.name, (0, 1)), CapturedDumpSkinning(dump.name, (2,))]
+    shared = {}
+    decoded = [decode_captured_skinning(str(tmp_path), part, shared) for part in parts]
+    assert len(calls) == 1
+    independent = [decode_captured_skinning(str(tmp_path), part) for part in parts]
+    assert len(calls) == 3
+    assert [item[1] for item in decoded] == [item[1] for item in independent]
+    assert decoded[0][1].bone_ids == (2, 7, 9) and decoded[1][1].bone_ids == (4, 5)
 
 
 def test_direct_asset_weight_rig_preview_and_stale_token(tmp_path, monkeypatch):

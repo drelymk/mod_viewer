@@ -7,7 +7,10 @@ the game data the viewer reads ties them to the character, so they are paired by
 
 - An object clip ``Ani_SkillObj_<token>_<object>_<suffix>`` pairs with the character's
   converted clips whose body clip is the only one named ``…_<token>_<suffix>``, when both
-  last the same time. A name several clips share is never chosen between.
+  last the same time. A name several clips share is never chosen between. Failing that,
+  names compare ignoring case, underscores and a ``Bone`` marker (``Show01`` and
+  ``Show_01_Bone_01_BS`` against ``Show_01``/``Show_01_BS``), still needing one clip, one
+  length and no other object clip of the same object claiming that clip.
 - No position is guessed beyond one rule: the object's origin is the character's origin,
   facing the same way. The object clip's own curves place it from there.
 - The object must not move by root motion, as the character's clips play in place.
@@ -40,15 +43,28 @@ DURATION_TOLERANCE = 1e-3
 MOTION_ATTRIBUTES = range(7)
 
 
+def _normalized(suffix):
+    """A clip suffix without case, underscores or a ``Bone`` marker (with its number)."""
+    return re.sub(r"_?bone(?:_\d+)?|_", "", suffix.casefold())
+
+
 def _suffixes(token, body_clips):
-    """Character clip suffix (case-folded) -> converted clips, only for names nothing else shares."""
+    """(exact, loose) character clip lookups for suffixes nothing else shares.
+
+    ``exact`` maps a case-folded suffix to its converted clips and ``loose`` a normalized
+    suffix; a normalized name that two different suffixes reach is left out.
+    """
     marker = f"_{token}_"
     names = {}
     for identity, item in body_clips.items():
         name = item["name"]
         if name.startswith("Ani_Avatar_") and name.count(marker) == 1:
             names.setdefault(name.split(marker, 1)[1].casefold(), set()).add(identity)
-    return {suffix: body_clips[next(iter(found))] for suffix, found in names.items() if len(found) == 1}
+    exact = {suffix: body_clips[next(iter(found))] for suffix, found in names.items() if len(found) == 1}
+    loose = {}
+    for suffix, found in names.items():
+        loose.setdefault(_normalized(suffix), set()).update(found)
+    return exact, {key: body_clips[next(iter(found))] for key, found in loose.items() if len(found) == 1}
 
 
 def _objects(index, token):
@@ -121,19 +137,31 @@ def _track(locals_, bones, rest, anchor):
 
 def _tracks(client, thing, clips, suffixes, bones, rest, anchor, cancel, skip):
     """[(track bytes, paired character clips)] of the object's clips that pair by name."""
-    found = []
+    exact, loose = suffixes
+    pairs = []
     for suffix, rows in sorted(clips.items())[:MAX_OBJECT_CLIPS]:
-        check_cancelled(cancel)
         name = rows[0]["name"]
-        partner = suffixes.get(suffix)
+        partner = exact.get(suffix)
         if len(rows) != 1:
             skip(thing, "Several object clips share one name.", name)
-            continue
-        if partner is None:
+        elif partner is not None:
+            pairs.append((rows[0], partner, False))
+        elif (partner := loose.get(_normalized(suffix))) is not None:
+            pairs.append((rows[0], partner, True))
+        else:
             skip(thing, "No single character clip has this clip's name.", name)
+    claims = {}
+    for _row, partner, _loosely in pairs:
+        claims[id(partner)] = claims.get(id(partner), 0) + 1
+    found = []
+    for row, partner, loosely in pairs:
+        check_cancelled(cancel)
+        name = row["name"]
+        if loosely and claims[id(partner)] > 1:
+            skip(thing, "Several object clips pair with one character clip.", name)
             continue
         try:
-            clip = client.read(rows[0])
+            clip = client.read(row)
             if abs((clip["stop"] - clip["start"]) - partner["duration"]) > DURATION_TOLERANCE:
                 skip(thing, "The paired character clip lasts a different time.", name)
                 continue

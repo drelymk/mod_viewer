@@ -44,7 +44,7 @@ class DumpVertexLayout:
 @dataclass(slots=True)
 class ParsedVertexDump:
     layout: DumpVertexLayout
-    positions: bytes
+    positions: bytes | None
     normals: bytes | None
     uvs: bytes | None
     blend_data: bytes | None = None
@@ -202,8 +202,14 @@ def _layout_declaration(line, semantics, state):
         format_match.group(1) if format_match else None)
 
 
-def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT, include_skinning=False):
-    """Stream one text VB dump and return canonical XYZ/UV byte arrays."""
+def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT, include_skinning=False,
+                      skinning_only=False):
+    """Stream one text VB dump and return canonical XYZ/UV byte arrays.
+
+    ``skinning_only`` implies ``include_skinning`` and skips the position,
+    normal and UV rows; those fields of the result are then ``None``.
+    """
+    include_skinning = include_skinning or skinning_only
     path = _readable_path(path)
     max_vertices = min(int(max_vertices), MAX_VERTEX_COUNT)
     state = {"stride": 0, "count": None}
@@ -232,6 +238,8 @@ def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT, include_skinning=F
                 name, index = semantic
                 if name not in values or index != 0:
                     continue
+                if skinning_only and not name.startswith("BLEND"):
+                    continue
                 text = line.split(":", 1)[1] if ":" in line else line
                 parsed = _float_values(text)
                 needed = 1 if name.startswith("BLEND") else 2 if name == "TEXCOORD" else 3
@@ -255,7 +263,8 @@ def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT, include_skinning=F
     if state["count"] is not None and highest >= vertex_count:
         raise MigotoDumpError("Dump contains a vertex outside its declared range.")
     positions = values["POSITION"]
-    if len(positions) < vertex_count or any(i not in positions for i in range(vertex_count)):
+    if not skinning_only and (len(positions) < vertex_count
+                              or any(i not in positions for i in range(vertex_count))):
         raise MigotoDumpError("Dump is missing POSITION0 values.")
 
     def pack(name, width):
