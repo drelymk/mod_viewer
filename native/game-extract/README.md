@@ -7,7 +7,11 @@ the parser. No upstream MCP or hosting code is built, invoked or downloaded.
 
 The private protocol supports only WuWa package search (`SkeletalMesh`,
 `AnimSequence` and `AnimMontage`, whose property JSON export feeds authored sequences), child folders, property JSON, highest-detail UEFormat skeletal
-meshes with morph targets and ActorX animations. Mesh exports disable materials
+meshes with morph targets and ActorX animations. For prop textures it also writes one
+Texture2D's stored top mip as raw bytes with its size, pixel format and sRGB flag. Textures are
+read from a quality-tier folder (`HD` or `UHD` beside `Paks`), mounted lazily as a
+separate provider so it never changes package resolution for the main archives; a
+missing top level is never replaced by a smaller one. Mesh exports disable materials
 and textures; property exports retain decoded animation curves. One provider remains mounted until the extraction job finishes; closing
 or cancelling the job terminates the process before staging cleanup. Responses
 are atomic files in private staging, with bounded JSON requests and responses.
@@ -58,8 +62,9 @@ At the pinned parser revision, ImageSharp operations belong to landscape
 heightmap conversion (`LandscapeMeshDto` and `LandscapeMeshExporter`), which
 the helper never instantiates. Mesh export explicitly uses `SkinnedAssetExporter`
 and UEFormat; `MeshExporter.EnqueueMaterials` returns immediately when
-`ExportMaterials` is false. Animation export uses ActorX. Search and property
-JSON deserialize packages without invoking image decoding, encoding or processing.
+`ExportMaterials` is false. Animation export uses ActorX. Search, property
+JSON and the raw texture read deserialize packages without invoking image decoding,
+encoding or processing.
 The affected TIFF, ICC and histogram operations are therefore unreachable through
 these extraction operations. Retain the locked dependency and visible restore
 warnings; reassess this conclusion before enabling landscape or image exports.

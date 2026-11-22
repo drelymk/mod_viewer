@@ -1,4 +1,4 @@
-"""Wrap raw Unity Texture2D mip 0 data in a DX10 DDS the viewer uploads without decoding."""
+"""Wrap a stored top mip (Unity Texture2D data, or any DXGI format) in a DX10 DDS the viewer uploads without decoding."""
 
 import struct
 
@@ -32,9 +32,14 @@ def encode(width, height, unity_format, data, *, srgb):
     if len(data) < size:
         raise ValueError("The texture data is incomplete.")
     unorm, srgb_format, _block = FORMATS[unity_format]
+    return wrap(width, height, srgb_format if srgb else unorm, data[:size])
+
+
+def wrap(width, height, dxgi_format, data):
+    """A single-mip DX10 DDS holding ``data`` (one complete top mip) unchanged."""
     # DDSD_CAPS | HEIGHT | WIDTH | PIXELFORMAT | LINEARSIZE; DDSCAPS_TEXTURE.
-    header = struct.pack("<7I44x", 124, 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000, height, width, size, 0, 1)
+    header = struct.pack("<7I44x", 124, 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000, height, width, len(data), 0, 1)
     pixel_format = struct.pack("<II4s5I", 32, 0x4, b"DX10", 0, 0, 0, 0, 0)
     caps = struct.pack("<5I", 0x1000, 0, 0, 0, 0)
-    dx10 = struct.pack("<5I", srgb_format if srgb else unorm, 3, 0, 1, 0)
-    return b"DDS " + header + pixel_format + caps + dx10 + bytes(data[:size])
+    dx10 = struct.pack("<5I", dxgi_format, 3, 0, 1, 0)
+    return b"DDS " + header + pixel_format + caps + dx10 + bytes(data)

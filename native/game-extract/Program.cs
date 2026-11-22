@@ -5,6 +5,7 @@ using CUE4Parse.FileProvider;
 using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
+using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
@@ -59,6 +60,7 @@ internal static class Program
 internal sealed class GameSession(string paks, string work) : IDisposable
 {
     private DefaultFileProvider? provider;
+    private readonly Dictionary<string, DefaultFileProvider> tiers = new(StringComparer.Ordinal);
     private string[] packages = [];
     private readonly Dictionary<string, string[]> types = new(StringComparer.OrdinalIgnoreCase);
 
@@ -84,9 +86,18 @@ internal sealed class GameSession(string paks, string work) : IDisposable
             if (!File.Exists(Path.Combine(AppContext.BaseDirectory, name))) throw new FileNotFoundException();
         await OodleHelper.InitializeAsync(Path.Combine(AppContext.BaseDirectory, "oodle-data-shared.dll"));
         await ZlibHelper.InitializeAsync(Path.Combine(AppContext.BaseDirectory, "zlib-ng2.dll"));
+        var mounted = await Open(paks);
+        packages = mounted.Files.Values.Where(file => file.IsUePackage)
+            .Select(file => file.PathWithoutExtension).Where(path => path.StartsWith("Client/Content/", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        provider = mounted;
+    }
+
+    private static async Task<DefaultFileProvider> Open(string directory)
+    {
         var keyPairs = LoadKeys();
         var main = keyPairs[0].Value;
-        var mounted = new DefaultFileProvider(paks, SearchOption.AllDirectories,
+        var mounted = new DefaultFileProvider(directory, SearchOption.AllDirectories,
             new VersionContainer(EGame.GAME_WutheringWaves), StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -98,12 +109,25 @@ internal sealed class GameSession(string paks, string work) : IDisposable
             if (mounted.UnloadedVfs.Count > 0) await mounted.MountAsync();
             mounted.PostMount();
             mounted.LoadVirtualPaths();
-            packages = mounted.Files.Values.Where(file => file.IsUePackage)
-                .Select(file => file.PathWithoutExtension).Where(path => path.StartsWith("Client/Content/", StringComparison.OrdinalIgnoreCase))
-                .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
-            provider = mounted;
+            return mounted;
         }
         catch { mounted.Dispose(); throw; }
+    }
+
+    // Character textures ship in separate quality-tier archives beside the main Paks
+    // folder. Each tier is its own provider, so it never changes package resolution
+    // for meshes, metadata or animations.
+    private async Task<DefaultFileProvider> Tier(string? name)
+    {
+        if (name is not ("HD" or "UHD")) throw new InvalidDataException();
+        if (tiers.TryGetValue(name, out var existing)) return existing;
+        var parent = Path.GetDirectoryName(Path.GetFullPath(paks).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            ?? throw new DirectoryNotFoundException();
+        var directory = Path.Combine(parent, name);
+        if (!Directory.Exists(directory)) throw new DirectoryNotFoundException();
+        var mounted = await Open(directory);
+        tiers.Add(name, mounted);
+        return mounted;
     }
 
     public async Task<object> Execute(JObject request)
@@ -123,8 +147,13 @@ internal sealed class GameSession(string paks, string work) : IDisposable
         }
         if (operation == "search") return Search(request);
         var kind = (string?)request["kind"];
-        if (kind is not ("json" or "mesh" or "anim")) throw new InvalidDataException();
+        if (kind is not ("json" or "mesh" or "anim" or "texture")) throw new InvalidDataException();
         var destination = Contract.Destination(work, (string?)request["outDir"]);
+        if (kind == "texture")
+        {
+            if (operation != "export") throw new InvalidDataException();
+            return await ExportTexture(await Tier((string?)request["tier"]), Contract.Package((string?)request["path"]), destination);
+        }
         var paths = operation == "batch" ? request["paths"]?.ToObject<string[]>() : [(string?)request["path"] ?? ""];
         if (paths is null || paths.Length is < 1 or > 500) throw new InvalidDataException();
         foreach (var path in paths) Contract.Package(path);
@@ -169,12 +198,35 @@ internal sealed class GameSession(string paks, string work) : IDisposable
         return new { truncated = hits.Count > 500, results = hits.Take(500) };
     }
 
-    private IPackage Load(string path)
+    private IPackage Load(string path) => Load(provider!, path);
+
+    private static IPackage Load(DefaultFileProvider source, string path)
     {
         Contract.Package(path);
         foreach (var extension in new[] { ".uasset", ".umap" })
-            if (provider!.TryGetGameFile(path + extension, out var file)) return provider.LoadPackage(file);
+            if (source.TryGetGameFile(path + extension, out var file)) return source.LoadPackage(file);
         throw new FileNotFoundException();
+    }
+
+    // The stored top mip of one Texture2D, unchanged: no image decoding or conversion.
+    private static async Task<object> ExportTexture(DefaultFileProvider source, string path, string destination)
+    {
+        var textures = Load(source, path).ExportsLazy.Select(export => export.Value).OfType<UTexture2D>().ToArray();
+        if (textures.Length != 1 || textures[0].PlatformData?.Mips is not { Length: > 0 } mips) throw new InvalidDataException();
+        var texture = textures[0];
+        Contract.Segment(texture.Name);
+        var mip = texture.GetFirstMip();
+        // A missing top level (streamed elsewhere) is never replaced by a smaller one.
+        if (mip is null || mip.SizeX != mips[0].SizeX || mip.SizeY != mips[0].SizeY || mip.BulkData?.Data is not { Length: > 0 } data)
+            throw new InvalidDataException();
+        var target = Contract.Destination(destination, Path.Combine(destination, path + ".mip"));
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        await File.WriteAllBytesAsync(target, data);
+        return new
+        {
+            rootFiles = new[] { target },
+            texture = new { width = mip.SizeX, height = mip.SizeY, format = texture.Format.ToString(), srgb = texture.SRGB }
+        };
     }
 
     private async Task<string[]> Export(string kind, string path, string destination)
@@ -207,7 +259,11 @@ internal sealed class GameSession(string paks, string work) : IDisposable
         return results.SelectMany(result => result.DiskFilePaths ?? []).Select(file => Contract.Destination(destination, file)).ToArray();
     }
 
-    public void Dispose() => provider?.Dispose();
+    public void Dispose()
+    {
+        provider?.Dispose();
+        foreach (var tier in tiers.Values) tier.Dispose();
+    }
 }
 
 internal static class Contract

@@ -14,7 +14,7 @@ import shutil
 
 import numpy as np
 
-from app.assets.animations import MAX_PROP_INDICES, MAX_PROP_VERTICES, MAX_PROPS, PROP_LAYOUT
+from app.assets.animations import MAX_PROP_INDICES, MAX_PROP_VERTICES, MAX_PROPS, PROP_LAYOUT, pack_prop
 from . import zzz_index, zzz_prop_textures
 from .pipeline import rest_worlds
 from .runtime import ExtractionCancelled, check_cancelled
@@ -80,12 +80,7 @@ def _encode(mesh, placed, root, captured_bones, reference):
         triangles = triangles[:, ::-1]
     if not np.isfinite(positions).all() or not np.isfinite(normals).all():
         return None, "Unsupported prop geometry."
-    payload = b"".join([
-        np.hstack([positions, normals, texcoords]).astype("<f4").tobytes(),
-        rig_joints.astype("<u2").tobytes(),
-        weights.astype("<f4").tobytes(),
-        triangles.astype("<u4").tobytes(),
-    ])
+    payload = pack_prop(positions, normals, texcoords, rig_joints, weights, triangles)
     return (payload, count, int(indices.size)), None
 
 

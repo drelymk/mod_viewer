@@ -12,7 +12,9 @@ from .bundle import runtime_directory
 
 
 PARSER_COMMIT = "cb909733773daea9015a67f6955d6f2ec24d3629"
-VERSION = "direct-4-" + PARSER_COMMIT[:12]
+VERSION = "direct-5-" + PARSER_COMMIT[:12]
+# Helper changes that leave discovery metadata unchanged keep existing game indexes valid.
+INDEX_VERSION = "direct-4-" + PARSER_COMMIT[:12]
 MAX_RESPONSE = 32 * 1024 * 1024
 MAX_EXPORT_BYTES = 160 * 1024 * 1024
 MAX_WORK_BYTES = 4 * 1024 ** 3
@@ -216,6 +218,22 @@ class Client:
                     self._files(item, destination)
                 files[item["path"]] = item
         return files
+
+    def texture(self, package, destination, tier):
+        """One Texture2D's stored top mip from a quality-tier archive: (file, description)."""
+        if tier not in ("HD", "UHD"):
+            raise ValueError("Unsupported game texture tier.")
+        # An absent tier fails here: a helper error would restart the helper for every texture.
+        if not (self.paks.parent / tier).is_dir():
+            raise ValueError("The game texture tier is not installed.")
+        result = self.call("export", kind="texture", path=package, outDir=str(destination), tier=tier)
+        files = self._files(result, destination)
+        texture = result.get("texture")
+        if (len(files) != 1 or not isinstance(texture, dict) or not isinstance(texture.get("format"), str)
+                or not isinstance(texture.get("srgb"), bool)
+                or any(type(texture.get(key)) is not int or not 0 < texture[key] <= 16384 for key in ("width", "height"))):
+            raise ValueError("The game texture export is incomplete.")
+        return files[0], texture
 
     @staticmethod
     def _format(kind, format):
