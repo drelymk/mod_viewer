@@ -9,8 +9,9 @@ BLOCK_DIRS = (DATA + "/StreamingAssets/AssetBundles/blocks", DATA + "/Persistent
 # Discovery metadata has its own version; clip-only helper changes keep a ready index.
 # gi-2 adds SkinnedMeshRenderer routes for facial curves; gi-3 keeps only character
 # data plus the material and texture files their renderers lead to; gi-4 also keeps
-# each family's skill objects for the name-paired preview.
-INDEX_VERSION = "gi-4-" + zzz_runtime.PARSER_COMMIT[:12]
+# each family's skill objects for the name-paired preview; gi-5 adds the effect prefabs
+# whose Follow component mounts those skill objects on a character point.
+INDEX_VERSION = "gi-5-" + zzz_runtime.PARSER_COMMIT[:12]
 ensure_runtime = zzz_runtime.ensure_runtime
 
 

@@ -1430,7 +1430,7 @@ of documentation, comments and tests; use portable fixtures instead.
   global `GenshinImpact_Data` layout; the effective block set is
   `StreamingAssets` plus `Persistent` one directory below `AssetBundles/blocks`,
   where a `Persistent` copy replaces the same relative path. Index Mesh, Avatar,
-  AnimationClip, AnimatorController and SkinnedMeshRenderer metadata as
+  AnimationClip, AnimatorController, SkinnedMeshRenderer and Follow metadata as
   `game-gimi-<hash>.json` with the ZZZ reuse/staleness rules; renderer rows keep
   only the path and explicit mesh/Avatar pointers, so null-mesh renderers stay
   unrouted. The scan covers every block, but the index keeps only what character
@@ -1442,7 +1442,15 @@ of documentation, comments and tests; use portable fixtures instead.
   files retain every copy of their CAB, so ambiguity is unchanged; an unknown scan
   row type still fails the build. Each family's skill objects (`SkillObj_<token>_…`
   Avatars, where the token is the family name's last part) keep their bundle's meshes,
-  renderers and `Ani_SkillObj_<token>_` clip CABs for the preview below. Resolve controller clip and renderer pointers only by
+  renderers and `Ani_SkillObj_<token>_` clip CABs for the preview below, plus `Follow`
+  rows (index version `gi-5`): effect prefab roots with a `MoleMole.MonoEffectPluginFollow`
+  component (identified by its in-file MonoScript class name), the point name its first
+  serialized field holds (null when that field is not a length-prefixed printable name),
+  its enabled flag, and each Animator beneath that root with its explicit Avatar and
+  controller pointers (generic-rig Animators have no Avatar; either may be null, not both) and
+  the local transforms from the root's child down to the Animator. Only rows whose Animators
+  have a kept skill-object Avatar or play a kept skill-object controller stay; unreadable
+  discovery objects add nothing. Resolve controller clip and renderer pointers only by
   case-insensitive CAB name plus PathID; a CAB in several blocks is ambiguous.
   A character's meshes are those sharing its Avatar's bundle (generic mesh names
   are not evidence) and still need the complete ZZZ native proof; an unproven
@@ -1530,14 +1538,51 @@ of documentation, comments and tests; use portable fixtures instead.
   1 ms); shared names are never chosen between. When no exact name exists, names compare
   ignoring case, underscores and a `Bone` marker with its number (`Show01`,
   `Show_01_Bone_01_BS`), still needing one body clip, the same length, and no other clip of
-  that object claiming the same body clip (reported as skipped). An object that moves by root motion
-  (MotionT/Q) is skipped. The single placement assumption is the object's origin at the
-  character's origin, facing the same way (both play in place); its own curves, scale
-  included, place and time it from there, so objects grow in and shrink away as the game
-  animates them. Geometry keeps the object's own skin (≤ 256 bones, LODs skipped); each
-  pair is baked into a `prop-track-v2` track (per frame and bone the asset-space affine
-  delta as f32 3x4 rows, for the whole clip) and the manifest prop carries `socket` null
-  and `track_layout`. Textures use the character's learned slots through the
+  that object claiming the same body clip (reported as skipped). An object's own controller
+  (`Ani_SkillObj_<token>_<object>[_…]`, kept by the index) may chain states the game plays
+  without input: from any plain state at speed 1, each state's only exit-time transition
+  without conditions leads on until none remains (a run, of one state or more). A run is named
+  by its first state, by the controller's name after the object's plus that state, by its
+  first clip's name after the object's and, from the controller's entry state, by the
+  controller's name after the object's alone (`…_Chess_Show_01` plays `Take 001`), and pairs only with the one character clip whose
+  length it fills and whose words a name has exactly (ignoring case, separators and a `Bone`
+  marker) or, failing that, whose first (action) word a name starts with and whose other words
+  it keeps in order (`ElementalArt` + `Heavy` names `ElementalArt_AS_Heavy`); its clips then
+  pair only through it. A game-wide survey found exact names for most fitting runs and the
+  anchored form for the rest; one-word generic states and unrelated names stay unpaired,
+  since matching lengths alone are often coincidental. A run no single character clip fits may
+  instead play through the leading steps of one derived character sequence: each step must end,
+  within one 60 Hz frame, where a state of the run hands over or the run ends, the run must fill
+  the last step, and a name must relate to the first step's clip by the same word rules in
+  either direction (the timing evidence then spans several boundaries). Each step's clip shows
+  the part of the run it plays from that step's sequence time; a clip that pairs on its own
+  keeps its own track, and runs that fit several sequences stay unpaired. A run plays each state from its exit time and offset (normalized state times),
+  crossfades for the transition's duration (fixed seconds or normalized), and holds a last
+  non-looping state's end, which may come up to one 60 Hz frame before the character clip's;
+  a looping last state must start within it. An object that moves by root motion
+  (MotionT/Q) is skipped. Placement comes from the effect prefabs whose Follow rows hold the
+  object's Animator, by its Avatar or, without one, by playing one of the object's controllers
+  (both resolved unambiguously by CAB and PathID): the Follow point (empty for the
+  character itself) and the prefab's own transforms below its root, the Animator's own
+  transform replacing the object's Avatar root rest unless its clip animates it. The prefabs
+  whose Animator plays the pair's own controller (the run's, or the one controller playing a
+  paired clip) decide first and must agree; otherwise prefabs that agree decide; otherwise the most specific one named for the object clip or run decides
+  (`Eff_<family>_<label>[_<object>][_SkillObj]`, whose label's case-folded letter and number
+  runs, without a `Bone` marker, begin the clip suffix's: `Show_01` names `Show_01_BS`), or
+  else the generic `Eff_<family>_<object>`; prefabs that still disagree, or one whose
+  point, enabled flag or single held Animator is unproven, leave the clip skipped with a
+  reason. A point is the only character Avatar bone with that last path name, read from the
+  converted clip, or outside the Avatar the paired body/streamer clip's own `Root/<point>`
+  Transform track (streamer only inside its skeleton mask, `Root` identity unless animated)
+  below the Avatar root; the mount follows its position and rotation only (a point whose
+  scale collapses is skipped). Tracks are baked per converted clip because points move with
+  each state's layers. An object no Follow prefab holds keeps the original assumption: its
+  origin at the character's origin, facing the same way (both play in place). Its own
+  curves, scale included, place and time it from there, so objects grow in and shrink away
+  as the game animates them. Follow components' other settings are not decoded. Geometry
+  keeps the object's own skin (≤ 256 bones, LODs skipped); each pair is baked into a
+  `prop-track-v2` track (per frame and bone the asset-space affine delta as f32 3x4 rows,
+  for the whole clip) and the manifest prop carries `socket` null and `track_layout`. Textures use the character's learned slots through the
   object's own renderers. Reports list unpaired, mismatched and moving clips in
   `skipped_props` (`kind` `skill_object`); failures are `skill_object_error` and leave
   clips and other props unaffected. Like every game's props, they follow the viewer's

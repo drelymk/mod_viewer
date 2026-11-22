@@ -6,11 +6,13 @@ character controllers and their clips, and the locations of the material and tex
 files those renderers lead to. Kept meshes, clips and files retain every copy of their
 serialized file (CAB), so a CAB found in several blocks stays as ambiguous as before.
 Skill objects named for a character family (``SkillObj_<token>_<object>``) keep their
-models, renderers and ``Ani_SkillObj_<token>_`` clips for name pairing.
+models, renderers, ``Ani_SkillObj_<token>_`` clips and controllers for name pairing,
+plus the effect prefabs whose Follow component mounts them on a character point.
 """
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -28,7 +30,9 @@ SKILL_OBJECT = re.compile(r"SkillObj_(?P<token>[^_]+)_(?P<thing>.+)_ModelAvatar"
 SKILL_CLIP = re.compile(r"Ani_SkillObj_(?P<token>[^_]+)_.+")
 # The scan sees every material/texture file in the game before limiting it to MAX_FILES.
 SCAN_FILES = 8 * MAX_FILES
-TYPES = ("Mesh", "Avatar", "AnimationClip", "AnimatorController", "SkinnedMeshRenderer")
+TYPES = ("Mesh", "Avatar", "AnimationClip", "AnimatorController", "SkinnedMeshRenderer", "Follow")
+MAX_FOLLOW_ANIMATORS = 64
+MAX_FOLLOW_DEPTH = 64
 
 
 def _pointer(value):
@@ -43,6 +47,29 @@ def _renderer(value):
             and isinstance(value["path"], str) and len(value["path"]) <= 4096
             and _pointer(value["mesh"]) and _pointer(value["avatar"])
             and type(value["blend_shape_count"]) is int and 0 <= value["blend_shape_count"] <= 256)
+
+
+def _numbers(value, count):
+    return (isinstance(value, list) and len(value) == count
+            and all(type(item) in (int, float) and math.isfinite(item) and abs(item) <= 1e6 for item in value))
+
+
+def _follow(row):
+    """An effect prefab root's Follow point (None when unreadable) and the Animators beneath it,
+    each with its Avatar and controller pointers (either may be null, not both) and the local
+    transforms from the root's child down to it."""
+    point, animators = row.get("follow"), row.get("animators")
+    return ((point is None or (isinstance(point, str) and len(point) <= 256)) and type(row.get("enabled")) is bool
+            and isinstance(animators, list) and 0 < len(animators) <= MAX_FOLLOW_ANIMATORS and all(
+                isinstance(item, dict) and set(item) == {"avatar", "controller", "path", "chain"}
+                and (item["avatar"] is not None or item["controller"] is not None)
+                and all(item[key] is None or _pointer(item[key]) for key in ("avatar", "controller"))
+                and isinstance(item["path"], str) and len(item["path"]) <= 4096
+                and isinstance(item["chain"], list) and 0 < len(item["chain"]) <= MAX_FOLLOW_DEPTH and all(
+                    isinstance(node, dict) and set(node) == {"translation", "rotation", "scale"}
+                    and _numbers(node["translation"], 3) and _numbers(node["rotation"], 4) and _numbers(node["scale"], 3)
+                    for node in item["chain"])
+                for item in animators))
 
 
 def _route(row):
@@ -87,6 +114,8 @@ def valid_rows(rows):
             return False
         if (row["type"] == "SkinnedMeshRenderer") != ("renderer" in row) or (
                 "renderer" in row and not _renderer(row["renderer"])):
+            return False
+        if (row["type"] == "Follow") != ("animators" in row) or ("animators" in row and not _follow(row)):
             return False
         key = identity(row)
         if key in seen:
@@ -178,10 +207,21 @@ def limit(client, rows, entries, material_textures, cancel):
         renderers.append({key: value for key, value in route.items() if key != "materials"})
         material_files |= _names(row.get("materials"))
     controllers = [row for row in rows if row["type"] == "AnimatorController" and row["name"] in families]
+    # Skill objects' own controllers (named like their clips) chain object clips, which may
+    # carry other names; like character controllers, they keep every clip they point to.
+    object_controllers = [row for row in rows if row["type"] == "AnimatorController"
+                          and (match := SKILL_CLIP.fullmatch(row["name"])) and match["token"] in tokens]
+    controllers += object_controllers
     clip_files = _clip_files(client, controllers, cancel)
     clip_files |= {row["cab"].casefold() for row in rows if row["type"] == "AnimationClip"
                    and (match := SKILL_CLIP.fullmatch(row["name"])) and match["token"] in tokens}
     clips = [row for row in rows if row["type"] == "AnimationClip" and row["cab"].casefold() in clip_files]
+    # Effect prefabs whose Animators have a kept skill object's Avatar or play one of their
+    # controllers (resolved again, unambiguously, on use).
+    held = {(row["cab"].casefold(), row["path_id"]) for row in (*objects, *object_controllers)}
+    follows = [row for row in rows if row["type"] == "Follow" and any(
+        (item[key]["cab"].casefold(), item[key]["path_id"]) in held
+        for item in row["animators"] for key in ("avatar", "controller") if item[key] is not None)]
     wanted = set(material_files)
     for cab in material_files:
         wanted |= material_textures.get(cab, set())
@@ -189,7 +229,7 @@ def limit(client, rows, entries, material_textures, cancel):
     if len(kept) > MAX_FILES:
         raise ValueError("The Genshin Impact file table exceeds its limits.")
     files = _file_table(kept)
-    return IndexRows([*avatars, *meshes, *renderers, *controllers, *clips], files)
+    return IndexRows([*avatars, *meshes, *renderers, *controllers, *clips, *follows], files)
 
 
 def scan(client, folder, progress, cancel):

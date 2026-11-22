@@ -13,7 +13,7 @@ from app.assets.rig import validate_rig
 from . import animator_sequences, zzz_animation, zzz_index, zzz_morphs, zzz_props
 from .native import humanoid_controls
 from .pipeline import manifest_props, report_props, clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
-from .runtime import ExtractionCancelled, check_cancelled
+from .runtime import ExtractionCancelled, check_cancelled, clear_samples
 from .zzz_native import avatar_bones, capture, match_attachment_candidates, match_component_candidates, mesh_placement
 
 
@@ -419,10 +419,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             skipped.append(dict(source=source, name=row["name"], reason=reason))
             continue
         finally:
-            # Sample buffers belong to a single clip; bounded jobs must not keep
-            # accumulating native exports after conversion.
-            for file in client.work.glob("samples-*.bin"):
-                file.unlink(missing_ok=True)
+            # Sample buffers belong to a single clip.
+            clear_samples(client.work)
         digest = hashlib.sha256(binary).hexdigest()
         duplicate = row["name"], digest
         if duplicate in seen:
