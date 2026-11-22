@@ -13,16 +13,15 @@ import {
   Vector3,
 } from 'three';
 
-// Game props (weapons) that the capture never drew. Extraction skins them in asset
-// space, so clip bone transforms apply to them directly. They exist only while a clip
-// is applied: hidden at rest, in manual posing and after Stop.
+// Game props that the capture never drew. Extraction skins them in asset space, so
+// clip bone transforms apply to them directly. They exist only while a clip is applied:
+// hidden at rest, in manual posing and after Stop.
 //
 // Rigid props are skinned to rig bones. Animated props have their own skeleton: per
-// paired clip, a track gives each prop bone's asset-space transform relative to its
-// socket's rest pose, and the socket's clip transform is applied on top. An animated
-// prop shows only inside its track's clip window (start..end seconds, by default the
-// track's own duration from the clip's start); its animation plays from the window's
-// start and holds its last frame.
+// clip, a track gives each prop bone's asset-space transform relative to its placement,
+// and the socket's clip transform (none for a null socket) is applied on top. An
+// animated prop shows only inside its track's clip window (start..end seconds); its
+// animation plays from the window's start and holds its last frame.
 const LAYOUT = 'prop-v1';
 const TRACK_LAYOUT = 'prop-track-v1';
 // Per vertex: f32 position/normal/uv (32 bytes), u16x4 joints, f32x4 weights; then u32 indices.
@@ -113,7 +112,7 @@ function propTracks(descriptor, buffer) {
     return null;
   const tracks = new Map();
   for (const [clip, track] of Object.entries(descriptor.tracks.clips || {})) {
-    const { offset, frame_count: frames, duration, start = 0, end = duration } = track || {};
+    const { offset, frame_count: frames, duration, start, end } = track || {};
     const size = frames * bones * TRACK_FLOATS * 4;
     if (
       !Number.isInteger(offset) ||
@@ -180,7 +179,7 @@ export function createAnimationProps({ loadProps, getScene, requestRender, mater
         continue;
       }
       if (prop.animation) {
-        // A null socket is the character mesh's origin.
+        // A null socket is a placement fixed in asset space.
         const socket = (prop.animation.socket !== null && transforms.get(prop.animation.socket)) || IDENTITY;
         poseTrack(prop, prop.animation.tracks.get(playback.clip), socket, playback.time);
       } else {

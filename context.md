@@ -1223,10 +1223,10 @@ of documentation, comments and tests; use portable fixtures instead.
   translation, xyzw quaternion) relative to the socket's rest pose, which must be
   rigid. A prop sequence on another reference pose plays its authored tracks over
   its skeleton's reference, as clips do. Manifest props then carry `socket`,
-  `bone_count` (the socket a rig bone, or null for an effect at the mesh's origin) and
-  `tracks` (clip id -> file, sha256, frame_count, duration, and
-  optionally the clip window `start`/`end` in seconds, both or neither; without them
-  the window runs from 0 to the track's duration). Serving checks every track and
+  `bone_count` (the socket a rig bone, or null for an effect placed in asset space)
+  and `tracks` (clip id -> file, sha256, frame_count, duration and the clip window
+  `start`/`end` in seconds; a blueprint prop's runs from 0 to its sequence's
+  length). Serving checks every track and
   publishes one fresh single-use blob of the session's clips per load, with each
   clip's window; a prop without a track for any session clip is left out. Playback
   applies the socket's clip transform on top of the track sampled at the clip time

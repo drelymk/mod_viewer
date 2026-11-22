@@ -22,16 +22,16 @@ prop shows only while its paired animation runs.
 import numpy as np
 
 from app.assets.animation_conversion import ReferencePoseMismatch, convert_clip
+from app.assets.animations import MAX_PROP_BONES
+from .mecanim import qfrom_basis
 from .native import read_limited
-from .pipeline import document, exported_file, package_name, rest_worlds, sequence, source_skeleton
+from .pipeline import MAX_ANIMATION_BYTES, document, exported_file, package_name, rest_worlds, sequence, source_skeleton
 from .runtime import ExtractionCancelled, check_cancelled, list_packages
 from .wuwa_props import CHARACTER_ROOT, mesh_parts
 
 MAX_BLUEPRINT_DEPTH = 4
 MAX_COMPONENTS = 8
 MAX_SEQUENCES = 512
-MAX_PROP_BONES = 256
-MAX_ANIMATION_BYTES = 256 * 1024 * 1024
 _TEMPLATE = "_GEN_VARIABLE"
 _OFFSETS = {"RelativeLocation": (0, 0, 0), "RelativeRotation": (0, 0, 0), "RelativeScale3D": (1, 1, 1)}
 
@@ -128,64 +128,27 @@ def pairs(sequences, clips):
     return {clip_id: packages[0] for clip_id, packages in found.items() if len(packages) == 1}
 
 
-def _matrices(translation, rotation, scale):
-    """Batched T·R·S matrices from xyz translations, xyzw quaternions and xyz scales."""
-    q = rotation / np.linalg.norm(rotation, axis=-1, keepdims=True)
+def poses(locals_, bones):
+    """(frame, bone) component-space matrices of frame-major local transforms
+    (xyz translation, xyzw quaternion) on ``bones``, whose parents precede them."""
+    q = locals_[..., 3:7] / np.linalg.norm(locals_[..., 3:7], axis=-1, keepdims=True)
     x, y, z, w = np.moveaxis(q, -1, 0)
-    result = np.zeros(q.shape[:-1] + (4, 4))
-    result[..., 0, :3] = np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)], -1)
-    result[..., 1, :3] = np.stack([2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)], -1)
-    result[..., 2, :3] = np.stack([2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)], -1)
-    result[..., :3, :3] *= scale[..., None, :]
-    result[..., :3, 3] = translation
-    result[..., 3, 3] = 1
-    return result
-
-
-def _quaternions(rotation):
-    """Batched xyzw unit quaternions of rotation matrices."""
-    r = rotation
-    trace = r[..., 0, 0] + r[..., 1, 1] + r[..., 2, 2]
-    cases = np.stack([trace, r[..., 0, 0], r[..., 1, 1], r[..., 2, 2]], -1).argmax(-1)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        s = [np.sqrt(np.maximum(value, 0)) * 2 for value in (
-            1 + trace, 1 + r[..., 0, 0] - r[..., 1, 1] - r[..., 2, 2],
-            1 + r[..., 1, 1] - r[..., 0, 0] - r[..., 2, 2], 1 + r[..., 2, 2] - r[..., 0, 0] - r[..., 1, 1])]
-        candidates = [
-            ((r[..., 2, 1] - r[..., 1, 2]) / s[0], (r[..., 0, 2] - r[..., 2, 0]) / s[0], (r[..., 1, 0] - r[..., 0, 1]) / s[0], s[0] / 4),
-            (s[1] / 4, (r[..., 0, 1] + r[..., 1, 0]) / s[1], (r[..., 0, 2] + r[..., 2, 0]) / s[1], (r[..., 2, 1] - r[..., 1, 2]) / s[1]),
-            ((r[..., 0, 1] + r[..., 1, 0]) / s[2], s[2] / 4, (r[..., 1, 2] + r[..., 2, 1]) / s[2], (r[..., 0, 2] - r[..., 2, 0]) / s[2]),
-            ((r[..., 0, 2] + r[..., 2, 0]) / s[3], (r[..., 1, 2] + r[..., 2, 1]) / s[3], s[3] / 4, (r[..., 1, 0] - r[..., 0, 1]) / s[3]),
-        ]
-    stacked = np.stack([np.stack(candidate, -1) for candidate in candidates], 0)
-    result = np.take_along_axis(stacked, cases[None, ..., None], 0)[0]
-    return result / np.linalg.norm(result, axis=-1, keepdims=True)
-
-
-def _poses(binary, frames, bones):
-    """(frame, bone) component-space matrices of converted local transforms."""
-    count = len(bones)
-    data = np.frombuffer(binary, "<f4", count=frames * count * 7).reshape(frames, count, 7).astype(float)
-    if not np.isfinite(data).all():
-        raise ValueError("The prop animation is invalid.")
-    scale = np.asarray([bone["scale"] for bone in bones], dtype=float)
-    local = _matrices(data[..., :3], data[..., 3:7], np.broadcast_to(scale, (frames, count, 3)))
+    local = np.zeros(q.shape[:-1] + (4, 4))
+    local[..., 0, :3] = np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)], -1)
+    local[..., 1, :3] = np.stack([2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)], -1)
+    local[..., 2, :3] = np.stack([2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)], -1)
+    local[..., :3, :3] *= np.asarray([bone["scale"] for bone in bones], dtype=float)[:, None, :]
+    local[..., :3, 3] = locals_[..., :3]
+    local[..., 3, 3] = 1
     world = np.zeros_like(local)
-    done = [False] * count
-    for start in range(count):
-        chain = []
-        bone = start
-        while bone >= 0 and not done[bone]:
-            chain.append(bone)
-            bone = bones[bone]["parent"]
-        for bone in reversed(chain):
-            parent = bones[bone]["parent"]
-            world[:, bone] = local[:, bone] if parent < 0 else world[:, parent] @ local[:, bone]
-            done[bone] = True
+    for index, bone in enumerate(bones):
+        if not bone["parent"] < index:
+            raise ValueError("The prop skeleton lists a bone before its parent.")
+        world[:, index] = local[:, index] if bone["parent"] < 0 else world[:, bone["parent"]] @ local[:, index]
     return world
 
 
-def convert(client, package, item, bones, skeleton, cache):
+def convert(client, package, item, bones, cache):
     """(frames, frame-major local transforms) of one prop sequence on the prop mesh's bones.
 
     A sequence whose skeleton keeps another reference pose plays its authored tracks as
@@ -200,6 +163,7 @@ def convert(client, package, item, bones, skeleton, cache):
     try:
         frames, binary = convert_clip(data, dict(bones=bones), properties["SequenceLength"])
     except ReferencePoseMismatch:
+        skeleton = package_name(properties.get("Skeleton", {}).get("ObjectPath"))
         if skeleton not in cache:
             cache[skeleton] = dict(bones=source_skeleton(client, skeleton, strict_tree=True))
         frames, binary = convert_clip(data, dict(bones=bones), properties["SequenceLength"], reference=cache[skeleton],
@@ -212,19 +176,43 @@ def convert(client, package, item, bones, skeleton, cache):
 def bake(binary, frames, bones, anchor):
     """``PROP_TRACK_LAYOUT`` bytes: per frame and prop bone, the asset-space transform
     (xyz translation, xyzw quaternion) that moves the bone's rest skin to its pose,
-    expressed relative to the socket's rest ``anchor``; the socket's own clip motion
+    expressed relative to the prop's placement ``anchor``; a socket's own clip motion
     is applied on top during playback."""
-    world = _poses(binary, frames, bones)
+    data = np.frombuffer(binary, "<f4", count=frames * len(bones) * 7).reshape(frames, len(bones), 7).astype(float)
+    if not np.isfinite(data).all():
+        raise ValueError("The prop animation is invalid.")
     rest = np.asarray(rest_worlds(bones, affine=True))
-    delta = anchor @ world @ np.linalg.inv(rest) @ np.linalg.inv(anchor)
+    delta = anchor @ poses(data, bones) @ np.linalg.inv(rest) @ np.linalg.inv(anchor)
     rotation = delta[..., :3, :3]
     error = np.abs(np.swapaxes(rotation, -1, -2) @ rotation - np.eye(3)).max() if delta.size else 0
     if not error <= 1e-3 or not (np.linalg.det(rotation) > 0).all():
         raise ValueError("The prop animation is not rigid in the viewer's space.")
-    track = np.concatenate([delta[..., :3, 3], _quaternions(rotation)], -1)
+    track = np.concatenate([delta[..., :3, 3], qfrom_basis(rotation[..., 0], rotation[..., 1], rotation[..., 2])], -1)
     if not np.isfinite(track).all():
         raise ValueError("The prop animation is invalid.")
     return track.astype("<f4").tobytes()
+
+
+def sequence_items(client, packages, cancel):
+    """Package -> slim metadata of each readable, timed prop sequence."""
+    directory = client.work / "prop-animation-metadata"
+    files = client.batch("json", sorted(packages), directory) if packages else {}
+    items = {}
+    for package in sorted(packages):
+        check_cancelled(cancel)
+        file = exported_file(files.get(package), directory, ".json")
+        item = sequence(file) if file else None
+        properties = item.get("Properties", {}) if item else {}
+        if item and type(properties.get("NumFrames")) is int and type(properties.get("SequenceLength")) in (int, float):
+            items[package] = item
+    return items
+
+
+def track(client, writer, package, item, bones, anchor, references):
+    """Manifest fields of one prop sequence baked at ``anchor`` into a written track."""
+    frames, binary = convert(client, package, item, bones, references)
+    path, digest = writer.write(bake(binary, frames, bones, anchor), track=True)
+    return dict(file=path, sha256=digest, frame_count=frames, duration=float(item["Properties"]["SequenceLength"]))
 
 
 def skeleton_of(exports):
@@ -241,41 +229,28 @@ def _tracks(client, mesh, skeleton, folder, clips, anchor, writer, cancel, claim
 
     A (clip id, sequence) pair in ``claimed`` is played by one of the clip's effects instead.
     """
-    packages = [package for package in list_packages(client, "AnimSequence", folder, cancel)][:MAX_SEQUENCES]
-    if not packages:
-        return {}
-    directory = client.work / "prop-animation-metadata"
-    files = client.batch("json", packages, directory)
-    sequences, items = {}, {}
-    for package in packages:
-        check_cancelled(cancel)
-        file = exported_file(files.get(package), directory, ".json")
-        item = sequence(file) if file else None
-        properties = item.get("Properties", {}) if item else {}
-        if (not item or package_name(properties.get("Skeleton", {}).get("ObjectPath")) != skeleton
-                or type(properties.get("NumFrames")) is not int or not isinstance(properties.get("SequenceLength"), (int, float))):
-            continue
-        items[package] = item
-        sequences[package] = (package.rsplit("/", 1)[-1], properties["NumFrames"], float(properties["SequenceLength"]))
+    items = {package: item for package, item in sequence_items(
+        client, list_packages(client, "AnimSequence", folder, cancel)[:MAX_SEQUENCES], cancel).items()
+        if package_name(item["Properties"].get("Skeleton", {}).get("ObjectPath")) == skeleton}
+    sequences = {package: (package.rsplit("/", 1)[-1], item["Properties"]["NumFrames"],
+                           float(item["Properties"]["SequenceLength"])) for package, item in items.items()}
     paired = {clip_id: package for clip_id, package in pairs(sequences, clips).items()
               if (clip_id, package) not in claimed}
     tracks, references, baked = {}, {}, {}
     for clip_id, package in sorted(paired.items()):
         check_cancelled(cancel)
-        properties = items[package]["Properties"]
         try:
             # A sequence paired with several same-named clips is converted once.
             if package not in baked:
-                frames, binary = convert(client, package, items[package], mesh["bones"], skeleton, references)
-                baked[package] = (frames, writer.write(bake(binary, frames, mesh["bones"], anchor), track=True))
-            frames, (path, digest) = baked[package]
+                baked[package] = track(client, writer, package, items[package], mesh["bones"], anchor, references)
         except ExtractionCancelled:
             raise
         except (ValueError, KeyError, TypeError) as error:
             writer.skipped.append(dict(source=package, reason=str(error) if isinstance(error, ValueError)
                                        else "The prop animation is incomplete."))
             continue
-        tracks[clip_id] = dict(file=path, sha256=digest, frame_count=frames, duration=float(properties["SequenceLength"]))
+        # The prop shows while its animation plays from the clip's start.
+        tracks[clip_id] = dict(baked[package], start=0.0, end=baked[package]["duration"])
     return tracks
 
 

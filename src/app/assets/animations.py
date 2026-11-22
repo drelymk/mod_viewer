@@ -235,14 +235,14 @@ _PROP_TEXTURE_ROLES = ("diffuse", "light_map", "material_map", "normal_map")
 _MAX_PROP_TEXTURE_BYTES = 96 * 1024 * 1024
 # Animated props carry their own skeleton: per paired clip, frame-major f32 records of
 # each prop bone's asset-space transform (xyz translation, xyzw quaternion) relative to
-# its socket's rest pose; the socket's clip motion is applied on top. A track may carry
-# the clip window it shows in (``start``/``end`` seconds; default from 0 to its own
-# duration); its animation plays from the window's start and holds its last frame.
+# its placement (a socket's rest pose); the socket's clip motion is applied on top.
+# Each track carries the clip window it shows in (``start``/``end`` seconds); its
+# animation plays from the window's start and holds its last frame.
 PROP_TRACK_LAYOUT = "prop-track-v1"
 _PROP_TRACK_BYTES = 28
 MAX_PROP_BONES = 256
 MAX_PROP_TRACKS = 1024
-_MAX_PROP_TRACK_BYTES = 128 * 1024 * 1024
+MAX_PROP_TRACK_BYTES = 128 * 1024 * 1024
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
@@ -307,43 +307,32 @@ def _prop_animation(prop):
                 or not isinstance(track.get("sha256"), str) or not _DIGEST.fullmatch(track["sha256"])
                 or type(track.get("frame_count")) is not int or not 1 < track["frame_count"] <= 60000
                 or type(track.get("duration")) not in (int, float) or not 0 < track["duration"] <= 3600
-                or _prop_window(track) is None
+                or type(track.get("start")) not in (int, float) or type(track.get("end")) not in (int, float)
+                or not 0 <= track["start"] < track["end"] <= 3600
                 for clip, track in tracks.items())):
         return None
     return dict(socket=socket, bone_count=bones, tracks={
-        clip: dict(file=track["file"], sha256=track["sha256"], frame_count=track["frame_count"], duration=track["duration"],
-                   **({"start": track["start"], "end": track["end"]} if "start" in track else {}))
+        clip: {key: track[key] for key in ("file", "sha256", "frame_count", "duration", "start", "end")}
         for clip, track in tracks.items()})
-
-
-def _prop_window(track):
-    """A track's (start, end) clip window; None when invalid. Both or neither are given."""
-    if "start" not in track and "end" not in track:
-        return 0, track["duration"]
-    start, end = track.get("start"), track.get("end")
-    if type(start) not in (int, float) or type(end) not in (int, float) or not 0 <= start < end <= 3600:
-        return None
-    return start, end
 
 
 def _read_prop_tracks(directory, prop, clips):
     """One blob of the prop's checksummed, bounded tracks for the session's ``clips``,
-    and clip id -> {offset, frame_count, duration} into it."""
+    and clip id -> {offset, frame_count, duration, start, end} into it."""
     blobs, index, offset = [], {}, 0
     for clip, track in sorted(prop["tracks"].items()):
         if clip not in clips:
             continue
         size = track["frame_count"] * prop["bone_count"] * _PROP_TRACK_BYTES
         path = paths.safe_asset_path(directory, track["file"])
-        if not path or offset + size > _MAX_PROP_TRACK_BYTES:
+        if not path or offset + size > MAX_PROP_TRACK_BYTES:
             raise ValueError("The prop animation is unavailable.")
         with open(path, "rb") as stream:
             data = stream.read(size + 1)
         if len(data) != size or hashlib.sha256(data).hexdigest() != track["sha256"] or not bounded(np.frombuffer(data, "<f4")):
             raise ValueError("The prop animation is incomplete or has changed.")
         blobs.append(data)
-        start, end = _prop_window(track)
-        index[clip] = dict(offset=offset, frame_count=track["frame_count"], duration=track["duration"], start=start, end=end)
+        index[clip] = dict(offset=offset, **{key: track[key] for key in ("frame_count", "duration", "start", "end")})
         offset += size
     return b"".join(blobs), index
 

@@ -23,7 +23,8 @@ import shutil
 import numpy as np
 
 from app.assets import paths
-from app.assets.animations import MAX_PROP_INDICES, MAX_PROP_VERTICES, MAX_PROPS, PROP_LAYOUT, pack_prop
+from app.assets.animations import (MAX_PROP_INDICES, MAX_PROP_TRACK_BYTES, MAX_PROP_VERTICES, MAX_PROPS, PROP_LAYOUT,
+                                   pack_prop)
 from app.assets.loader.wwmi import _metadata_paths
 from . import unity_dds
 from .native import read_limited, read_mesh
@@ -43,7 +44,6 @@ FORMATS = {
 MAX_TEXTURE_READS = 96
 MAX_TEXTURE_BYTES = 96 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
-MAX_TRACK_BYTES = 128 * 1024 * 1024
 _SUFFIX = re.compile(r"_\d+_[0-9A-F]{32}$")
 
 
@@ -261,7 +261,7 @@ def _dds(texture, srgb):
 
 
 def _attach_textures(client, root, record, captured, palettes, body_exports, props, library, cancel):
-    """Give each written (entry, material) its proven ``textures``, or a ``texture_error``; returns the tier."""
+    """Give each written (entry, material) its proven ``textures``, or a ``texture_error``."""
     reader, cache = _Textures(client, cancel), {}
     try:
         sections = _materials(body_exports)
@@ -272,10 +272,9 @@ def _attach_textures(client, root, record, captured, palettes, body_exports, pro
             if payloads and material:
                 parts.append((payloads, _parameters(client, material, cache)))
         tier, slots = None, {}
-        for candidate in TIERS:
-            slots = _learn(reader, candidate, parts)
+        for tier in TIERS:
+            slots = _learn(reader, tier, parts)
             if slots:
-                tier = candidate
                 break
         failure = None if slots else "No material parameter could be proven against the captured textures."
     except ValueError as error:
@@ -305,7 +304,6 @@ def _attach_textures(client, root, record, captured, palettes, body_exports, pro
             entry["textures"] = textures
         except ValueError as error:
             entry["texture_error"] = str(error)
-    return tier
 
 
 class Writer:
@@ -324,7 +322,7 @@ class Writer:
     def write(self, data, *, track=False):
         """Write one content-addressed file; returns its manifest path and digest."""
         if track:
-            if self.tracks + len(data) > MAX_TRACK_BYTES:
+            if self.tracks + len(data) > MAX_PROP_TRACK_BYTES:
                 raise ValueError("The prop animation budget is exhausted.")
             self.tracks += len(data)
         digest = hashlib.sha256(data).hexdigest()

@@ -33,10 +33,11 @@ from pathlib import Path
 
 import numpy as np
 
+from app.assets.animations import MAX_PROP_BONES
 from .native import read_limited
-from .pipeline import document, exported_file, package_name, rest_worlds, sequence
+from .pipeline import MAX_ANIMATION_BYTES, document, exported_file, package_name, rest_worlds
 from .runtime import ExtractionCancelled, check_cancelled
-from .wuwa_blueprint_props import MAX_PROP_BONES, _matrices, bake, convert
+from .wuwa_blueprint_props import poses, sequence_items, track
 from .wuwa_props import CHARACTER_ROOT, mesh_parts
 
 GROUP = "EffectModelGroup_C"
@@ -47,9 +48,7 @@ MESH_SETTINGS = frozenset(("SkeletalMeshRef", "AnimationRef", "Looping", "StartT
 GROUP_SETTINGS = frozenset(("EffectData", "StartTime", "LoopTime", "EndTime", "ContinuousLoop", "NativeClass"))
 ABSOLUTE = "EAnimLinkMethod::Absolute"
 MAX_EFFECTS = 512
-MAX_EFFECT_PROPS = 32
 BATCH = 250
-MAX_CLIP_BYTES = 160 * 1024 * 1024
 # EffectLifeTime treats loops this short as no loop at all.
 NEAR_ZERO = 0.001
 _STILL = 1e-3
@@ -245,56 +244,38 @@ def claimed(uses):
 
 
 class _Poses:
-    """Bone worlds of the Asset's own converted clips, read lazily."""
+    """Bone poses of the Asset's own converted clips, read lazily."""
 
     def __init__(self, library, rig):
-        self.library, self.rig, self.cache = Path(library), rig, {}
-        self.rest = np.asarray(rest_worlds(rig["bones"], affine=True))
+        self.library, self.bones, self.cache = Path(library), rig["bones"], {}
 
-    def _clip(self, clip):
+    def frames(self, clip, start, end):
+        """(frame-major locals, frame indices) of the clip's frames from ``start`` to ``end`` seconds."""
         if clip not in self.cache:
-            value = None
             try:
                 metadata = document(self.library / (clip + ".json"), 1024 * 1024)
                 frames, count, duration = metadata["frame_count"], metadata["bone_count"], metadata["duration"]
-                if (metadata.get("layout") == "frame-major-tq-f32le" and count == len(self.rig["bones"])
-                        and duration > 0 and frames > 1):
-                    data = np.frombuffer(read_limited(self.library / metadata["data_file"], MAX_CLIP_BYTES, "Clip"),
-                                         "<f4", count=frames * count * 7).reshape(frames, count, 7).astype(float)
-                    value = data, duration
+                if metadata.get("layout") != "frame-major-tq-f32le" or count != len(self.bones) or frames < 2:
+                    raise ValueError
+                data = np.frombuffer(read_limited(self.library / metadata["data_file"], MAX_ANIMATION_BYTES, "Clip"),
+                                     "<f4", count=frames * count * 7).reshape(frames, count, 7).astype(float)
+                self.cache[clip] = data, float(duration)
             except (OSError, ValueError, KeyError, TypeError):
-                value = None
-            self.cache[clip] = value
-        return self.cache[clip]
-
-    def frames(self, clip, start, end):
-        """(locals, frame indices) of the clip's frames from ``start`` to ``end`` seconds."""
-        found = self._clip(clip)
-        if found is None:
+                self.cache[clip] = None
+        if self.cache[clip] is None:
             raise ValueError("The clip pose is unreadable.")
-        data, duration = found
-        count = len(data)
-        first = min(count - 1, max(0, int(np.floor(start / duration * (count - 1) + 1e-6))))
-        last = min(count - 1, max(first, int(np.ceil(end / duration * (count - 1) - 1e-6))))
-        return data, range(first, last + 1)
-
-    def worlds(self, data, frame):
-        bones = self.rig["bones"]
-        scale = np.asarray([bone["scale"] for bone in bones], dtype=float)
-        local = _matrices(data[frame, :, :3], data[frame, :, 3:7], scale)
-        world = np.zeros_like(local)
-        for index, bone in enumerate(bones):
-            world[index] = local[index] if bone["parent"] < 0 else world[bone["parent"]] @ local[index]
-        return world
+        data, duration = self.cache[clip]
+        last = len(data) - 1
+        first = min(last, max(0, int(np.floor(start / duration * last + 1e-6))))
+        return data, list(range(first, min(last, max(first, int(np.ceil(end / duration * last - 1e-6)))) + 1))
 
     def root_at_rest(self, clip, time):
         """Whether every root bone is at its rest transform on the frames around ``time``."""
         data, frames = self.frames(clip, time, time)
-        for index, bone in enumerate(self.rig["bones"]):
-            if bone["parent"] >= 0:
-                continue
-            values = data[list(frames), index]
-            if (np.abs(values[:, :3] - np.asarray(bone["translation"], dtype=float)).max() > _STILL
+        for index, bone in enumerate(self.bones):
+            values = data[frames, index]
+            if bone["parent"] < 0 and (
+                    np.abs(values[:, :3] - np.asarray(bone["translation"], dtype=float)).max() > _STILL
                     or (np.abs(values[:, 3:7] @ np.asarray(bone["rotation"], dtype=float)) < 1 - 1e-6).any()):
                 return False
         return True
@@ -302,9 +283,8 @@ class _Poses:
     def socket(self, clip, index, start, end):
         """The socket's world at ``start`` and whether it stays there until ``end``."""
         data, frames = self.frames(clip, start, end)
-        worlds = [self.worlds(data, frame)[index] for frame in frames]
-        still = all(np.abs(world - worlds[0]).max() <= _STILL for world in worlds)
-        return worlds[0], still
+        worlds = poses(data[frames], self.bones)[:, index]
+        return worlds[0], bool(np.abs(worlds - worlds[0]).max() <= _STILL)
 
 
 def placement(use, names, poses):
@@ -361,16 +341,12 @@ def extract(client, resolved, rig, library, writer, cancel):
     # A clip spawning one mesh at one place several times shows several instances: the
     # n-th spawn of each clip (by animation, then window) is the n-th instance.
     instances = {}
-    for (mesh, kind, where), prop in props.items():
+    for (mesh, kind, where), prop in sorted(props.items(), key=lambda item: str(item[0])):
         for clip, spawns in prop["clips"].items():
             for number, spawn in enumerate(sorted(set(spawns))):
                 instances.setdefault((mesh, kind, where, number), dict(where=prop["where"], clips={}))["clips"][clip] = spawn
-    ordered = sorted(instances.items(), key=lambda item: (item[0][0], item[0][1], str(item[0][2]), item[0][3]))
-    for (mesh, _kind, _where, _number), prop in ordered[MAX_EFFECT_PROPS:]:
-        for clip in prop["clips"]:
-            skip(mesh, clip, "The clips spawn too many effect props.")
-    animations = {}
-    for (mesh, kind, _where, _number), prop in ordered[:MAX_EFFECT_PROPS]:
+    items = sequence_items(client, {spawn[0] for prop in instances.values() for spawn in prop["clips"].values()}, cancel)
+    for (mesh, kind, _where, _number), prop in instances.items():
         check_cancelled(cancel)
         anchor = worlds[prop["where"]] if kind == "socket" else prop["where"]
         try:
@@ -387,36 +363,18 @@ def extract(client, resolved, rig, library, writer, cancel):
         for clip, (animation, play, hide) in sorted(prop["clips"].items()):
             check_cancelled(cancel)
             try:
-                if animation not in animations:
-                    animations[animation] = _exports_metadata(client, animation)
-                item = animations[animation]
-                if item is None:
+                if animation not in items:
                     raise ValueError("The effect mesh animation is unreadable.")
                 if animation not in baked:
-                    skeleton = package_name(item["Properties"].get("Skeleton", {}).get("ObjectPath"))
-                    frames, binary = convert(client, animation, item, native["bones"], skeleton, references)
-                    baked[animation] = (frames, float(item["Properties"]["SequenceLength"]),
-                                        writer.write(bake(binary, frames, native["bones"], anchor), track=True))
-                frames, duration, (path, digest) = baked[animation]
+                    baked[animation] = track(client, writer, animation, items[animation], native["bones"], anchor, references)
             except ExtractionCancelled:
                 raise
             except (ValueError, KeyError, TypeError) as error:
                 skip(animation, clip, str(error) if isinstance(error, ValueError) else "The effect mesh animation is incomplete.")
                 continue
-            tracks[clip] = dict(file=path, sha256=digest, frame_count=frames, duration=duration, start=play, end=hide)
+            tracks[clip] = dict(baked[animation], start=play, end=hide)
         if tracks:
             writer.add(mesh, parts, socket=prop["where"] if kind == "socket" else None,
                        bone_count=len(native["bones"]), tracks=tracks)
     for (source, reason), clips in sorted(skipped.items()):
         writer.skipped.append(dict(kind="effect", source=source, clips=sorted(clips), reason=reason))
-
-
-def _exports_metadata(client, animation):
-    """Slim metadata of one effect mesh animation, or None when unusable."""
-    directory = client.work / "effect-animations"
-    file = exported_file(client.batch("json", [animation], directory).get(animation), directory, ".json")
-    item = sequence(file) if file else None
-    properties = item.get("Properties", {}) if item else {}
-    if not item or type(properties.get("NumFrames")) is not int or type(properties.get("SequenceLength")) not in (int, float):
-        return None
-    return item

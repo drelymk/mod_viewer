@@ -89,16 +89,12 @@ def effect_notifies(row, rows):
         properties = target.get("Properties") if isinstance(target, dict) else None
         properties = properties if isinstance(properties, dict) else {}
         reference, socket = properties.get("EffectDataAssetRef"), properties.get("SocketName")
-        attached, faster = properties.get("Attached", True), properties.get("FasterStop", True)
-        settings = sorted(set(properties) - EFFECT_SETTINGS) if target else ["(unreadable)"]
-        settings += [key for key, value in (("Attached", attached), ("FasterStop", faster))
-                     if value is not None and not isinstance(value, bool)]
         found.append(dict(
             effect=package_name(reference.get("AssetPathName")) if isinstance(reference, dict) else "",
             socket=socket if isinstance(socket, str) and socket not in ("", "None") else None,
-            attached=attached is not False, faster_stop=faster is not False,
+            attached=properties.get("Attached") is not False, faster_stop=properties.get("FasterStop") is not False,
             start=notify.get("LinkValue"), duration=notify.get("Duration"), link=notify.get("LinkMethod"),
-            settings=sorted(settings)))
+            settings=sorted(set(properties) - EFFECT_SETTINGS) if target else ["(unreadable)"]))
         if len(found) == MAX_EFFECT_NOTIFIES:
             break
     return found

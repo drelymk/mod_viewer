@@ -1376,7 +1376,7 @@ def test_animated_props_follow_their_clip_tracks_and_abandoned_loads_release_wha
       const descriptor = (id, dataUrl) => ({id, name:id, layout:'prop-v1', vertex_count:3, index_count:3,
         data:{url:dataUrl, length:geometry.byteLength}, textures:{diffuse:'/texture/' + id + '.dds'},
         socket:2, bone_count:2, tracks:{layout:'prop-track-v1', url:trackUrl, length:track.byteLength,
-          clips:{clip01:{offset:0, frame_count:2, duration:1},
+          clips:{clip01:{offset:0, frame_count:2, duration:1, start:0, end:1},
                  clip03:{offset:0, frame_count:2, duration:1, start:1, end:3}}}});
       let created = 0, released = 0;
       const materialFor = () => { created++; return {material:new T.MeshBasicMaterial(), bind:() => {},
