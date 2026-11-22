@@ -31,13 +31,15 @@ def _components(values, count, widths):
     return array.reshape(count, width)
 
 
-def _encode(mesh, placed, root, captured_bones, reference):
+def encode(mesh, joint_map, conversion, reference, excluded=frozenset(), section=None):
     """Asset-space ``PROP_LAYOUT`` geometry, or (None, reason); (None, None) when not a prop.
 
-    Blocks in order: per-vertex f32 records (position xyz, normal xyz, uv), per-vertex
-    u16x4 rig joints, per-vertex f32x4 weights, then u32 triangle indices.
+    ``joint_map`` maps each mesh bone to its output joint, and ``conversion`` maps native
+    vertices into asset space; weight on an ``excluded`` joint means the mesh is no prop.
+    A ``section`` index keeps only that material section's triangles and the vertices
+    they use. Blocks in order: per-vertex f32 records (position xyz, normal xyz, uv),
+    per-vertex u16x4 joints, per-vertex f32x4 weights, then u32 triangle indices.
     """
-    bone_map, placement = placed
     vertices = _components(mesh.get("vertices"), len(mesh.get("vertices") or []) // 3, (3,))
     if vertices is None or not 0 < len(vertices) <= MAX_PROP_VERTICES:
         return None, "Unsupported prop geometry."
@@ -50,10 +52,10 @@ def _encode(mesh, placed, root, captured_bones, reference):
     if joints.shape != (count, 4) or weights.shape != (count, 4) or not np.isfinite(weights).all():
         return None, "Unsupported prop skin layout."
     positive = weights > 0
-    if np.any(joints[positive] < 0) or np.any(joints[positive] >= len(bone_map)):
+    if np.any(joints[positive] < 0) or np.any(joints[positive] >= len(joint_map)):
         return None, "The prop skin references unknown bones."
-    rig_joints = np.where(positive, np.asarray(bone_map)[np.where(positive, joints, 0)] + 1, 0)
-    if captured_bones.intersection(rig_joints[positive].tolist()):
+    rig_joints = np.where(positive, np.asarray(joint_map)[np.where(positive, joints, 0)], 0)
+    if excluded.intersection(rig_joints[positive].tolist()):
         return None, None
     normals = _components(mesh.get("normals"), count, (3, 4))
     uv = _components(mesh.get("uv"), count, (2, 3, 4))
@@ -63,9 +65,6 @@ def _encode(mesh, placed, root, captured_bones, reference):
     if np.any(totals <= 0):
         return None, "The prop has unweighted vertices."
     weights = np.where(positive, weights, 0) / totals[:, None]
-    # The rig root holds the mesh-to-Avatar basis, so root @ placement maps native
-    # vertices into the captured (asset) space every clip transform acts on.
-    conversion = root @ placement
     linear = conversion[:3, :3]
     positions = vertices @ linear.T + conversion[:3, 3]
     normals = normals[:, :3] @ np.linalg.inv(linear)
@@ -73,6 +72,16 @@ def _encode(mesh, placed, root, captured_bones, reference):
     normals = np.divide(normals, lengths[:, None], out=np.zeros_like(normals), where=lengths[:, None] > 1e-12)
     texcoords = uv[:, :2].copy()
     texcoords[:, 1] = 1 - texcoords[:, 1]
+    if section is not None:
+        part = (mesh.get("sections") or [])[section]
+        first, size = part["first"], part["count"]
+        if type(first) is not int or type(size) is not int or first < 0 or not 0 < size <= indices.size - first or size % 3:
+            return None, "Unsupported prop section."
+        # Sections may share vertices; each part keeps only the ones its triangles use.
+        used, indices = np.unique(indices[first:first + size], return_inverse=True)
+        positions, normals, texcoords, rig_joints, weights = (
+            values[used] for values in (positions, normals, texcoords, rig_joints, weights))
+        count = len(used)
     triangles = indices.reshape(-1, 3)
     # Captured parts keep native triangle order under the body's axis reflection; a
     # prop whose conversion has the opposite handedness reverses its winding.
@@ -84,12 +93,31 @@ def _encode(mesh, placed, root, captured_bones, reference):
     return (payload, count, int(indices.size)), None
 
 
-def extract(client, chosen, rig, index, library, cancel, mesh_hint, captured_parts, asset):
+def encode_parts(mesh, joint_map, conversion, reference, excluded=frozenset()):
+    """[encoded geometry] of the whole mesh, or one per section of a multi-material mesh
+    (the viewer draws a prop with one material); or (None, reason) as :func:`encode`."""
+    whole, reason = encode(mesh, joint_map, conversion, reference, excluded)
+    sections = mesh.get("sections") or []
+    if whole is None or len(sections) < 2:
+        return ([whole] if whole else None), reason
+    parts = []
+    for section in range(len(sections)):
+        part, reason = encode(mesh, joint_map, conversion, reference, excluded, section)
+        if part is None:
+            return None, reason
+        parts.append(part)
+    return parts, None
+
+
+def extract(client, chosen, rig, index, library, cancel, mesh_hint, captured_parts, asset, *,
+            placement_tolerance=2e-4, admit=None, textures=None):
     """Write verified props under ``library/Props``; returns (entries, skipped).
 
     Each entry may carry ``textures`` (viewer role -> DDS file) whose material slots
     were proven against ``captured_parts`` of ``asset``; otherwise ``texture_error``
-    says why it stays untextured.
+    says why it stays untextured. ``admit(row, mesh)`` may add a game's own evidence
+    to the attachment proof, returning why a candidate is not a prop (or None).
+    ``textures`` holds a game's ``zzz_prop_textures.attach`` routing and payload options.
     """
     family, avatar = chosen["family"], chosen["avatar"]
     captured = set(chosen["meshes"])
@@ -117,15 +145,23 @@ def extract(client, chosen, rig, index, library, cancel, mesh_hint, captured_par
         # Static effect meshes and helpers without a proven placement are not rig props.
         if not mesh.get("weights") or not mesh.get("bone_hashes"):
             continue
-        placed = mesh_placement(mesh, avatar)
+        placed = mesh_placement(mesh, avatar, placement_tolerance)
         if placed is None:
             continue
-        encoded, reason = _encode(mesh, placed, root, captured_bones, reference)
+        # The rig root holds the mesh-to-Avatar basis, so root @ placement maps native
+        # vertices into the captured (asset) space every clip transform acts on.
+        bone_map, placement = placed
+        encoded, reason = encode_parts(mesh, np.asarray(bone_map) + 1, root @ placement, reference, captured_bones)
         if encoded is None:
             if reason:
                 skipped.append(dict(source=zzz_index.identity(row), name=row["name"], reason=reason))
             continue
-        found.setdefault(row["name"], {})[hashlib.sha256(encoded[0]).hexdigest()] = (row, encoded, mesh)
+        reason = admit(row, mesh) if admit else None
+        if reason:
+            skipped.append(dict(source=zzz_index.identity(row), name=row["name"], reason=reason))
+            continue
+        digest = hashlib.sha256(b"".join(payload for payload, _vertices, _indices in encoded)).hexdigest()
+        found.setdefault(row["name"], {})[digest] = (row, encoded, mesh)
     entries, meshes, total = [], [], 0
     for name in sorted(found):
         copies = found[name]
@@ -133,19 +169,25 @@ def extract(client, chosen, rig, index, library, cancel, mesh_hint, captured_par
             # Different native versions under one name are never guessed between.
             skipped.append(dict(name=name, reason="Several different native copies exist."))
             continue
-        digest, (row, (payload, vertices, indices), mesh) = next(iter(copies.items()))
-        if any(entry["sha256"] == digest for entry in entries):
-            continue
-        if len(entries) == MAX_PROPS or total + len(payload) > MAX_TOTAL_BYTES:
-            skipped.append(dict(name=name, reason="The prop budget is exhausted."))
-            continue
-        folder.mkdir(exist_ok=True)
-        file = f"Props/{digest[:32]}.bin"
-        (library / file).write_bytes(payload)
-        total += len(payload)
-        entries.append(dict(id=f"prop-{digest[:12]}", name=name[:128], file=file, layout=PROP_LAYOUT, sha256=digest,
-                            vertex_count=vertices, index_count=indices, source=zzz_index.identity(row)))
-        meshes.append(mesh)
+        row, parts, mesh = next(iter(copies.values()))
+        for number, (payload, vertices, indices) in enumerate(parts):
+            digest = hashlib.sha256(payload).hexdigest()
+            if any(entry["sha256"] == digest for entry in entries):
+                continue
+            if len(entries) == MAX_PROPS or total + len(payload) > MAX_TOTAL_BYTES:
+                skipped.append(dict(name=name, reason="The prop budget is exhausted."))
+                break
+            folder.mkdir(exist_ok=True)
+            file = f"Props/{digest[:32]}.bin"
+            (library / file).write_bytes(payload)
+            total += len(payload)
+            # A multi-material mesh is one prop per material section, each textured from its own.
+            label = name if len(parts) == 1 else f"{name} {number + 1}"
+            entries.append(dict(id=f"prop-{digest[:12]}", name=label[:128], file=file, layout=PROP_LAYOUT, sha256=digest,
+                                vertex_count=vertices, index_count=indices, source=zzz_index.identity(row),
+                                **({"section": number} if len(parts) > 1 else {})))
+            meshes.append(mesh)
     if entries:
-        zzz_prop_textures.attach(entries, meshes, client, chosen, index, library, cancel, captured_parts, asset)
+        zzz_prop_textures.attach(entries, meshes, client, chosen, index, library, cancel, captured_parts, asset,
+                                 **(textures or {}))
     return entries, skipped

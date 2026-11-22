@@ -5,9 +5,10 @@ from pathlib import Path
 
 from app.assets import animation_keys
 from app.assets.animations import read_clip
-from . import animator_sequences, gi_animation, gi_index, zzz_morphs, zzz_native, zzz_pipeline
+from . import animator_sequences, gi_animation, gi_index, gi_props, gi_skill_objects, zzz_index, zzz_morphs, zzz_native, zzz_pipeline
 from .mecanim import HumanSolver
-from .pipeline import clip_id, document, preserve_library, reusable_clip_key, write_document
+from .pipeline import (clip_id, document, manifest_props, preserve_library, report_props, reusable_clip_key,
+                       write_document)
 from .runtime import ExtractionCancelled, check_cancelled
 
 LABEL = "Genshin Impact"
@@ -61,6 +62,35 @@ def _facial(chosen, captured, index):
     return (facial, None) if facial["bindings"] and facial["components"] else (None, None)
 
 
+def _props(client, chosen, rig, index, library, cancel, captured, root, record, body_clips):
+    """Props the capture never drew: default-visible attached props, then name-paired skill
+    objects; returns (props, skipped, prop_error, object_error). Failures leave the clips,
+    and object failures the props, unaffected."""
+    avatar_row = next((row for row in index if zzz_index.identity(row) == chosen["source"]), None)
+    if avatar_row is None:
+        return [], [], "The verified Avatar is missing from the index.", None
+    routed = gi_props.routes(index, chosen["avatar_sources"], chosen["avatar"])
+    payloads = gi_props.captured_payloads(root, record)
+    props, skipped, prop_error, object_error = [], [], None, None
+    try:
+        props, skipped = gi_props.extract(client, chosen, rig, index, library, cancel,
+                                          lambda family, row: colocated(avatar_row, family, row), PLACEMENT_TOLERANCE,
+                                          captured, routed, payloads)
+    except ExtractionCancelled:
+        raise
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        prop_error = str(error) if isinstance(error, ValueError) else "The props could not be extracted."
+    try:
+        objects, skipped_objects = gi_skill_objects.extract(client, chosen, rig, index, library, body_clips, cancel,
+                                                            PLACEMENT_TOLERANCE, captured, payloads, props, routed)
+        props, skipped = props + objects, skipped + skipped_objects
+    except ExtractionCancelled:
+        raise
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        object_error = str(error) if isinstance(error, ValueError) else "The skill objects could not be extracted."
+    return props, skipped, prop_error, object_error
+
+
 def _clear_samples(work):
     # Sample buffers belong to one state; bounded jobs must not keep accumulating them.
     for file in work.glob("samples-*.bin"):
@@ -86,7 +116,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     mask = gi_animation.streamer_mask(streamer_layer)
     pairs, skipped = gi_animation.state_pairs(controller, index)
     facial, facial_error = _facial(chosen, captured, index)
-    imported, provenance, seen, state_clips = 0, [], set(), {}
+    imported, provenance, seen, state_clips, body_clips = 0, [], set(), {}, {}
     for number, pair in enumerate(pairs):
         progress("convert", number, len(pairs))
         check_cancelled(cancel)
@@ -139,6 +169,9 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         read_clip(str(library), entry, rig, validated_morphs=validated_morphs)
         entries[key], existing[key] = entry, metadata
         state_clips.update((index, (key, duration)) for index in pair["state_indices"])
+        body = body_clips.setdefault(gi_index.identity(pair["body"]), dict(
+            name=pair["body"]["name"], duration=duration, frames=frames, clips=[]))
+        body["clips"].append(key)
         provenance.append(dict(id=key, source=source, state=pair["state"], layers=layers))
         imported += 1
         if len(entries) > 1024 or sum(file.stat().st_size for file in library.rglob("*") if file.is_file()) > 2 * 1024 ** 3:
@@ -146,9 +179,13 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     if not imported:
         raise ValueError("No compatible Genshin Impact animation clips could be converted. Existing Asset files were preserved.")
     sequences = animator_sequences.derive(controller, state_clips, animator_sequences.NORMALIZED_TIME)
-    write_document(library / "manifest.json", dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
-                                                   clips=list(entries.values()), sequences=sequences,
-                                                   runtime_bones=animation_keys.runtime_bones(rig, existing.values())), 1024 * 1024)
+    props, skipped_props, prop_error, object_error = _props(client, chosen, rig, index, library, cancel, captured,
+                                                            root, record, body_clips)
+    manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()),
+                    sequences=sequences, runtime_bones=animation_keys.runtime_bones(rig, existing.values()))
+    if props:
+        manifest["props"] = manifest_props(props)
+    write_document(library / "manifest.json", manifest, 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="gi", skeleton_id=rig["id"], skeleton=chosen["source"],
                   meshes=chosen["meshes"], proven_components=len(chosen["matched"]),
@@ -161,6 +198,9 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                   clips=len(entries), imported=imported, secondary=0, sequences=len(sequences),
                   skipped=len(skipped), skipped_details=skipped,
                   facial_targets=len(facial["bindings"]) if facial else 0, facial_error=facial_error,
-                  animations=provenance)
+                  animations=provenance,
+                  props=report_props(props),
+                  skipped_props=skipped_props, **({"prop_error": prop_error} if prop_error else {}),
+                  **({"skill_object_error": object_error} if object_error else {}))
     write_document(output / "RigExtraction.json", report, 4 * 1024 * 1024)
     return report, fingerprints

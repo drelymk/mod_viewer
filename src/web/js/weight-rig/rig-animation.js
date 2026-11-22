@@ -20,6 +20,16 @@ export function splitRigClips(clips) {
   };
 }
 
+// Marks sequences and props paired by clip names rather than game data.
+export const BY_NAME_MARK = '\u{1F517}';
+
+function animationOption(item) {
+  if (!item.by_name) return new Option(item.name, item.id);
+  const option = new Option(`${BY_NAME_MARK} ${item.name}`, item.id);
+  option.title = t('animation.byNameHint');
+  return option;
+}
+
 // Every clip picker shows the same locale-sorted order after the Rest option;
 // authored sequences and then shared clips follow in their own groups. Returns the combined order.
 export function fillRigClipSelect(select, clips, sequences = []) {
@@ -34,7 +44,7 @@ export function fillRigClipSelect(select, clips, sequences = []) {
     if (!items.length) continue;
     const group = document.createElement('optgroup');
     group.label = t(label);
-    items.forEach((item) => group.appendChild(new Option(item.name, item.id)));
+    items.forEach((item) => group.appendChild(animationOption(item)));
     select.appendChild(group);
   }
   return [...own, ...sortedSequences, ...shared];
@@ -267,6 +277,8 @@ export function createRigAnimation({
   const snapshot = () => ({
     clips: getRig()?.animations || [],
     sequences: sequences(),
+    // Whether the rig has game props, which the Show props toggle shows or hides.
+    hasProps: !!getRig()?.animation_props?.length,
     selected,
     playing,
     loading,

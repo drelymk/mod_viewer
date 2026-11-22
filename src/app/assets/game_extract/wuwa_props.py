@@ -310,14 +310,16 @@ class Writer:
     """Content-addressed prop files under ``library/Props`` within the prop budgets.
 
     ``entries`` are the manifest props (plus report-only ``source``/``texture_error``),
-    ``materials`` pairs each entry with its section's material for texturing.
+    ``materials`` pairs each entry with its section's material for texturing. A writer
+    given ``existing`` props keeps them and their folder, counting them in its budgets.
     """
 
-    def __init__(self, library):
+    def __init__(self, library, existing=()):
         self.library, self.folder = library, library / "Props"
-        if self.folder.exists():
+        if not existing and self.folder.exists():
             shutil.rmtree(self.folder)
-        self.entries, self.materials, self.skipped, self.total, self.tracks = [], [], [], 0, 0
+        self.entries, self.materials, self.skipped, self.tracks = list(existing), [], [], 0
+        self.total = sum((library / entry["file"]).stat().st_size for entry in existing)
 
     def write(self, data, *, track=False):
         """Write one content-addressed file; returns its manifest path and digest."""

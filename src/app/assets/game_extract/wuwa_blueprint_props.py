@@ -130,14 +130,16 @@ def pairs(sequences, clips):
 
 def poses(locals_, bones):
     """(frame, bone) component-space matrices of frame-major local transforms
-    (xyz translation, xyzw quaternion) on ``bones``, whose parents precede them."""
+    (xyz translation, xyzw quaternion, optionally xyz scale; otherwise each bone's rest
+    scale) on ``bones``, whose parents precede them."""
     q = locals_[..., 3:7] / np.linalg.norm(locals_[..., 3:7], axis=-1, keepdims=True)
     x, y, z, w = np.moveaxis(q, -1, 0)
     local = np.zeros(q.shape[:-1] + (4, 4))
     local[..., 0, :3] = np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)], -1)
     local[..., 1, :3] = np.stack([2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)], -1)
     local[..., 2, :3] = np.stack([2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)], -1)
-    local[..., :3, :3] *= np.asarray([bone["scale"] for bone in bones], dtype=float)[:, None, :]
+    local[..., :3, :3] *= (locals_[..., None, 7:10] if locals_.shape[-1] == 10
+                           else np.asarray([bone["scale"] for bone in bones], dtype=float)[:, None, :])
     local[..., :3, 3] = locals_[..., :3]
     local[..., 3, 3] = 1
     world = np.zeros_like(local)

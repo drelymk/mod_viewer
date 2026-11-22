@@ -60,6 +60,7 @@
   <symbol id="icon-clip" viewBox="0 0 24 24"><path d="m9 8.5 6 3.5-6 3.5Z"/><rect x="3" y="4" width="18" height="16" rx="2.5"/></symbol>
   <symbol id="icon-sequence" viewBox="0 0 24 24"><rect x="2.5" y="7" width="5" height="10" rx="1.2"/><rect x="9.5" y="7" width="5" height="10" rx="1.2"/><rect x="16.5" y="7" width="5" height="10" rx="1.2"/></symbol>
   <symbol id="icon-rest-pose" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><path d="M4 9.5h16M12 9.5v5.5M12 15l-3 6M12 15l3 6"/></symbol>
+  <symbol id="icon-by-name" viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.2-3.2a4.5 4.5 0 0 0-6.4-6.4L11.6 6"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3.2 3.2a4.5 4.5 0 0 0 6.4 6.4l1.6-1.6"/></symbol>
   <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></symbol>
   <symbol id="icon-chevron-up" viewBox="0 0 24 24"><path d="m5 15 7-7 7 7"/></symbol>
   <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m5 9 7 7 7-7"/></symbol>
@@ -303,6 +304,11 @@
       <button id="animation-stop" class="animation-icon-btn" type="button" title="Stop" aria-label="Stop"
               data-i18n-title="animation.stop" data-i18n-aria-label="animation.stop">
         <svg class="ui-icon animation-stop-icon" aria-hidden="true"><use href="#icon-stop"></use></svg>
+      </button>
+      <button id="animation-props" class="animation-icon-btn animation-props-toggle" type="button" aria-pressed="true"
+              title="Show props" aria-label="Show props"
+              data-i18n-title="animation.showProps" data-i18n-aria-label="animation.showProps" hidden>
+        <svg class="ui-icon" aria-hidden="true"><use href="#icon-mesh"></use></svg>
       </button>
       <div class="animation-timeline">
         <div id="animation-steps" class="animation-steps" aria-hidden="true" hidden></div>

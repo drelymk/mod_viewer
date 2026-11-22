@@ -7,6 +7,8 @@ const {
   activateWeightRig,
   loadRigAnimationLibrary,
   getRigAnimationState,
+  getRigPropsShown,
+  setRigPropsShown,
   selectRigAnimation,
   setRigAnimationPlaying,
   stopRigAnimation,
@@ -693,7 +695,21 @@ function buildAnimationSection(parent) {
   });
   section.appendChild(range);
   const status = addText(section, 'weight-rig-status');
+  // Game props show during playback unless turned off; the viewport dock's button mirrors this.
+  const propsLabel = document.createElement('label');
+  propsLabel.className = 'weight-checkbox rig-animation-props';
+  const props = document.createElement('input');
+  props.type = 'checkbox';
+  props.className = 'rig-animation-props-enable';
+  props.checked = true;
+  props.addEventListener('change', () => setRigPropsShown(props.checked));
+  propsLabel.appendChild(props);
+  addText(propsLabel, 'weight-label', '', 'animation.showProps');
+  propsLabel.hidden = true;
+  section.appendChild(propsLabel);
   Object.assign(ui, {
+    animationProps: props,
+    animationPropsLabel: propsLabel,
     animationSelect: select,
     animationPlay: play,
     animationStop: stop,
@@ -716,6 +732,8 @@ function syncAnimation(state = getRigAnimationState()) {
     fillRigClipSelect(ui.animationSelect, state.clips, state.sequences);
   }
   ui.animationSelect.value = state.selected || '';
+  ui.animationPropsLabel.hidden = !state.hasProps;
+  ui.animationProps.checked = getRigPropsShown();
   const activating = isWeightRigActivating();
   ui.animationSelect.disabled = activating || (!state.clips.length && !state.sequences?.length);
   ui.animationPlay.textContent = t(state.playing ? 'animation.pause' : 'animation.play');

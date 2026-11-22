@@ -58,7 +58,11 @@ below `GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/` or
 Scans list meshes (with section shapes), Avatars, animation clips,
 AnimatorControllers and SkinnedMeshRenderer routes with complete locators. The
 GI index keeps only a renderer's path and explicit mesh/Avatar pointers (external
-pointers spell CAB names in lower case); null-mesh renderers stay unrouted. Reads export:
+pointers spell CAB names in lower case); null-mesh renderers stay unrouted. Genshin
+scan rows also name each renderer's material files, and file scans add one `Material`
+row per material naming its texture files (null when the material cannot be read, so
+unused materials never fail a scan); the Python index keeps only the file locations
+character renderers lead to. Reads export:
 
 - meshes whose skin covers every vertex (packed or partial skins are rejected);
 - the Avatar skeleton with `m_TOS` paths and the model's default pose, which is
@@ -78,6 +82,12 @@ pointers spell CAB names in lower case); null-mesh renderers stay unrouted. Read
   selectors. Each transition carries its destination (a state index, or 30000 +
   selector index), duration, offset, exit time, has-exit-time and fixed-duration
   flags and named conditions (mode, threshold). Arrays are bounded.
+- SkinnedMeshRenderer reads list the renderer's material slots, as in ZZZ, plus
+  `visible`: whether the prefab draws it by default (the renderer's enabled flag,
+  kept by a build-time reader adaptation, and the active flag of its GameObject and
+  every ancestor up to the Animator's, each GameObject consumed exactly; Genshin omits
+  its trailing alignment). Null when that layout is not proven. Material and Texture2D
+  reads match ZZZ's.
 
 GCC rejects one uninstantiated ACL template body that MSVC accepts, so the
 database decoder is built with `-Wno-template-body`; its source is unmodified.

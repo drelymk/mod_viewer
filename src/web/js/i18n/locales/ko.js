@@ -263,6 +263,8 @@ export default {
   'animation.filterAll': '전체',
   'animation.filterClips': '클립',
   'animation.filterShared': '공용',
+  'animation.byNameHint': '게임 데이터가 아닌 이름으로 캐릭터 클립과 짝지었습니다.',
+  'animation.showProps': '소품 표시',
   'animation.noMatches': '일치하는 애니메이션이 없습니다',
   'animation.stepCount': '{count}단계',
   'animation.showControls': '애니메이션 컨트롤 표시',

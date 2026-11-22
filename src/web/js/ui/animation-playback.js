@@ -13,7 +13,7 @@ import { getLoadedWeightRigFeature } from '../weight-rig/weight-rig-feature.js';
 import { sortRigAnimations, splitRigClips } from '../weight-rig/rig-animation.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
-const ICONS = { rest: '#icon-rest-pose', clip: '#icon-clip', sequence: '#icon-sequence' };
+const ICONS = { rest: '#icon-rest-pose', clip: '#icon-clip', sequence: '#icon-sequence', byName: '#icon-by-name' };
 const PAGE = 8;
 const EMPTY_CATALOG = Object.freeze({ clips: [], sequences: [], byId: new Map() });
 
@@ -72,6 +72,7 @@ export function initAnimationPlayback() {
   const transport = $('animation-transport');
   const button = $('animation-play-pause');
   const stopButton = $('animation-stop');
+  const propsButton = $('animation-props');
   const slider = $('animation-frame');
   const steps = $('animation-steps');
   const timeline = steps.parentElement;
@@ -171,7 +172,15 @@ export function initAnimationPlayback() {
     const meta = document.createElement('span');
     meta.className = 'animation-option-meta';
     meta.textContent = choice.kind === 'rest' ? '' : describe(choice);
-    node.append(icon(choice.kind), name, meta);
+    node.append(icon(choice.kind), name);
+    // Sequences paired by clip names rather than game data carry a link mark and a hint.
+    if (choice.item?.by_name) {
+      const mark = icon('byName');
+      mark.classList.add('animation-by-name-mark');
+      node.append(mark);
+      node.title = t('animation.byNameHint');
+    }
+    node.append(meta);
     return node;
   }
 
@@ -304,6 +313,8 @@ export function initAnimationPlayback() {
     trigger.disabled = previous.disabled = next.disabled = !!activating;
     if (activating) closePicker();
     stopButton.disabled = !!activating || (!rig.selected && !rig.loading);
+    propsButton.hidden = !rig.hasProps;
+    propsButton.setAttribute('aria-pressed', String(!!getRig()?.getRigPropsShown()));
     const sequence = choice?.kind === 'sequence' ? choice.item : null;
     // A playing sequence scrubs along its whole timeline over the step bar.
     const live = !!sequence && !rig.loading && rig.stepCount === sequence.steps.length;
@@ -385,6 +396,7 @@ export function initAnimationPlayback() {
     slider.title = '';
     message.hidden = true;
     stopButton.disabled = false;
+    propsButton.hidden = true;
     slider.disabled = false;
     slider.step = '1';
     slider.setAttribute('aria-label', t('animation.frame'));
@@ -440,6 +452,12 @@ export function initAnimationPlayback() {
     setProgress(slider);
     if (rigAvailable()) getRig().seekRigAnimation(slider.value);
     else setAnimationFrame(slider.value);
+  });
+  // Shows or hides every game prop (on by default); the Weight/Rig panel checkbox mirrors this.
+  propsButton.addEventListener('click', () => {
+    const feature = getRig();
+    feature?.setRigPropsShown(!feature.getRigPropsShown());
+    propsButton.setAttribute('aria-pressed', String(!!feature?.getRigPropsShown()));
   });
   previous.addEventListener('click', () => advance(-1));
   next.addEventListener('click', () => advance(1));

@@ -132,16 +132,16 @@ def timeline(properties, clips):
 
 
 NAMED_PART = re.compile(r"(?P<stem>.+)_(?P<part>Start|Loop|End(?P<end>\d*))", re.IGNORECASE)
-NAME_SUFFIX = " (by name)"
 
 
 def name_sequences(clips, exclude=()):
-    """Start/Loop/End clip sets in one folder, ordered by name (a labeled preview convenience).
+    """Start/Loop/End clip sets in one folder, ordered by name (a flagged preview convenience).
 
     Gameplay code chains these clips, so no authored data orders them; names only ever
     order a preview here and never pair or identify clips. A stem with exactly one
     ``_Start`` and/or one ``_Loop`` plus its ``_End`` variants becomes one sequence per
-    end (``Start → Loop → End``, hard cuts, played once); two parts are required.
+    end (``Start → Loop → End``, hard cuts, played once); two parts are required. Each
+    carries ``by_name`` so the viewer marks it as paired by name rather than game data.
     ``clips`` maps an AnimSequence package path to ``(clip id, duration)``; sequences
     whose ids are in ``exclude`` are skipped.
     """
@@ -168,8 +168,8 @@ def name_sequences(clips, exclude=()):
             if identifier in seen or identifier in clip_ids:
                 continue
             seen.add(identifier)
-            name = f"{chain[0][0]} – {chain[-1][0]}"[:128 - len(NAME_SUFFIX)] + NAME_SUFFIX
-            result.append(dict(id=identifier, name=name, cyclic=False, restart=0.0, steps=steps))
+            name = f"{chain[0][0]} – {chain[-1][0]}"[:128]
+            result.append(dict(id=identifier, name=name, cyclic=False, restart=0.0, steps=steps, by_name=True))
     return result
 
 
