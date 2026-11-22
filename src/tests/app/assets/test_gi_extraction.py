@@ -361,11 +361,14 @@ def test_gi_shape_prefilter_compares_index_counts_of_overlapping_sections(tmp_pa
 SHAPE_HASH = 7
 
 
-def add_attachment_component(root, asset, rows, client):
-    """A weightless capture of one of a native two-bone mesh's triangles, shown with a blend shape at full weight."""
+def add_attachment_component(root, asset, rows, client, offset=(0, 0, 0)):
+    """A weightless capture of one of a native two-bone mesh's triangles, shown with a blend shape at full weight.
+
+    ``offset`` moves the whole capture, as baked face placement noise does.
+    """
     vertices = np.array([[2.1, .3, .5], [2.6, .4, .9], [2.3, 1.1, .6], [2.8, 1.3, .2]])
     shape = {1: [0, .01, 0], 3: [0, .02, .01]}
-    captured = vertices.copy()
+    captured = vertices + offset
     for index_, delta in shape.items():
         captured[index_] += delta
     uv = [[.6, .1], [.7, .2], [.8, .3], [.9, .4]]
@@ -395,9 +398,10 @@ def add_attachment_component(root, asset, rows, client):
     return index.build_index("GIMI", str(root))["assets"][0]
 
 
-def test_gi_weightless_part_adopts_native_weights_and_its_captured_expression(tmp_path):
+@pytest.mark.parametrize("offset", [(0, 0, 0), (2e-6, 3e-4, -5e-6)])
+def test_gi_weightless_part_adopts_native_weights_and_its_captured_expression(tmp_path, offset):
     root, asset, record, rows, client = gimi_fixture(tmp_path)
-    record = add_attachment_component(root, asset, rows, client)
+    record = add_attachment_component(root, asset, rows, client, offset)
     chosen, rig, _previous, captured, _fingerprints = gi_pipeline.prove_rig(
         client, root, record, None, lambda *_: None, threading.Event(), rows)
     assert [part.get("weightless", False) for part in captured] == [False, True]
@@ -409,10 +413,12 @@ def test_gi_weightless_part_adopts_native_weights_and_its_captured_expression(tm
     attachment = attached["attachment"]
     assert attachment["weights"] == pytest.approx([.75, .25, 0, 0] * 3)
     assert attachment["slots"] == [1, 0, 0, 0] * 3
-    # The capture shows the native shape at full weight.
+    # The capture shows the native shape at full weight; a placement offset is not an expression.
     assert attachment["expression"] == {str(SHAPE_HASH): pytest.approx(1, abs=1e-4)}
     # Only the skinned part's captured Blend stream is reusable by mods.
     assert len(rig["skin_bindings"]) == 1
+    # Without GI's placement allowance (ZZZ) an offset capture stays unproven.
+    assert bool(zzz_native.match_attachment_candidates(captured[1], client.documents[9])) == (offset == (0, 0, 0))
 
 
 def test_gi_attachment_joins_asset_weights_only_with_its_proven_rig(tmp_path, monkeypatch):
@@ -450,10 +456,12 @@ def test_gi_attachment_joins_asset_weights_only_with_its_proven_rig(tmp_path, mo
         preview.clear_preview()
 
 
-@pytest.mark.parametrize("change", ["unexplained", "excess_expression", "partial_weight", "foreign_triangle"])
+@pytest.mark.parametrize("change", ["unexplained", "excess_expression", "partial_weight", "foreign_triangle", "far_offset"])
 def test_gi_attachment_proof_fails_closed(tmp_path, change):
     root, asset, record, rows, client = gimi_fixture(tmp_path)
-    record = add_attachment_component(root, asset, rows, client)
+    # Beyond the placement tolerance a shared offset is not placement noise.
+    offset = (0, gi_pipeline.PLACEMENT_TOLERANCE * 1.5, 0) if change == "far_offset" else (0, 0, 0)
+    record = add_attachment_component(root, asset, rows, client, offset)
     mesh = client.documents[9]
     if change == "unexplained":
         mesh["vertices"][7] += .01  # Vertex 2 moves in no native shape.
@@ -462,7 +470,7 @@ def test_gi_attachment_proof_fails_closed(tmp_path, change):
             row["position"] = [value * .4 for value in row["position"]]  # Would need weight 2.5.
     elif change == "partial_weight":
         mesh["weights"] = [[.6, .3, 0, 0]] * 4
-    else:
+    elif change == "foreign_triangle":
         mesh["indices"] = [0, 1, 2, 0, 2, 3]
     chosen, rig, *_ = gi_pipeline.prove_rig(client, root, record, None, lambda *_: None, threading.Event(), rows)
     assert list(chosen["matched"]) == [0]
@@ -942,6 +950,30 @@ def add_skill_object(rows, client, thing, path_id, clips):
     for number, (suffix, document) in enumerate(clips.items(), start=path_id + 3):
         rows.append(gi_row(f"Ani_SkillObj_Name01_{thing}_{suffix}", "AnimationClip", number, block=GI_OTHER_BLOCK))
         client.documents[number] = document
+
+
+def test_gi_skill_objects_pair_loosely_by_name_only_when_unambiguous(tmp_path):
+    root, _asset, record, rows, client = animated_fixture(tmp_path)
+    next(row for row in rows if row["path_id"] == 20)["name"] = "Ani_Avatar_Type01_Name01_Idle01"
+    growing = [("Transform", 0, 501, 1), ("Transform", 0, 501, 3), *MOTION]
+    still = [[0, 1, 0, 1, 1, 1, *STILL]] * 2
+    # Case, underscores and a Bone marker do not distinguish names.
+    add_skill_object(rows, client, "Rope01", 260, {"Idle_01_Bone_02": clip("Rope01", 0.0, 1.0, growing, still)})
+    # Identical geometry would be written once, so give the rope its own.
+    client.documents[261]["vertices"] = [0, 1, 0, 2, 1, 0, 0, 3, 0]
+    # An exact name keeps its clip; a loose second claimant is not chosen between.
+    add_skill_object(rows, client, "Pole01", 280, {
+        "Idle01": clip("Pole01", 0.0, 1.0, growing, still), "Idle_Bone": clip("Pole01", 0.0, 1.0, growing, still),
+        "idle_01": clip("Pole01", 0.0, 1.0, growing, still)})
+    # A loose name still needs the same length.
+    add_skill_object(rows, client, "Cup01", 300, {"Idle_01": clip("Cup01", 0.0, 2.0, growing, still)})
+    report, _ = gi_pipeline.build(client, root, record, tmp_path / "output", None, lambda *_: None, threading.Event(), rows)
+    assert "skill_object_error" not in report and "prop_error" not in report
+    assert sorted(item["name"] for item in report["props"]) == ["Pole01_Model", "Rope01_Model"]
+    assert {(item["name"], item["source"]): item["reason"] for item in report["skipped_props"]} == {
+        ("Pole01", "Ani_SkillObj_Name01_Pole01_Idle_Bone"): "No single character clip has this clip's name.",
+        ("Pole01", "Ani_SkillObj_Name01_Pole01_idle_01"): "Several object clips pair with one character clip.",
+        ("Cup01", "Ani_SkillObj_Name01_Cup01_Idle_01"): "The paired character clip lasts a different time."}
 
 
 def test_gi_skill_objects_pair_by_name_and_keep_their_own_scale_and_placement(tmp_path, monkeypatch):

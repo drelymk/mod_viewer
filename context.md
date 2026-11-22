@@ -1455,7 +1455,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Weightless GIMI captures (face parts) are attachments of a fully weighted native
   mesh. Captures may show an expression: every captured position must equal the
   native rest pose plus one least-squares combination of the mesh's single-frame
-  blend shapes (each weight within 0..1 up to 0.05 slack) within 1e-4, each
+  blend shapes (each weight within 0..1 up to 0.05 slack) within 1e-4, after one
+  shared translation solved with the weights and no longer than the GI placement
+  tolerance (baked face placement carries inverse-bind noise; ZZZ allows none), each
   vertex matched by UV and explained position and resolved through shared
   triangles where seam duplicates coincide; the captured triangles must form a
   sub-multiset of one native section, and the match must share the placement a
@@ -1525,7 +1527,10 @@ of documentation, comments and tests; use portable fixtures instead.
   configuration spawns and times; that configuration is encrypted and never read. An
   object clip `Ani_SkillObj_<token>_<object>_<suffix>` pairs with the converted clips of
   the only body clip named `…_<token>_<suffix>` when both last the same time (within
-  1 ms); shared names are never chosen between, and an object that moves by root motion
+  1 ms); shared names are never chosen between. When no exact name exists, names compare
+  ignoring case, underscores and a `Bone` marker with its number (`Show01`,
+  `Show_01_Bone_01_BS`), still needing one body clip, the same length, and no other clip of
+  that object claiming the same body clip (reported as skipped). An object that moves by root motion
   (MotionT/Q) is skipped. The single placement assumption is the object's origin at the
   character's origin, facing the same way (both play in place); its own curves, scale
   included, place and time it from there, so objects grow in and shrink away as the game

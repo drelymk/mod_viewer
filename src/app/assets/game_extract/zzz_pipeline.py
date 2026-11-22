@@ -157,7 +157,7 @@ def _newest_block_version(root, candidates, avatar_rows):
 
 def verify_candidates(client, captured, rows, query, cancel, *,
                       mesh_hint=lambda avatar_row, family, mesh_row: _mesh_family_hint(family, mesh_row["name"]), label="ZZZ",
-                      placement_tolerance=2e-4, shape_key=exact_shape, weight_drift=0.0):
+                      placement_tolerance=2e-4, shape_key=exact_shape, weight_drift=0.0, attachment_offset=0.0):
     skinned = [part for part in captured if not part.get("weightless")]
     weightless_counts = [part["index_count"] for part in captured if part.get("weightless")]
     # Shapes only narrow candidates; every adopted part still needs proof.
@@ -213,7 +213,7 @@ def verify_candidates(client, captured, rows, query, cancel, *,
             bone_map, placement = placed
             for number, part in enumerate(captured):
                 if part.get("weightless"):
-                    found = match_attachment_candidates(part, mesh)
+                    found = match_attachment_candidates(part, mesh, attachment_offset)
                 elif any(section["count"] == part["index_count"] for section in mesh["sections"]):
                     found = match_component_candidates(part, mesh, weight_drift)
                 else:

@@ -251,34 +251,45 @@ def _uv_candidates(cells, uv, texcoord):
     return [index for index in found if np.all(np.abs(uv[index] - texcoord) <= ATTACHMENT_TOLERANCE)]
 
 
-def _explained_mapping(part, positions, uv, deltas, indices):
+def _explained_mapping(part, positions, uv, deltas, indices, offset_tolerance=0.0):
     """Map each captured vertex to its unique native vertex at native rest plus one shared expression.
 
     Every captured vertex must have a same-UV native vertex whose rest position,
     displaced by the solved blend-shape weights, matches within tolerance, and no
-    other same-UV vertex may. Returns (mapping, weights) or None.
+    other same-UV vertex may. With ``offset_tolerance`` the capture may also sit
+    one shared translation of at most that length away (placement noise baked into
+    captured faces), solved together with the weights. Returns (mapping, weights) or None.
     """
     cells = _uv_cells(uv)
     candidates = [_uv_candidates(cells, uv, texcoord) for texcoord in part["uv"]]
     if any(not items for items in candidates) or len(candidates) > 250000:
         return None
     captured = np.asarray(part["positions"], dtype=float)
-    weights = np.zeros(len(deltas))
-    chosen = None
-    for _round in range(4):
+    solved = np.zeros(len(deltas) + (3 if offset_tolerance > 0 else 0))
+
+    def posed_by(values):
+        weights, offset = values[:len(deltas)], values[len(deltas):]
         posed = positions + np.tensordot(weights, deltas, axes=1) if len(deltas) else positions
+        return posed + offset if len(offset) else posed
+
+    for _round in range(4):
+        posed = posed_by(solved)
         chosen = np.array([min(items, key=lambda index: np.linalg.norm(posed[index] - point))
                            for items, point in zip(candidates, captured)])
-        if not len(deltas):
+        if not len(solved):
             break
-        system = deltas[:, chosen, :].reshape(len(deltas), -1).T
-        solved, *_ = np.linalg.lstsq(system, (captured - positions[chosen]).ravel(), rcond=None)
-        if np.allclose(solved, weights, rtol=0, atol=1e-7):
+        columns = [deltas[:, chosen, :].reshape(len(deltas), -1).T] if len(deltas) else []
+        if offset_tolerance > 0:
+            columns.append(np.tile(np.eye(3), (len(chosen), 1)))
+        values, *_ = np.linalg.lstsq(np.hstack(columns), (captured - positions[chosen]).ravel(), rcond=None)
+        if np.allclose(values, solved, rtol=0, atol=1e-7):
             break
-        weights = solved
-    if np.any(weights < -EXPRESSION_SLACK) or np.any(weights > 1 + EXPRESSION_SLACK):
+        solved = values
+    weights, offset = solved[:len(deltas)], solved[len(deltas):]
+    if (np.any(weights < -EXPRESSION_SLACK) or np.any(weights > 1 + EXPRESSION_SLACK)
+            or (len(offset) and np.linalg.norm(offset) > offset_tolerance)):
         return None
-    posed = positions + np.tensordot(weights, deltas, axes=1) if len(deltas) else positions
+    posed = posed_by(solved)
     options = [{index for index in items if np.all(np.abs(posed[index] - point) <= ATTACHMENT_TOLERANCE)}
                for items, point in zip(candidates, captured)]
     mapping = _triangle_assignment(part["indices"], options, indices)
@@ -324,14 +335,15 @@ def _triangle_assignment(captured, options, indices):
     return mapping if len(set(mapping.values())) == len(mapping) else None
 
 
-def match_attachment_candidates(part, mesh):
+def match_attachment_candidates(part, mesh, offset_tolerance=0.0):
     """Prove a weightless capture against a native skinned mesh and adopt its own weights.
 
     The capture may show the mesh in an expression: its positions must equal the
     native rest pose plus one solved blend-shape combination, every vertex matched
     uniquely by UV and explained position, and its triangles must form a
     sub-multiset of one native section. The drawn subset then binds through the
-    native per-vertex influences. Returns (palette, signs, mapping, attachment).
+    native per-vertex influences. ``offset_tolerance`` admits one shared translation
+    of the capture (see ``_explained_mapping``). Returns (palette, signs, mapping, attachment).
     """
     geometry = _native_geometry(part, mesh)
     influences = _native_influences(mesh, len(geometry[0])) if geometry else None
@@ -341,7 +353,7 @@ def match_attachment_candidates(part, mesh):
     hashes, deltas = _shape_deltas(mesh, len(native))
     matches = []
     for signs in ((1, 1, 1), (-1, 1, 1), (1, -1, 1), (1, 1, -1)):
-        found = _explained_mapping(part, native * signs, uv, deltas * signs, indices)
+        found = _explained_mapping(part, native * signs, uv, deltas * signs, indices, offset_tolerance)
         if found is None or not _section_triangles(part, mesh, indices, found[0], complete=False):
             continue
         mapping, expression = found

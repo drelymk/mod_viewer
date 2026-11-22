@@ -199,7 +199,7 @@ class AssetPreview:
                 if fill is not None:
                     return self._asset_fill_sessions.get(session["folder_key"]) is fill
                 return self._weight_session is session and self._preview_generation == session["generation"]
-            meshes, rigs, cache, pieces, offset = {}, {}, {}, [], 0
+            meshes, rigs, cache, dumps, pieces, offset = {}, {}, {}, {}, [], 0
             for part in session["parts"]:
                 manifest = part.skinning or part.attachment
                 if not manifest:
@@ -213,7 +213,7 @@ class AssetPreview:
                     metadata_entry=part.metadata_entry)
                 roots = {os.path.normcase(session["root"])}
                 if part.skinning:
-                    source, decoded = decode_captured_skinning(session["root"], part.skinning)
+                    source, decoded = decode_captured_skinning(session["root"], part.skinning, dumps)
                 else:
                     # Weights exist only for a weightless part its own proven attachment admits.
                     attachment = game_attachment(binding, roots, cache)
