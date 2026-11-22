@@ -191,12 +191,29 @@ def _morphs(columns, policies, facial):
     return dict(names=names, weights=weights.astype("<f4"), clamp=clamp)
 
 
-def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
+def _points(found):
+    """Path hash -> frame-major (xyz, xyzw) local transforms of captured points that have both."""
+    tracks = {}
+    for path in {path for path, _attribute in found}:
+        if (path, 1) in found and (path, 2) in found:
+            rotation = found[path, 2]
+            lengths = np.linalg.norm(rotation, axis=1)
+            if np.any(lengths < 1e-6):
+                raise ValueError("The native clip contains a zero quaternion.")
+            tracks[path] = np.hstack([found[path, 1], rotation / lengths[:, None]])
+    return tracks
+
+
+def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None, points=frozenset()):
     """Convert one state's body (and optional streamer) clips to version-2 TQS data.
 
     ``facial`` (from ``zzz_morphs.prepare``) routes blend-shape curves to proven
-    captured targets. Returns ``(binary, frames, duration, omitted, goal_errors, morph, keyed)``,
-    where ``keyed`` is the sorted rig bone indices the clip keys (Humanoid-driven bones included).
+    captured targets. ``points`` are path hashes of transforms outside the Avatar whose
+    tracks to keep (the character points effect prefabs follow). Returns ``(binary, frames,
+    duration, omitted, goal_errors, morph, keyed, point_tracks)``, where ``keyed`` is the
+    sorted rig bone indices the clip keys (Humanoid-driven bones included) and
+    ``point_tracks`` maps each such point the clip animates to its frame-major local
+    (xyz, xyzw) transforms.
     """
     start, stop = _timing(body)
     duration = stop - start
@@ -219,6 +236,7 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
     output = np.broadcast_to(poses, (frames, *poses.shape)).copy()
     omitted = dict(non_transform=0, translation_dof=0, humanoid_owned=0, unbound=0, masked=0)
     written, layer_written, channels, morph_columns, policies = set(), set(), {}, {}, set()
+    found, layer_found = {}, {}
     for binding, channel in _bindings(body, sample_channels(body, work, targets, reserved, QUATERNION_TOLERANCE)):
         morph = _morph_column(binding, channel, facial)
         if morph is not None:
@@ -246,6 +264,10 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
         bone = to_bone.get(binding["path"])
         if bone is None:
             omitted["unbound"] += 1
+            if binding["path"] in points and binding["attribute"] in (1, 2):
+                if (binding["path"], binding["attribute"]) in found:
+                    raise ValueError("The native clip has duplicate transform tracks.")
+                found[binding["path"], binding["attribute"]] = channel
         elif bone - 1 in human:
             omitted["humanoid_owned"] += 1
         else:
@@ -279,6 +301,11 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
             bone = to_bone.get(binding["path"])
             if bone is None:
                 omitted["unbound"] += 1
+                # Like bones, a point takes the override layer's value only inside its mask.
+                if binding["path"] in points and binding["path"] in mask and binding["attribute"] in (1, 2):
+                    if (binding["path"], binding["attribute"]) in layer_found:
+                        raise ValueError("The native streamer clip has duplicate transform tracks.")
+                    layer_found[binding["path"], binding["attribute"]] = channel
             elif bone - 1 in human:
                 omitted["humanoid_owned"] += 1
             elif binding["path"] not in mask:
@@ -299,7 +326,7 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None):
     keyed = {bone for bone, _attribute in written | layer_written}
     if channels:
         keyed.update(avatar_node + 1 for avatar_node in human)
-    return binary, frames, duration, omitted, goal_errors, morph, sorted(keyed)
+    return binary, frames, duration, omitted, goal_errors, morph, sorted(keyed), _points({**found, **layer_found})
 
 
 def streamer_mask(layer):

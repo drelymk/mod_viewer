@@ -33,6 +33,12 @@ def check_cancelled(cancel):
         raise ExtractionCancelled("Extraction cancelled; existing Asset files were preserved.")
 
 
+def clear_samples(work):
+    """Remove native sample buffers; bounded jobs must not keep accumulating them."""
+    for file in Path(work).glob("samples-*.bin"):
+        file.unlink(missing_ok=True)
+
+
 def list_packages(client, kind, folder, cancel):
     """Collect complete package searches, retaining direct entries on subdivision."""
     check_cancelled(cancel)

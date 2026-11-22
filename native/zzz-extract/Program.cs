@@ -122,6 +122,8 @@ internal static class Program
                     var file = manager.assetsFileList[ordinal];
                     if (files && file.m_Objects.Any(o => (ClassIDType)o.classID is ClassIDType.Material or ClassIDType.Texture2D))
                         rows.Add(new { name = "", type = "File", offset = file.offset, cab = file.fileName, file_ordinal = ordinal, path_id = 0L });
+                    // Genshin effect prefabs name the character point their skill objects follow.
+                    if (gi && operation == "scan") rows.AddRange(GiFollow.Rows(file, ordinal, game));
                     foreach (var info in file.m_Objects)
                     {
                         var type = (ClassIDType)info.classID;

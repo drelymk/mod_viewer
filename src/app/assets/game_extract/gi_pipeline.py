@@ -9,7 +9,7 @@ from . import animator_sequences, gi_animation, gi_index, gi_props, gi_skill_obj
 from .mecanim import HumanSolver
 from .pipeline import (clip_id, document, manifest_props, preserve_library, report_props, reusable_clip_key,
                        write_document)
-from .runtime import ExtractionCancelled, check_cancelled
+from .runtime import ExtractionCancelled, check_cancelled, clear_samples
 
 LABEL = "Genshin Impact"
 # Long Genshin face chains carry float noise just above ZZZ's 2e-4 inverse-bind
@@ -64,7 +64,7 @@ def _facial(chosen, captured, index):
     return (facial, None) if facial["bindings"] and facial["components"] else (None, None)
 
 
-def _props(client, chosen, rig, index, library, cancel, captured, root, record, body_clips):
+def _props(client, chosen, rig, index, library, cancel, captured, root, record, body_clips, sequences):
     """Props the capture never drew: default-visible attached props, then name-paired skill
     objects; returns (props, skipped, prop_error, object_error). Failures leave the clips,
     and object failures the props, unaffected."""
@@ -84,19 +84,14 @@ def _props(client, chosen, rig, index, library, cancel, captured, root, record, 
         prop_error = str(error) if isinstance(error, ValueError) else "The props could not be extracted."
     try:
         objects, skipped_objects = gi_skill_objects.extract(client, chosen, rig, index, library, body_clips, cancel,
-                                                            PLACEMENT_TOLERANCE, captured, payloads, props, routed)
+                                                            PLACEMENT_TOLERANCE, captured, payloads, props, routed,
+                                                            sequences)
         props, skipped = props + objects, skipped + skipped_objects
     except ExtractionCancelled:
         raise
     except (ValueError, KeyError, TypeError, OSError) as error:
         object_error = str(error) if isinstance(error, ValueError) else "The skill objects could not be extracted."
     return props, skipped, prop_error, object_error
-
-
-def _clear_samples(work):
-    # Sample buffers belong to one state; bounded jobs must not keep accumulating them.
-    for file in work.glob("samples-*.bin"):
-        file.unlink(missing_ok=True)
 
 
 def build(client, root, record, output, query, progress, cancel, index=None):
@@ -118,6 +113,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     mask = gi_animation.streamer_mask(streamer_layer)
     pairs, skipped = gi_animation.state_pairs(controller, index)
     facial, facial_error = _facial(chosen, captured, index)
+    points = gi_skill_objects.point_hashes(index, chosen)
     imported, provenance, seen, state_clips, body_clips = 0, [], set(), {}, {}
     for number, pair in enumerate(pairs):
         progress("convert", number, len(pairs))
@@ -128,8 +124,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             streamer = client.read(pair["streamer"]) if pair["streamer"] else None
             if streamer is not None and not gi_animation.has_curves(streamer):
                 streamer = None  # An empty streamer clip leaves the body motion unchanged.
-            binary, frames, duration, omitted, goals, morph, keyed = gi_animation.convert_state(
-                body, streamer, client.work, rig, avatar, solver, mask, facial)
+            binary, frames, duration, omitted, goals, morph, keyed, point_tracks = gi_animation.convert_state(
+                body, streamer, client.work, rig, avatar, solver, mask, facial, points)
         except ExtractionCancelled:
             raise
         except (ValueError, KeyError, TypeError) as error:
@@ -137,7 +133,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             skipped.append(dict(state=pair["state"], source=source, reason=reason))
             continue
         finally:
-            _clear_samples(client.work)
+            clear_samples(client.work)
         digest = hashlib.sha256(binary).hexdigest()
         if (pair["state"], digest) in seen:
             continue
@@ -172,8 +168,9 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         entries[key], existing[key] = entry, metadata
         state_clips.update((index, (key, duration)) for index in pair["state_indices"])
         body = body_clips.setdefault(gi_index.identity(pair["body"]), dict(
-            name=pair["body"]["name"], duration=duration, frames=frames, clips=[]))
+            name=pair["body"]["name"], duration=duration, frames=frames, clips=[], points={}))
         body["clips"].append(key)
+        body["points"][key] = point_tracks
         provenance.append(dict(id=key, source=source, state=pair["state"], layers=layers))
         imported += 1
         if len(entries) > 1024 or sum(file.stat().st_size for file in library.rglob("*") if file.is_file()) > 2 * 1024 ** 3:
@@ -182,7 +179,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         raise ValueError("No compatible Genshin Impact animation clips could be converted. Existing Asset files were preserved.")
     sequences = animator_sequences.derive(controller, state_clips, animator_sequences.NORMALIZED_TIME)
     props, skipped_props, prop_error, object_error = _props(client, chosen, rig, index, library, cancel, captured,
-                                                            root, record, body_clips)
+                                                            root, record, body_clips, sequences)
     manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()),
                     sequences=sequences, runtime_bones=animation_keys.runtime_bones(rig, existing.values()))
     if props:

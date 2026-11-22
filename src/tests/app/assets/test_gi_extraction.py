@@ -47,7 +47,8 @@ def rows_for(block):
         row("", "Material", "CAB-05", 40, number * 10 + 7, textures=["CAB-06"]),
         row("", "Material", "CAB-05", 40, number * 10 + 8, textures=None),
         row("", "Material", "CAB-07", 56, number * 10 + 9, textures=["CAB-07"]),
-        # World meshes, their renderers, other controllers and unreferenced clips are dropped.
+        # World meshes, their renderers and other controllers are dropped; Clip02 stays only
+        # because a skill object's controller points to it.
         row("Rock01", "Mesh", "CAB-09", 72, number * 10 + 10, shape=[[3, 3]]),
         row("", "SkinnedMeshRenderer", "CAB-09", 72, number * 10 + 11, materials=["CAB-07"],
             renderer=dict(path="Rock", mesh=dict(cab="cab-09", path_id=number * 10 + 10),
@@ -62,6 +63,18 @@ def rows_for(block):
         row("SkillObj_Other01_Cup01_ModelAvatar", "Avatar", "CAB-12", 104, number * 10 + 18),
         row("Cup01_Model", "Mesh", "CAB-12", 104, number * 10 + 19, shape=[[3, 3]]),
         row("Ani_SkillObj_Other01_Cup01_Idle01", "AnimationClip", "CAB-13", 112, number * 10 + 20),
+        # Skill objects' own controllers chain their clips; other families' are dropped.
+        row("Ani_SkillObj_Name01_Chair01_Show01", "AnimatorController", "CAB-15", 128, number * 10 + 24),
+        row("Ani_SkillObj_Other01_Cup01_Show01", "AnimatorController", "CAB-16", 136, number * 10 + 25),
+        # Effect prefabs stay only while they mount a kept skill object: by its Avatar or, for a
+        # generic rig without one, by playing its own controller.
+        *(row(name, "Follow", "CAB-14", 120, number * 10 + 21 + offset, follow="Point01", enabled=True, animators=[dict(
+            avatar=dict(cab=cab, path_id=number * 10 + avatar) if avatar else None,
+            controller=dict(cab=cab, path_id=number * 10 + controller) if controller else None, path="Object01",
+            chain=[dict(translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])])])
+          for offset, (name, cab, avatar, controller) in enumerate((
+              ("Eff_Chair01", "cab-10", 15, None), ("Eff_Cup01", "cab-12", 18, None), ("Eff_Monster01", "cab-09", 12, None),
+              ("Eff_Chair01_Generic", "cab-15", None, 24), ("Eff_Cup01_Generic", "cab-16", None, 25)))),
     ]
 
 
@@ -73,8 +86,10 @@ class Client:
         return [self.mutate(row) for file in files for row in rows_for(file.relative_to(self.root).as_posix())]
 
     def read(self, row):
-        assert row["type"] == "AnimatorController" and row["name"] == "Avatar_Type01_Name01"
-        leaf = dict(cab="cab-02", path_id=12, node_index=0, threshold=None)
+        assert row["type"] == "AnimatorController" and row["name"] in ("Avatar_Type01_Name01", "Ani_SkillObj_Name01_Chair01_Show01")
+        # The object's controller keeps a clip whose name does not carry the object's.
+        leaf = (dict(cab="cab-02", path_id=12, node_index=0, threshold=None) if row["name"] == "Avatar_Type01_Name01"
+                else dict(cab="cab-03", path_id=14, node_index=0, threshold=None))
         return dict(states=[dict(name="Idle", motions=[dict(blend_type=0, leaves=[leaf]), None])])
 
 
@@ -145,11 +160,11 @@ def test_gi_index_lifecycle_identity_and_staleness(tmp_path, monkeypatch):
     # Only character data stays: every Avatar, the character bundle's mesh, its renderer,
     # the family controller and the clip it points to.
     assert sorted((row["type"], row["name"]) for row in rows) == [
-        ("AnimationClip", "Ani_SkillObj_Name01_Chair01_Idle01"), ("AnimationClip", "Clip01"),
-        ("AnimatorController", "Avatar_Type01_Name01"),
+        ("AnimationClip", "Ani_SkillObj_Name01_Chair01_Idle01"), ("AnimationClip", "Clip01"), ("AnimationClip", "Clip02"),
+        ("AnimatorController", "Ani_SkillObj_Name01_Chair01_Show01"), ("AnimatorController", "Avatar_Type01_Name01"),
         ("Avatar", "Avatar_Type01_Name01_ModelAvatar"), ("Avatar", "Monster01_ModelAvatar"),
         ("Avatar", "SkillObj_Name01_Chair01_ModelAvatar"), ("Avatar", "SkillObj_Other01_Cup01_ModelAvatar"),
-        ("Mesh", "Chair01_Model"), ("Mesh", "Mesh01"), ("SkinnedMeshRenderer", "")]
+        ("Follow", "Eff_Chair01"), ("Follow", "Eff_Chair01_Generic"), ("Mesh", "Chair01_Model"), ("Mesh", "Mesh01"), ("SkinnedMeshRenderer", "")]
     (renderer,) = [row for row in rows if row["type"] == "SkinnedMeshRenderer"]
     assert "materials" not in renderer
     assert renderer["renderer"] == dict(path="Part01", mesh=dict(cab="cab-01", path_id=13),
@@ -177,6 +192,12 @@ def test_gi_index_lifecycle_identity_and_staleness(tmp_path, monkeypatch):
     assert file.read_bytes() == before
     with pytest.raises(ValueError, match="incomplete or ambiguous"):
         gi_index.build(Client(folder, lambda row: {**row, "type": "Light"} if row["type"] == "Mesh" else row), folder, lambda *_: None, cancel)
+    assert file.read_bytes() == before
+    # A kept effect prefab must carry a bounded, finite placement.
+    with pytest.raises(ValueError, match="incomplete or ambiguous"):
+        gi_index.build(Client(folder, lambda row: {**row, "animators": [dict(row["animators"][0], chain=[dict(
+            translation=[float("nan"), 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])])]} if row["type"] == "Follow" else row),
+            folder, lambda *_: None, cancel)
     assert file.read_bytes() == before
     # Changing a block, then adding a Persistent override of it, each makes the cache stale.
     block.write_bytes(b"updated block")
@@ -1030,3 +1051,191 @@ def test_gi_skill_objects_pair_by_name_and_keep_their_own_scale_and_placement(tm
     assert served["tracks"]["layout"] == "prop-track-v2"
     assert published[-1] == deltas.tobytes()
     sessions.clear()
+
+
+def object_state(name, cab, path_id, transitions):
+    """A plain object controller state playing one clip."""
+    return dict(name=name, speed=1.0, mirror=False, mirror_param=0, loop=False, transitions=transitions,
+                motions=[dict(blend_type=0, leaves=[dict(cab=cab, path_id=path_id, node_index=0, threshold=None)])])
+
+
+def follow_row(name, point, avatar_row, path_id, translation=(0, 0, 0), controller_row=None):
+    """An effect prefab whose root Follow component names ``point`` and holds the object's Animator
+    (with the object's Avatar, or with none but playing ``controller_row``)."""
+    def pointer(row):
+        return dict(cab=row["cab"].lower(), path_id=row["path_id"]) if row else None
+    return dict(name=name, type="Follow", block=GI_OTHER_BLOCK, cab="CAB-FX", offset=900, file_ordinal=0, path_id=path_id,
+                follow=point, enabled=True, animators=[dict(
+                    avatar=pointer(avatar_row), controller=pointer(controller_row), path="Object01_Model",
+                    chain=[dict(translation=list(translation), rotation=[0, 0, 0, 1], scale=[1, 1, 1])])])
+
+
+def test_gi_skill_objects_mount_on_the_point_their_effect_prefab_follows(tmp_path):
+    import zlib
+
+    from app.assets.game_extract.pipeline import rest_worlds
+
+    root, _asset, record, rows, client = animated_fixture(tmp_path)
+    next(row for row in rows if row["path_id"] == 20)["name"] = "Ani_Avatar_Type01_Name01_Idle01"
+    # The body clip also animates a character point outside the Avatar (Root/Point01), rising 3 units.
+    point = zlib.crc32(b"Root/Point01")
+    body = client.documents[20]
+    body["bindings"] += [dict(path=point, attribute=attribute, type="Transform", custom=0, pointer=0) for attribute in (1, 2)]
+    body["acl_count"] += 7
+    body["values"] = [body["values"][0] + [0, 0, 0, 0, 0, 0, 1], body["values"][1] + [0, 3, 0, 0, 0, 0, 1]]
+    still = [("Transform", 0, 501, 1), *MOTION]
+    resting = [[0, 1, 0, *STILL]] * 2
+    avatars = {}
+    for number, thing in enumerate(("Plate01", "Cup01", "Bot01", "Lamp01")):
+        path_id = 400 + number * 20
+        add_skill_object(rows, client, thing, path_id, {"Idle01": clip(thing, 0.0, 1.0, still, resting)})
+        client.documents[path_id + 1]["vertices"] = [0, 1, 0, 1 + number, 1, 0, 0, 2, 0]
+        avatars[thing] = next(row for row in rows if row["path_id"] == path_id)
+        # Each object Avatar has its own serialized file, so its pointer resolves unambiguously.
+        avatars[thing]["cab"] = f"CAB-{thing}"
+    rows += [
+        # The prefab named for the clip wins over the generic one: it follows a character bone,
+        # which the streamer layer moves 2 units along x (its rest scale is not followed).
+        follow_row("Eff_Avatar_Type01_Name01_Plate01", "", avatars["Plate01"], 901),
+        follow_row("Eff_Avatar_Type01_Name01_Idle_01", "Joint01", avatars["Plate01"], 902, translation=(0, 0, 1)),
+        # A point outside the Avatar follows the clip's own Root/<point> track.
+        follow_row("Eff_Avatar_Type01_Name01_Cup01", "Point01", avatars["Cup01"], 903),
+        # Disagreeing prefabs named for other clips decide nothing.
+        follow_row("Eff_Avatar_Type01_Name01_Attack01_Bot01", "", avatars["Bot01"], 904),
+        follow_row("Eff_Avatar_Type01_Name01_Skill01_Bot01_SkillObj", "Joint01", avatars["Bot01"], 905),
+        # A point the paired clip never animates places nothing.
+        follow_row("Eff_Avatar_Type01_Name01_Lamp01", "Point02", avatars["Lamp01"], 906)]
+    output = tmp_path / "output"
+    report, _ = gi_pipeline.build(client, root, record, output, None, lambda *_: None, threading.Event(), rows)
+    assert "skill_object_error" not in report and "prop_error" not in report
+    assert sorted(item["name"] for item in report["props"]) == ["Cup01_Model", "Plate01_Model"]
+    assert {(item["name"], item["source"]): item["reason"] for item in report["skipped_props"]} == {
+        ("Bot01", "Ani_SkillObj_Name01_Bot01_Idle01"):
+            "The object's effect prefabs place it differently and none is named for this clip.",
+        ("Lamp01", "Ani_SkillObj_Name01_Lamp01_Idle01"):
+            "The paired character clip does not animate the point the effect prefab follows."}
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    rig = json.loads((output / "Rig.json").read_text())
+    anchor = rest_worlds(rig["bones"], affine=True)[0]
+    [idle] = [entry["id"] for entry in manifest["clips"] if entry["name"] == "Idle"]
+    for name, first, last in (("Plate01_Model", (0, 0, 1), (2, 0, 1)), ("Cup01_Model", (0, 0, 0), (0, 3, 0))):
+        [entry] = [prop for prop in manifest["props"] if prop["name"] == name]
+        assert set(entry["tracks"]) == {idle}
+        track = entry["tracks"][idle]
+        deltas = np.frombuffer((output / "Animation" / track["file"]).read_bytes(), "<f4").reshape(track["frame_count"], 2, 4 * 3)
+        for frame, offset in ((0, first), (-1, last)):
+            moved = np.eye(4)
+            moved[:3, 3] = offset
+            expected = anchor @ moved @ np.linalg.inv(anchor)
+            # Both object bones move rigidly with the mount: no scale from the point's rest.
+            np.testing.assert_allclose(deltas[frame].reshape(2, 3, 4), np.broadcast_to(expected[:3], (2, 3, 4)), atol=1e-5)
+
+
+def test_gi_skill_object_runs_chain_their_own_controller_states_with_crossfades(tmp_path):
+    root, _asset, record, rows, client = animated_fixture(tmp_path)
+    next(row for row in rows if row["path_id"] == 20)["name"] = "Ani_Avatar_Type01_Name01_Idle01"
+    moved = [("Transform", 0, 501, 1), *MOTION]
+    # Two parts whose names pair with no character clip: 0.4 s holding x=1, then 0.6 s at x=2.
+    add_skill_object(rows, client, "Fan01", 500, {"Part01": clip("Part01", 0.0, 0.4, moved, [[1, 1, 0, *STILL]] * 2),
+                                                  "Part02": clip("Part02", 0.0, 0.6, moved, [[2, 1, 0, *STILL]] * 2)})
+    avatar = next(row for row in rows if row["path_id"] == 500)
+    avatar["cab"] = "CAB-Fan01"
+    # One-state runs: a state that starts with the character clip's action word names it
+    # (Idle for Idle01); a bare phase word does not, whatever the length.
+    add_skill_object(rows, client, "Hat01", 520, {"Part03": clip("Part03", 0.0, 1.0, moved, [[3, 1, 0, *STILL]] * 2)})
+    add_skill_object(rows, client, "Cap01", 540, {"Part04": clip("Part04", 0.0, 1.0, moved, [[4, 1, 0, *STILL]] * 2)})
+    client.documents[521]["vertices"] = [0, 1, 0, 3, 1, 0, 0, 2, 0]
+    # A controller named for the clip whose only state and clip are not ("Take 001"), its clip
+    # ending one 60 Hz frame before the character's.
+    add_skill_object(rows, client, "Lid01", 560, {"Take01": clip("Take01", 0.0, 59 / 60, moved, [[5, 1, 0, *STILL]] * 2)})
+    client.documents[561]["vertices"] = [0, 1, 0, 5, 1, 0, 0, 2, 0]
+    for row in rows:
+        if row["name"].startswith(("Ani_SkillObj_Name01_Fan01_", "Ani_SkillObj_Name01_Hat01_", "Ani_SkillObj_Name01_Cap01_",
+                                   "Ani_SkillObj_Name01_Lid01_")):
+            row["cab"] = "CAB-FanClips"
+        elif row["name"] in ("SkillObj_Name01_Hat01_ModelAvatar", "SkillObj_Name01_Cap01_ModelAvatar", "SkillObj_Name01_Lid01_ModelAvatar"):
+            row["cab"] = "CAB-" + row["name"]
+
+    def state(name, path_id, transitions):
+        return object_state(name, "cab-fanclips", path_id, transitions)
+    client.documents[601] = dict(name="Ani_SkillObj_Name01_Hat01", states=[state("Idle", 523, [])])
+    client.documents[602] = dict(name="Ani_SkillObj_Name01_Cap01", states=[state("01", 543, [])])
+    client.documents[603] = dict(name="Ani_SkillObj_Name01_Lid01_Idle01", default_state=0, states=[state("Take 001", 563, [])])
+    # The first state hands over to the second at its end with a 0.2 s crossfade, needing no input.
+    client.documents[600] = dict(name="Ani_SkillObj_Name01_Fan01_Show01", states=[
+        state("Idle01", 503, [dict(dest=1, duration=0.2, offset=0.0, exit_time=1.0, has_exit_time=True, fixed_duration=True,
+                                   conditions=[])]),
+        state("Idle01_02", 504, [])])
+    rows += [{**gi_row("Ani_SkillObj_Name01_Fan01_Show01", "AnimatorController", 600, block=GI_OTHER_BLOCK), "cab": "CAB-FanControl"},
+             {**gi_row("Ani_SkillObj_Name01_Hat01", "AnimatorController", 601, block=GI_OTHER_BLOCK), "cab": "CAB-HatControl"},
+             cap_control := {**gi_row("Ani_SkillObj_Name01_Cap01", "AnimatorController", 602, block=GI_OTHER_BLOCK),
+                             "cab": "CAB-CapControl"},
+             # An Avatar-less prefab following a named point is known by the controller it plays.
+             follow_row("Eff_Avatar_Type01_Name01_Cap01", "Point01", None, 911, controller_row=cap_control),
+             lid_control := {**gi_row("Ani_SkillObj_Name01_Lid01_Idle01", "AnimatorController", 603, block=GI_OTHER_BLOCK),
+                             "cab": "CAB-LidControl"},
+             # Prefabs named for other clips disagree; the one whose Avatar-less Animator plays the
+             # run's own controller decides.
+             follow_row("Eff_Avatar_Type01_Name01_Attack01_Lid01", "", next(row for row in rows if row["path_id"] == 560), 909),
+             follow_row("Eff_Avatar_Type01_Name01_Other01", "", None, 910, translation=(0, 0, 2), controller_row=lid_control),
+             # A prefab label that begins the run's name beats the generic prefab.
+             follow_row("Eff_Avatar_Type01_Name01_Fan01", "", avatar, 907),
+             follow_row("Eff_Avatar_Type01_Name01_Idle_Fan01", "", avatar, 908, translation=(0, 0, 1))]
+    output = tmp_path / "output"
+    report, _ = gi_pipeline.build(client, root, record, output, None, lambda *_: None, threading.Event(), rows)
+    assert "skill_object_error" not in report and "prop_error" not in report
+    assert [item["name"] for item in report["props"]] == ["Fan01_Model", "Hat01_Model", "Lid01_Model"]
+    # The chained clips pair only through their runs; the bare phase word pairs nothing.
+    assert [(item["name"], item["reason"]) for item in report["skipped_props"]] == [
+        ("Cap01", "No single character clip has this clip's name.")]
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    [idle] = [entry["id"] for entry in manifest["clips"] if entry["name"] == "Idle"]
+    lid = next(prop for prop in manifest["props"] if prop["name"] == "Lid01_Model")["tracks"][idle]
+    lid_deltas = np.frombuffer((output / "Animation" / lid["file"]).read_bytes(), "<f4").reshape(lid["frame_count"], 2, 3, 4)
+    np.testing.assert_allclose(lid_deltas[[0, -1], 1, :, 3], [[5, 0, 2]] * 2, atol=1e-5)
+    track = next(prop for prop in manifest["props"] if prop["name"] == "Fan01_Model")["tracks"][idle]
+    deltas = np.frombuffer((output / "Animation" / track["file"]).read_bytes(), "<f4").reshape(track["frame_count"], 2, 3, 4)
+    # Before the handover, halfway through the crossfade, and after it (60 Hz frames over 1 s).
+    for frame, x in ((12, 1.0), (30, 1.5), (48, 2.0)):
+        np.testing.assert_allclose(deltas[frame, 1, :, 3], [x, 0, 1], atol=1e-5)
+
+def test_gi_skill_object_run_spans_the_character_sequence_it_plays_through(tmp_path):
+    root, _asset, record, rows, client = animated_fixture(tmp_path)
+    next(row for row in rows if row["path_id"] == 20)["name"] = "Ani_Avatar_Type01_Name01_Idle01"
+    # The character plays Idle until 0.5 s, then Combo for 1 s (one derived sequence).
+    controller = client.documents[30]
+    controller["states"].append(dict(controller["states"][1], name="Combo", motions=[controller["states"][1]["motions"][0]]))
+    controller["states"][1]["transitions"] = [sequence_edge(7, exit_time=0.5, has_exit=True)]
+    controller["states"][7]["transitions"] = [sequence_edge(1, exit_time=1.0, has_exit=True)]
+    controller.update(any_state=[sequence_edge(1, ("Input01", 1, 0))], selectors=[])
+    moved = [("Transform", 0, 501, 1), *MOTION]
+    # The kite's own run lasts both steps: 0.5 s at x=1, then 1 s moving from x=2 to x=3.
+    add_skill_object(rows, client, "Kite01", 620, {"Part01": clip("Part01", 0.0, 0.5, moved, [[1, 1, 0, *STILL]] * 2),
+                                                   "Part02": clip("Part02", 0.0, 1.0, moved, [[2, 1, 0, *STILL], [3, 1, 0, *STILL]])})
+    for row in rows:
+        if row["name"].startswith("Ani_SkillObj_Name01_Kite01_"):
+            row["cab"] = "CAB-KiteClips"
+
+    def state(name, path_id, transitions):
+        return object_state(name, "cab-kiteclips", path_id, transitions)
+    client.documents[640] = dict(name="Ani_SkillObj_Name01_Kite01", states=[
+        state("Idle01_Up", 623, [dict(dest=1, duration=0.0, offset=0.0, exit_time=1.0, has_exit_time=True, fixed_duration=True,
+                                      conditions=[])]),
+        state("Idle01_Down", 624, [])])
+    rows.append({**gi_row("Ani_SkillObj_Name01_Kite01", "AnimatorController", 640, block=GI_OTHER_BLOCK), "cab": "CAB-KiteControl"})
+    output = tmp_path / "output"
+    report, _ = gi_pipeline.build(client, root, record, output, None, lambda *_: None, threading.Event(), rows)
+    assert "skill_object_error" not in report and "prop_error" not in report and report["sequences"] == 1
+    # No single clip lasts the run, but its handover and end fall on the sequence's step ends.
+    assert not [item for item in report["skipped_props"] if item["name"] == "Kite01"]
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    [entry] = manifest["props"]
+    idle, combo = (item["id"] for item in report["animations"])
+    assert set(entry["tracks"]) == {idle, combo}
+
+    def x(key, frame):
+        track = entry["tracks"][key]
+        deltas = np.frombuffer((output / "Animation" / track["file"]).read_bytes(), "<f4").reshape(track["frame_count"], 2, 3, 4)
+        return deltas[frame, 1, 0, 3]
+    # Idle shows the run from its start, Combo from the 0.5 s handover on.
+    np.testing.assert_allclose([x(idle, 0), x(idle, 29), x(combo, 0), x(combo, 30), x(combo, -1)], [1, 1, 2, 2.5, 3], atol=1e-5)
