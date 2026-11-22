@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from app.assets import index
-from app.assets.game_extract import gi_index, gi_pipeline, gi_runtime, zzz_index, zzz_native
+from app.assets.game_extract import gi_index, gi_pipeline, gi_props, gi_runtime, zzz_index, zzz_native, zzz_prop_textures
 from app.settings import paths
 
 
@@ -25,18 +25,43 @@ def write_block(folder, relative, data=b"block"):
 
 def rows_for(block):
     number = int(block.rsplit("/", 1)[-1].split(".", 1)[0])
+
+    def row(name, kind, cab, offset, path_id, **extra):
+        return dict(name=name, type=kind, block=block, cab=cab, offset=offset, file_ordinal=0, path_id=path_id, **extra)
+
     return [
-        dict(name="Controller01", type="AnimatorController", block=block, cab="CAB-01", offset=0, file_ordinal=0, path_id=number * 10 + 1),
-        dict(name="Clip01", type="AnimationClip", block=block, cab="CAB-01", offset=8, file_ordinal=0, path_id=number * 10 + 2),
-        dict(name="Mesh01", type="Mesh", block=block, cab="CAB-01", offset=16, file_ordinal=0, path_id=number * 10 + 3, shape=[[3, 3]]),
-        dict(name="Avatar01", type="Avatar", block=block, cab="CAB-01", offset=24, file_ordinal=0, path_id=number * 10 + 4),
+        row("Avatar_Type01_Name01", "AnimatorController", "CAB-04", 0, number * 10 + 1),
+        row("Clip01", "AnimationClip", "CAB-02", 8, number * 10 + 2),
+        row("Mesh01", "Mesh", "CAB-01", 16, number * 10 + 3, shape=[[3, 3]]),
+        row("Avatar_Type01_Name01_ModelAvatar", "Avatar", "CAB-01", 16, number * 10 + 4),
         # Facial routes keep only path and pointers; null-mesh renderers are not indexed.
-        dict(name="", type="SkinnedMeshRenderer", block=block, cab="CAB-01", offset=32, file_ordinal=0, path_id=number * 10 + 5,
-             renderer=dict(path="Part01", mesh=dict(cab="cab-01", path_id=number * 10 + 3),
-                           avatar=dict(cab="cab-01", path_id=number * 10 + 4), bone_paths=["Root"], blend_shape_count=2)),
-        dict(name="", type="SkinnedMeshRenderer", block=block, cab="CAB-01", offset=32, file_ordinal=0, path_id=number * 10 + 6,
-             renderer=dict(path="Part02", mesh=dict(cab="cab-01", path_id=0),
-                           avatar=dict(cab="cab-01", path_id=number * 10 + 4), bone_paths=["Root"], blend_shape_count=0)),
+        row("", "SkinnedMeshRenderer", "CAB-01", 16, number * 10 + 5, materials=["CAB-05"],
+            renderer=dict(path="Part01", mesh=dict(cab="cab-01", path_id=number * 10 + 3),
+                          avatar=dict(cab="cab-01", path_id=number * 10 + 4), bone_paths=["Root"], blend_shape_count=2)),
+        row("", "SkinnedMeshRenderer", "CAB-01", 16, number * 10 + 6, materials=["CAB-08"],
+            renderer=dict(path="Part02", mesh=dict(cab="cab-01", path_id=0),
+                          avatar=dict(cab="cab-01", path_id=number * 10 + 4), bone_paths=["Root"], blend_shape_count=0)),
+        # Material and texture files are kept only where character renderers lead.
+        row("", "File", "CAB-05", 40, 0), row("", "File", "CAB-06", 48, 0), row("", "File", "CAB-07", 56, 0),
+        row("", "File", "CAB-08", 64, 0),
+        row("", "Material", "CAB-05", 40, number * 10 + 7, textures=["CAB-06"]),
+        row("", "Material", "CAB-05", 40, number * 10 + 8, textures=None),
+        row("", "Material", "CAB-07", 56, number * 10 + 9, textures=["CAB-07"]),
+        # World meshes, their renderers, other controllers and unreferenced clips are dropped.
+        row("Rock01", "Mesh", "CAB-09", 72, number * 10 + 10, shape=[[3, 3]]),
+        row("", "SkinnedMeshRenderer", "CAB-09", 72, number * 10 + 11, materials=["CAB-07"],
+            renderer=dict(path="Rock", mesh=dict(cab="cab-09", path_id=number * 10 + 10),
+                          avatar=dict(cab="cab-09", path_id=number * 10 + 12), bone_paths=["Root"], blend_shape_count=0)),
+        row("Monster01_ModelAvatar", "Avatar", "CAB-09", 72, number * 10 + 12),
+        row("Monster01", "AnimatorController", "CAB-09", 72, number * 10 + 13),
+        row("Clip02", "AnimationClip", "CAB-03", 80, number * 10 + 14),
+        # Skill objects named for the family token stay for the name-paired preview; others do not.
+        row("SkillObj_Name01_Chair01_ModelAvatar", "Avatar", "CAB-10", 88, number * 10 + 15),
+        row("Chair01_Model", "Mesh", "CAB-10", 88, number * 10 + 16, shape=[[3, 3]]),
+        row("Ani_SkillObj_Name01_Chair01_Idle01", "AnimationClip", "CAB-11", 96, number * 10 + 17),
+        row("SkillObj_Other01_Cup01_ModelAvatar", "Avatar", "CAB-12", 104, number * 10 + 18),
+        row("Cup01_Model", "Mesh", "CAB-12", 104, number * 10 + 19, shape=[[3, 3]]),
+        row("Ani_SkillObj_Other01_Cup01_Idle01", "AnimationClip", "CAB-13", 112, number * 10 + 20),
     ]
 
 
@@ -46,6 +71,11 @@ class Client:
 
     def scan_many(self, files):
         return [self.mutate(row) for file in files for row in rows_for(file.relative_to(self.root).as_posix())]
+
+    def read(self, row):
+        assert row["type"] == "AnimatorController" and row["name"] == "Avatar_Type01_Name01"
+        leaf = dict(cab="cab-02", path_id=12, node_index=0, threshold=None)
+        return dict(states=[dict(name="Idle", motions=[dict(blend_type=0, leaves=[leaf]), None])])
 
 
 def test_gi_folder_validation_and_effective_block_set(tmp_path):
@@ -111,11 +141,23 @@ def test_gi_index_lifecycle_identity_and_staleness(tmp_path, monkeypatch):
     client = Client(folder)
     assert gi_index.status(folder)["state"] == "missing"
     rows, count = gi_index.build(client, folder, lambda *_: None, cancel)
-    assert count == 1 and gi_index.status(folder)["state"] == "ready"
-    assert {row["type"] for row in rows} == set(gi_index.TYPES)
-    (renderer,) = [row["renderer"] for row in rows if row["type"] == "SkinnedMeshRenderer"]
-    assert renderer == dict(path="Part01", mesh=dict(cab="cab-01", path_id=13), avatar=dict(cab="cab-01", path_id=14),
-                            blend_shape_count=2)
+    assert count == 2 and gi_index.status(folder)["state"] == "ready"
+    # Only character data stays: every Avatar, the character bundle's mesh, its renderer,
+    # the family controller and the clip it points to.
+    assert sorted((row["type"], row["name"]) for row in rows) == [
+        ("AnimationClip", "Ani_SkillObj_Name01_Chair01_Idle01"), ("AnimationClip", "Clip01"),
+        ("AnimatorController", "Avatar_Type01_Name01"),
+        ("Avatar", "Avatar_Type01_Name01_ModelAvatar"), ("Avatar", "Monster01_ModelAvatar"),
+        ("Avatar", "SkillObj_Name01_Chair01_ModelAvatar"), ("Avatar", "SkillObj_Other01_Cup01_ModelAvatar"),
+        ("Mesh", "Chair01_Model"), ("Mesh", "Mesh01"), ("SkinnedMeshRenderer", "")]
+    (renderer,) = [row for row in rows if row["type"] == "SkinnedMeshRenderer"]
+    assert "materials" not in renderer
+    assert renderer["renderer"] == dict(path="Part01", mesh=dict(cab="cab-01", path_id=13),
+                                        avatar=dict(cab="cab-01", path_id=14), blend_shape_count=2)
+    # The renderer's material file and that file's texture files; unreadable materials add nothing.
+    assert {cab: [copy[1:] for copy in copies] for cab, copies in rows.files.items()} == {
+        "cab-05": [(40, 0, "CAB-05")], "cab-06": [(48, 0, "CAB-06")]}
+    assert gi_index.read(folder)[1].files == rows.files
     with patch.object(client, "scan_many", side_effect=AssertionError("A ready index must be reused.")):
         assert gi_index.ensure(client, folder, lambda *_: None, cancel) == rows
     # A schema upgrade needs one completed rebuild; the replacement client reuses that result.
@@ -131,7 +173,7 @@ def test_gi_index_lifecycle_identity_and_staleness(tmp_path, monkeypatch):
     # Failed builds must leave the previously published cache untouched.
     before = file.read_bytes()
     with pytest.raises(ValueError, match="incomplete"):
-        gi_index.build(Client(folder, lambda row: {**row, "offset": -1} if row["type"] == "Mesh" else row), folder, lambda *_: None, cancel)
+        gi_index.build(Client(folder, lambda row: {**row, "offset": -1} if row["type"] == "Avatar" else row), folder, lambda *_: None, cancel)
     assert file.read_bytes() == before
     with pytest.raises(ValueError, match="incomplete or ambiguous"):
         gi_index.build(Client(folder, lambda row: {**row, "type": "Light"} if row["type"] == "Mesh" else row), folder, lambda *_: None, cancel)
@@ -767,3 +809,192 @@ def test_gi_weight_drift_proves_palettes_only_by_clear_majorities(case, expected
     # Exact proof stays the first choice and never accepts drifting weights on its own.
     if case in ("drifting", "runtime_noise", "unpaired_noise", "too_many_outliers", "beyond_drift"):
         assert zzz_native._weight_palette(part, mesh, mapping) is None
+
+
+def test_gi_build_exports_only_attached_props_every_verified_prefab_draws(tmp_path):
+    import zlib
+
+    root, asset, record, rows, client = animated_fixture(tmp_path)
+    bones = client.documents[1]["bones"]
+    renderer_path = "Root/Prop01"
+    bones.append(dict(path=renderer_path, hash=zlib.crc32(renderer_path.encode()), parent=0,
+                      translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
+    prop = dict(name="Prop01", vertices=[0, 0, 1, 1, 0, 1, 0, 1, 1], normals=[0, 0, 1] * 3, uv=[0, 0, 1, 0, 0, 1],
+                indices=[0, 1, 2], weights=[[1, 0, 0, 0]] * 3, bone_indices=[[0, 0, 0, 0]] * 3,
+                bone_hashes=[ACCESSORY], bind_poses=[np.eye(4).ravel().tolist()],
+                sections=[dict(first=0, count=3, vertex_first=0, vertex_count=3)])
+    # Skill objects (hidden by a prefab), unrouted and unprovable meshes are reported; a mesh
+    # driven by a captured bone is not a prop, and names never decide.
+    # A two-material prop (sections sharing an edge) becomes one prop per material section.
+    split = {**deepcopy(prop), "name": "Prop02", "vertices": [0, 0, 2, 1, 0, 2, 0, 1, 2, 1, 1, 2], "normals": [0, 0, 1] * 4,
+             "uv": [0, 0, 1, 0, 0, 1, 1, 1], "indices": [0, 1, 2, 1, 3, 2], "weights": [[1, 0, 0, 0]] * 4,
+             "bone_indices": [[0, 0, 0, 0]] * 4, "sections": [dict(first=0, count=3, vertex_first=0, vertex_count=3),
+                                                             dict(first=3, count=3, vertex_first=1, vertex_count=3)]}
+    meshes = {50: prop, 51: {**deepcopy(prop), "name": "SkillObj01"}, 52: {**deepcopy(prop), "name": "Unrouted01"},
+              53: {**deepcopy(prop), "name": "Unknown01"}, 54: {**deepcopy(prop), "name": "Driven01", "bone_hashes": [HAIR]},
+              55: split}
+    other_avatar = gi_row("Avatar_Other01", "Avatar", 60, block=GI_OTHER_BLOCK)
+    client.documents[60] = deepcopy(client.documents[1])
+    rows.append(other_avatar)
+    for path_id, mesh in meshes.items():
+        client.documents[path_id] = mesh
+        rows.append(gi_row(mesh["name"], "Mesh", path_id, shape=[[3, 3]]))
+
+    # The captured body diffuse (found by the GIMI component naming) is a BC1 block; the body
+    # material's _MainTex holds the same bytes, which proves that slot's role, so the prop's
+    # own _MainTex becomes its diffuse. _OtherTex matches nothing and stays unused.
+    body_block, prop_block, other_block, second_block = bytes(range(8)), bytes(range(8, 16)), bytes(8), bytes(range(16, 24))
+    metadata = json.loads((asset / "hash.json").read_text())
+    metadata[0]["texture_hashes"] = [[["Diffuse", ".dds", "33333333"]]]
+    (asset / "hash.json").write_text(json.dumps(metadata))
+    (asset / "BodyADiffuse.dds").write_bytes(zzz_prop_textures.unity_dds.encode(4, 4, 10, body_block, srgb=True))
+    record = index.build_index("GIMI", root)["assets"][0]
+    textures = {80: body_block, 81: prop_block, 82: other_block, 83: second_block}
+
+    def material(texture):
+        return dict(pointer=dict(cab="CAB-01", path_id=90 + texture, file_ordinal=0, offset=0), name="Material01",
+                    textures=[dict(name="_MainTex", texture=dict(cab="cab-textures", path_id=texture)),
+                              dict(name="_OtherTex", texture=dict(cab="cab-textures", path_id=82))])
+
+    def renderer(path_id, mesh, visible, avatar=1, texture=(81,), path=renderer_path):
+        client.documents[path_id] = dict(materials=[material(number) for number in texture], visible=visible)
+        rows.append({**gi_row("", "SkinnedMeshRenderer", path_id, block=GI_OTHER_BLOCK), "renderer": dict(
+            path=path, mesh=dict(cab="cab-01", path_id=mesh), avatar=dict(cab="cab-01", path_id=avatar),
+            blend_shape_count=0)})
+
+    read = client.read
+
+    def read_texture(row):
+        if row["cab"] != "CAB-Textures":
+            return read(row)
+        (client.work / "texture-1.bin").write_bytes(textures[row["path_id"]])
+        return dict(width=4, height=4, format=10, file="texture-1.bin")
+    client.read = read_texture
+    # The body's own prefab renderer routes through its explicit mesh pointer.
+    renderer(69, 2, True, texture=(80,), path="")
+    renderer(70, 50, True)
+    renderer(71, 50, True)
+    # A prefab of a different Avatar does not decide this character's props.
+    renderer(72, 50, False, avatar=60)
+    renderer(73, 51, True)
+    renderer(74, 51, False)
+    renderer(75, 53, None)
+    renderer(76, 54, True)
+    renderer(77, 55, True, texture=(81, 83))
+    output = tmp_path / "output"
+    files = {"cab-textures": [(GI_OTHER_BLOCK, 4096, 0, "CAB-Textures")]}
+    report, _ = gi_pipeline.build(client, root, record, output, None, lambda *_: None, threading.Event(),
+                                  zzz_index.IndexRows(rows, files))
+    assert [(item["name"], item["textures"], item.get("texture_error")) for item in report["props"]] == [
+        ("Prop01", ["diffuse"], None), ("Prop02 1", ["diffuse"], None), ("Prop02 2", ["diffuse"], None)]
+    assert "prop_error" not in report
+    reasons = {item["name"]: item["reason"] for item in report["skipped_props"]}
+    assert set(reasons) == {"SkillObj01", "Unrouted01", "Unknown01"}
+    assert "hides the prop" in reasons["SkillObj01"] and "No prefab" in reasons["Unrouted01"]
+    assert "could not be proven" in reasons["Unknown01"]
+    entry, first, second = json.loads((output / "Animation/manifest.json").read_text())["props"]
+    assert entry["name"] == "Prop01" and "texture_error" not in entry
+    # The prop's own texture, wrapped as a single-mip sRGB BC1 DDS.
+    diffuse = (output / "Animation" / entry["textures"]["diffuse"]["file"]).read_bytes()
+    assert set(entry["textures"]) == {"diffuse"} and diffuse[-8:] == prop_block
+    records = np.frombuffer((output / "Animation" / entry["file"]).read_bytes()[:3 * 32], dtype="<f4").reshape(3, 8)
+    np.testing.assert_allclose(records[:, :3], np.reshape(prop["vertices"], (3, 3)), atol=1e-6)
+    assert client.reads[("SkinnedMeshRenderer", 72)] == 0
+    # Each section keeps only its own vertices and its own material's texture.
+    for part, block, positions, triangles in ((first, prop_block, [[0, 0, 2], [1, 0, 2], [0, 1, 2]], [0, 1, 2]),
+                                              (second, second_block, [[1, 0, 2], [0, 1, 2], [1, 1, 2]], [0, 2, 1])):
+        data = (output / "Animation" / part["file"]).read_bytes()
+        assert (part["vertex_count"], part["index_count"], "section" in part) == (3, 3, False)
+        np.testing.assert_allclose(np.frombuffer(data[:96], dtype="<f4").reshape(3, 8)[:, :3], positions, atol=1e-6)
+        assert np.frombuffer(data[168:], dtype="<u4").tolist() == triangles
+        assert (output / "Animation" / part["textures"]["diffuse"]["file"]).read_bytes()[-8:] == block
+
+
+def test_gi_prop_failures_leave_clips_unaffected(tmp_path):
+    root, asset, record, rows, client = animated_fixture(tmp_path)
+    with patch.object(gi_props, "extract", side_effect=ValueError("Synthetic prop failure.")):
+        report, _ = gi_pipeline.build(client, root, record, tmp_path / "output", None, lambda *_: None,
+                                      threading.Event(), rows)
+    assert report["imported"] == 1 and report["props"] == [] and report["prop_error"] == "Synthetic prop failure."
+    assert "props" not in json.loads((tmp_path / "output/Animation/manifest.json").read_text())
+
+
+MOTION = [("Animator", 8, 0, attribute) for attribute in range(7)]
+STILL = [0, 0, 0, 0, 0, 0, 1]
+
+
+def add_skill_object(rows, client, thing, path_id, clips):
+    """A family skill object (own Avatar, skinned mesh) and its clips, in another bundle."""
+    avatar = dict(name=f"SkillObj_Name01_{thing}_ModelAvatar", bones=[
+        dict(path="", hash=0, parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
+        dict(path="Bone01", hash=501, parent=0, translation=[0, 1, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])])
+    bind = np.eye(4)
+    bind[1, 3] = -1
+    mesh = dict(name=f"{thing}_Model", vertices=[0, 1, 0, 1, 1, 0, 0, 2, 0], normals=[0, 0, 1] * 3, uv=[0, 0, 1, 0, 0, 1],
+                indices=[0, 1, 2], weights=[[1, 0, 0, 0]] * 3, bone_indices=[[0, 0, 0, 0]] * 3, bone_hashes=[501],
+                bind_poses=[bind.ravel().tolist()], sections=[dict(first=0, count=3, vertex_first=0, vertex_count=3)])
+    offset = path_id * 8
+    rows += [gi_row(avatar["name"], "Avatar", path_id, block=GI_OTHER_BLOCK, offset=offset),
+             gi_row(mesh["name"], "Mesh", path_id + 1, block=GI_OTHER_BLOCK, offset=offset, shape=[[3, 3]]),
+             # Lower-detail copies are never props.
+             gi_row(mesh["name"] + "_LOD1", "Mesh", path_id + 2, block=GI_OTHER_BLOCK, offset=offset, shape=[[3, 3]])]
+    client.documents.update({path_id: avatar, path_id + 1: mesh, path_id + 2: deepcopy(mesh)})
+    for number, (suffix, document) in enumerate(clips.items(), start=path_id + 3):
+        rows.append(gi_row(f"Ani_SkillObj_Name01_{thing}_{suffix}", "AnimationClip", number, block=GI_OTHER_BLOCK))
+        client.documents[number] = document
+
+
+def test_gi_skill_objects_pair_by_name_and_keep_their_own_scale_and_placement(tmp_path, monkeypatch):
+    from app.assets import animations
+    from app.assets.rig import validate_rig
+
+    root, asset, record, rows, client = animated_fixture(tmp_path)
+    # The Idle state's body clip carries the family token, as Genshin names its clips.
+    next(row for row in rows if row["path_id"] == 20)["name"] = "Ani_Avatar_Type01_Name01_Idle01"
+    growing = [("Transform", 0, 501, 1), ("Transform", 0, 501, 3), *MOTION]
+    # The chair grows in from nothing while it slides one unit forward.
+    add_skill_object(rows, client, "Chair01", 200, {
+        "Idle01": clip("Chair01", 0.0, 1.0, growing, [[0, 1, 0, 0, 0, 0, *STILL], [0, 1, 1, 1, 1, 1, *STILL]]),
+        "Other01": clip("Chair02", 0.0, 1.0, growing, [[0, 1, 0, 1, 1, 1, *STILL]] * 2)})
+    # Equal names are not enough: lengths must match, and objects never move by root motion.
+    add_skill_object(rows, client, "Cup01", 220, {
+        "Idle01": clip("Cup01", 0.0, 2.0, growing, [[0, 1, 0, 1, 1, 1, *STILL]] * 2)})
+    add_skill_object(rows, client, "Bot01", 240, {
+        "Idle01": clip("Bot01", 0.0, 1.0, growing, [[0, 1, 0, 1, 1, 1, *STILL], [0, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1]])})
+    output = tmp_path / "output"
+    report, _ = gi_pipeline.build(client, root, record, output, None, lambda *_: None, threading.Event(), rows)
+    assert "skill_object_error" not in report and "prop_error" not in report
+    assert [(item["name"], item.get("texture_error") is not None) for item in report["props"]] == [("Chair01_Model", True)]
+    reasons = {(item["name"], item["source"]): item["reason"] for item in report["skipped_props"]}
+    assert reasons == {
+        ("Chair01", "Ani_SkillObj_Name01_Chair01_Other01"): "No single character clip has this clip's name.",
+        ("Cup01", "Ani_SkillObj_Name01_Cup01_Idle01"): "The paired character clip lasts a different time.",
+        ("Bot01", "Ani_SkillObj_Name01_Bot01_Idle01"): "The object moves by root motion, which its paired clip does not."}
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    [entry] = manifest["props"]
+    [idle] = [clip_entry["id"] for clip_entry in manifest["clips"] if clip_entry["name"] == "Idle"]
+    assert entry["socket"] is None and entry["bone_count"] == 2
+    assert entry["track_layout"] == "prop-track-v2" and set(entry["tracks"]) == {idle}
+    track = entry["tracks"][idle]
+    assert (track["start"], track["end"]) == (0.0, track["duration"])
+    deltas = np.frombuffer((output / "Animation" / track["file"]).read_bytes(), "<f4").reshape(track["frame_count"], 2, 3, 4)
+    # Placed at the character's origin: scaled to nothing at the start, then moved one unit.
+    np.testing.assert_allclose(deltas[0, 1], [[0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0]], atol=1e-6)
+    np.testing.assert_allclose(deltas[-1, 1], [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 1]], atol=1e-6)
+    np.testing.assert_allclose(deltas[:, 0], np.broadcast_to(np.eye(4)[:3], (track["frame_count"], 3, 4)), atol=1e-6)
+    records = np.frombuffer((output / "Animation" / entry["file"]).read_bytes()[:3 * 32], "<f4").reshape(3, 8)
+    np.testing.assert_allclose(records[:, :3], [[0, 1, 0], [1, 1, 0], [0, 2, 0]], atol=1e-6)
+    # Serving keeps the affine track layout.
+    shutil.copytree(output, asset, dirs_exist_ok=True)
+    published = []
+    monkeypatch.setattr("app.assets.animations.server.publish_geometry",
+                        lambda blob, **_: published.append(blob) or f"/geometry/{len(published)}")
+    monkeypatch.setattr("app.assets.animations.server.release_geometry", lambda url: None)
+    sessions = animations.AnimationSessions()
+    rig = validate_rig(json.loads((output / "Rig.json").read_text()))
+    catalog = sessions.catalog(root, record["path"], rig, lambda: True)
+    assert catalog["animation_props"] == [dict(id=entry["id"], name="Chair01_Model")]
+    [served] = sessions.load_props(catalog["animation_session"])["props"]
+    assert served["tracks"]["layout"] == "prop-track-v2"
+    assert published[-1] == deltas.tobytes()
+    sessions.clear()

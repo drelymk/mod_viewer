@@ -25,7 +25,7 @@ from build_game_extract import (
 
 
 COMMIT = "76234e9f6f5a839504f41f9612719529fe2309a5"
-VERSION = "zzz-8-" + COMMIT[:12]
+VERSION = "zzz-9-" + COMMIT[:12]
 PINS["animestudio"] = (
     f"https://codeload.github.com/Escartem/AnimeStudio/zip/{COMMIT}",
     "46c186a273af125bf9ab9a005997809d9ebf6678f3a4f6aa917f989323039023",
@@ -106,6 +106,19 @@ def curate(root):
         avatar,
         "if (isZZZ)\n            {\n                m_UseNextLevelForRootMotionSkeleton",
         "if (isZZZ && readRootMotionFlag)\n            {\n                m_UseNextLevelForRootMotionSkeleton",
+    )
+    # Genshin props are exported only when the prefab draws them by default, which
+    # needs the renderer's serialized enabled flag that the reader otherwise discards.
+    renderer = root / "AnimeStudio/Classes/Renderer.cs"
+    replace(
+        renderer,
+        "        public List<PPtr<Material>> m_Materials;",
+        "        public bool? m_Enabled;\n        public List<PPtr<Material>> m_Materials;",
+    )
+    replace(
+        renderer,
+        "var m_Enabled = reader.ReadBoolean();",
+        "m_Enabled = reader.ReadBoolean();",
     )
     # AssetStudio normally logs parser failures and returns partial data. Jobs must fail closed.
     logger = root / "AnimeStudio/Logger.cs"

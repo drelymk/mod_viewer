@@ -265,6 +265,8 @@ export default {
   'animation.filterAll': 'Todas',
   'animation.filterClips': 'Clips',
   'animation.filterShared': 'Compartidas',
+  'animation.byNameHint': 'Emparejado con los clips del personaje por nombre, no por datos del juego.',
+  'animation.showProps': 'Mostrar accesorios',
   'animation.noMatches': 'No hay animaciones coincidentes',
   'animation.stepCount': '{count} pasos',
   'animation.showControls': 'Mostrar controles de animación',

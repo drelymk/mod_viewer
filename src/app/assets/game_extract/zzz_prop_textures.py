@@ -27,8 +27,10 @@ MAX_COPIES = 4
 class _Reader:
     """Cached native reads; a texture keeps only its top mip, and differing copies resolve to None."""
 
-    def __init__(self, client, index, cancel):
+    def __init__(self, client, index, cancel, route=None):
         self.client, self.index, self.files, self.cancel = client, index, getattr(index, "files", {}), cancel
+        # A game may route renderers itself: route(chosen, mesh, source identity) -> renderer rows.
+        self.route = route
         self.cache, self.reads, self.routes, self.avatars = {}, 0, None, None
 
     def locate(self, owner, pointer):
@@ -124,11 +126,12 @@ def renderers(reader, chosen, mesh):
     return sorted(found, key=zzz_index.identity)
 
 
-def _materials(reader, chosen, mesh):
-    """(locator, description) of every routed renderer's materials for ``mesh``'s sections."""
+def _materials(reader, chosen, mesh, source):
+    """Per routed renderer, the (locator, description) of each of ``mesh``'s section materials."""
     sections = len(mesh.get("sections") or [])
     result = []
-    for row in renderers(reader, chosen, mesh)[:MAX_RENDERERS]:
+    routed = reader.route(chosen, mesh, source) if reader.route else renderers(reader, chosen, mesh)
+    for row in routed[:MAX_RENDERERS]:
         check_cancelled(reader.cancel)
         try:
             entries = reader.client.read(row).get("materials")
@@ -140,8 +143,15 @@ def _materials(reader, chosen, mesh):
             continue
         described = [reader.material(row, entry) for entry in entries[:sections]]
         if all(value is not None for _locator, value in described):
-            result.extend(described)
+            result.append(described)
     return result
+
+
+def dds_payload(raw):
+    """A DDS file's image bytes after its (DX10) header, or None."""
+    if raw[:4] != b"DDS " or len(raw) < 148:
+        return None
+    return raw[148:] if raw[84:88] == b"DX10" else raw[128:]
 
 
 def _captured_payloads(asset, part):
@@ -162,23 +172,25 @@ def _captured_payloads(asset, part):
                 raw = (folder / Path(str(item[3])).name).read_bytes()
             except OSError:
                 continue
-            if raw[:4] == b"DDS " and len(raw) >= 148:
-                payload = raw[148:] if raw[84:88] == b"DX10" else raw[128:]
+            payload = dds_payload(raw)
+            if payload is not None:
                 result[hashlib.sha256(payload).hexdigest()] = CAPTURED_ROLES[item[0]]
     return result
 
 
-def _learn_slots(reader, chosen, captured, asset):
+def _learn_slots(reader, chosen, captured, asset, payloads=_captured_payloads):
     """Material slot -> viewer role, proven byte-exactly on captured body parts."""
     votes = {}
     for number, palette in sorted(chosen["matched"].items()):
-        payloads = {} if "attachment" in palette else _captured_payloads(asset, captured[number])
-        if not payloads:
+        proven = {} if "attachment" in palette else payloads(asset, captured[number])
+        if not proven:
             continue
-        for locator, material in _materials(reader, chosen, chosen["native"][number][0]["mesh"]):
+        native = chosen["native"][number][0]
+        for locator, material in (item for described in _materials(reader, chosen, native["mesh"],
+                                                                     zzz_index.identity(native["row"])) for item in described):
             for slot in material["textures"]:
                 texture = reader.texture(locator, slot.get("texture")) if isinstance(slot, dict) else None
-                role = payloads.get(hashlib.sha256(texture["data"]).hexdigest()) if texture else None
+                role = proven.get(hashlib.sha256(texture["data"]).hexdigest()) if texture else None
                 if role and isinstance(slot.get("name"), str):
                     votes.setdefault(slot["name"], set()).add(role)
     slots = {slot: next(iter(roles)) for slot, roles in votes.items() if len(roles) == 1}
@@ -187,14 +199,17 @@ def _learn_slots(reader, chosen, captured, asset):
     return {slot: role for slot, role in slots.items() if claimed.count(role) == 1}
 
 
-def _prop_textures(reader, chosen, mesh, slots, library):
-    """Write the prop's learned-role textures as DDS files; returns ({role: entry}, reason)."""
+def _prop_textures(reader, chosen, mesh, source, slots, library, section):
+    """Write the prop's learned-role textures as DDS files; returns ({role: entry}, reason).
+
+    A prop split from one ``section`` of a multi-material mesh uses that section's material.
+    """
     if not slots:
         return {}, "No material slot could be proven against the captured textures."
-    # A multi-material prop is drawn as one mesh, so only a single material is supported.
-    if len(mesh.get("sections") or []) != 1:
+    # The viewer draws a prop with one material; an unsplit multi-material mesh has several.
+    if section is None and len(mesh.get("sections") or []) != 1:
         return {}, "The prop uses several materials."
-    materials = _materials(reader, chosen, mesh)
+    materials = [described[section or 0] for described in _materials(reader, chosen, mesh, source)]
     if not materials:
         return {}, "No renderer material could be proven for the prop."
     result = {}
@@ -219,16 +234,21 @@ def _prop_textures(reader, chosen, mesh, slots, library):
     return result, None if result else "The prop materials have no proven textures."
 
 
-def attach(entries, meshes, client, chosen, index, library, cancel, captured, asset):
-    """Give each written prop entry its proven ``textures``, or a ``texture_error`` saying why not."""
-    reader = _Reader(client, index, cancel)
+def attach(entries, meshes, client, chosen, index, library, cancel, captured, asset, *, route=None,
+           payloads=_captured_payloads):
+    """Give each written prop entry its proven ``textures``, or a ``texture_error`` saying why not.
+
+    ``payloads(asset, part)`` maps a captured part's texture digests to viewer roles.
+    """
+    reader = _Reader(client, index, cancel, route)
     try:
-        slots = _learn_slots(reader, chosen, captured, asset)
+        slots = _learn_slots(reader, chosen, captured, asset, payloads)
     except ValueError as error:
         slots, failure = None, str(error)
     for entry, mesh in zip(entries, meshes):
         try:
-            textures, reason = _prop_textures(reader, chosen, mesh, slots, library) if slots is not None else ({}, failure)
+            textures, reason = (_prop_textures(reader, chosen, mesh, entry["source"], slots, library, entry.get("section"))
+                                if slots is not None else ({}, failure))
         except ValueError as error:
             textures, reason = {}, str(error)
         if textures:

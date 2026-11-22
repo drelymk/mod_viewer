@@ -35,8 +35,84 @@ internal static class PropMaterials
                 var objects = file[0].m_Objects.Where(o => o.m_PathID == pointer.m_PathID).ToArray();
                 if (objects.Length != 1 || (ClassIDType)objects[0].classID != ClassIDType.Material) throw new InvalidDataException();
                 return Describe(new Material(new ObjectReader(file[0].reader, file[0], objects[0], game)), files, reference);
-            }).ToArray()
+            }).ToArray(),
+            // Genshin props need the prefab's default visibility; ZZZ props do not use it.
+            visible = game.Type == GameType.GI ? Visible(renderer, game) : null
         };
+    }
+
+    // Whether the prefab draws the renderer by default: it is enabled and its GameObject and
+    // every ancestor up to and including the Animator's are active. Null when the renderer or
+    // a GameObject's serialized layout does not prove those flags (each must be consumed exactly).
+    private static bool? Visible(SkinnedMeshRenderer renderer, Game game)
+    {
+        if (renderer.m_Enabled is not bool enabled) return null;
+        var file = renderer.assetsFile;
+        T? Read<T>(long pathId, ClassIDType kind, Func<ObjectReader, T> create) where T : class
+        {
+            var objects = file.m_Objects.Where(o => o.m_PathID == pathId).ToArray();
+            if (pathId == 0 || objects.Length != 1 || (ClassIDType)objects[0].classID != kind) return null;
+            return create(new ObjectReader(file.reader, file, objects[0], game));
+        }
+        if (renderer.m_GameObject.m_FileID != 0) return null;
+        long node = renderer.m_GameObject.m_PathID;
+        bool active = true;
+        var seen = new HashSet<long>();
+        for (int depth = 0; depth < 128; depth++)
+        {
+            if (!seen.Add(node)) return null;
+            bool? flag = null;
+            var gameObject = Read(node, ClassIDType.GameObject, reader =>
+            {
+                var value = new GameObject(reader);
+                _ = reader.ReadUInt16(); // m_Tag
+                bool isActive = reader.ReadBoolean();
+                // Genshin omits the trailing alignment of the last field.
+                if (reader.BytesLeft() > 0) reader.AlignStream();
+                if (reader.BytesLeft() == 0) flag = isActive;
+                return value;
+            });
+            if (gameObject is null || flag is not bool nodeActive) return null;
+            active &= nodeActive;
+            var components = gameObject.m_Components.Where(p => p.m_FileID == 0)
+                .Select(p => file.m_Objects.FirstOrDefault(o => o.m_PathID == p.m_PathID)).ToArray();
+            if (components.Length != gameObject.m_Components.Count || components.Any(o => o is null)) return null;
+            if (components.Any(o => (ClassIDType)o!.classID == ClassIDType.Animator)) return enabled && active;
+            var transforms = components.Where(o => (ClassIDType)o!.classID == ClassIDType.Transform).ToArray();
+            if (transforms.Length != 1) return null;
+            var transform = Read(transforms[0]!.m_PathID, ClassIDType.Transform, reader => new Transform(reader));
+            if (transform is null || transform.m_Father.m_FileID != 0) return null;
+            var parent = Read(transform.m_Father.m_PathID, ClassIDType.Transform, reader => new Transform(reader));
+            if (parent is null || parent.m_GameObject.m_FileID != 0) return null;
+            node = parent.m_GameObject.m_PathID;
+        }
+        return null;
+    }
+
+    // Distinct serialized files a renderer's materials live in (null pointers excluded).
+    internal static string[] MaterialFiles(SkinnedMeshRenderer renderer)
+    {
+        if (renderer.m_Materials.Count > 64) throw new InvalidDataException();
+        return renderer.m_Materials.Where(pointer => pointer.m_PathID != 0)
+            .Select(pointer => Cab(renderer.assetsFile, pointer)).Distinct().ToArray();
+    }
+
+    // Distinct serialized files a material's textures live in, or null when the material
+    // cannot be read; scans must not fail on materials no character uses.
+    internal static string[]? TextureFiles(ObjectReader reader)
+    {
+        try
+        {
+            var material = new Material(reader);
+            var textures = material.m_SavedProperties.m_TexEnvs;
+            if (textures.Count > 256) return null;
+            return textures.Where(entry => entry.Value.m_Texture.m_PathID != 0)
+                .Select(entry => Cab(material.assetsFile, entry.Value.m_Texture)).Distinct().ToArray();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     internal static object Describe(Material material, IReadOnlyList<SerializedFile> files, object? pointer = null)

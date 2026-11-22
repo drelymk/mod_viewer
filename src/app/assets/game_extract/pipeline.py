@@ -316,6 +316,18 @@ def verify_candidates(client, captured, candidates, cancel):
     return [row for row in matches if len(row[3]) == best]
 
 
+def manifest_props(props):
+    """Manifest prop entries: everything but the report-only ``source``, ``section`` and ``texture_error``."""
+    return [{key: value for key, value in prop.items() if key not in ("source", "section", "texture_error")}
+            for prop in props]
+
+
+def report_props(props):
+    """Extraction report summaries of the written props."""
+    return [dict(id=prop["id"], name=prop["name"], source=prop["source"], textures=sorted(prop.get("textures", {})),
+                 **({"texture_error": prop["texture_error"]} if "texture_error" in prop else {})) for prop in props]
+
+
 def rest_worlds(bones, *, affine=False):
     """Compose validated reference transforms, rejecting malformed or cyclic hierarchies."""
     import numpy as np
@@ -730,8 +742,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                     runtime_bones=animation_keys.runtime_bones(rig, existing.values()),
                     shared_layers=layers, shared_layer_masks=layer_masks, layer_bones=sorted(layer_bones))
     if props:
-        manifest["props"] = [{key: value for key, value in prop.items() if key not in ("source", "texture_error")}
-                             for prop in props]
+        manifest["props"] = manifest_props(props)
     write_document(library / "manifest.json", manifest, 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="wuwa", mesh=mesh_package,
@@ -743,8 +754,6 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                   sequences=len(sequences), name_sequences=name_sequences, skipped_sequences=len(skipped_sequences),
                   skipped_sequence_details=skipped_sequences, sequence_error=sequence_error,
                   shared_layers=len(layers),
-                  props=[dict(id=prop["id"], name=prop["name"], source=prop["source"], textures=sorted(prop.get("textures", {})),
-                              **({"texture_error": prop["texture_error"]} if "texture_error" in prop else {})) for prop in props],
-                  skipped_props=skipped_props, **({"prop_error": prop_error} if prop_error else {}))
+                  props=report_props(props), skipped_props=skipped_props, **({"prop_error": prop_error} if prop_error else {}))
     (output / "RigExtraction.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report, fingerprints

@@ -1,16 +1,33 @@
-"""Complete, versioned Genshin Impact metadata index; native reads still prove each binding."""
+"""Versioned Genshin Impact character metadata index; native reads still prove each binding.
+
+The scan covers every block, but the index keeps only what character extraction reads:
+every Avatar, the meshes of character Avatar bundles, the renderers drawing them, the
+character controllers and their clips, and the locations of the material and texture
+files those renderers lead to. Kept meshes, clips and files retain every copy of their
+serialized file (CAB), so a CAB found in several blocks stays as ambiguous as before.
+Skill objects named for a character family (``SkillObj_<token>_<object>``) keep their
+models, renderers and ``Ani_SkillObj_<token>_`` clips for name pairing.
+"""
 
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 
 from app.settings import config, paths
 from . import gi_runtime
-from .zzz_index import identity, scan_batches
+from .runtime import ExtractionCancelled, check_cancelled
+from .zzz_index import IndexRows, MAX_FILES, _file_table, _pack_files, _unpack_files, identity, scan_batches
+from .zzz_pipeline import _family
 
 MAX_BYTES = 256 * 1024 * 1024
-FORMAT = 1
+FORMAT = 2
+MAX_CONTROLLERS = 4096
+SKILL_OBJECT = re.compile(r"SkillObj_(?P<token>[^_]+)_(?P<thing>.+)_ModelAvatar")
+SKILL_CLIP = re.compile(r"Ani_SkillObj_(?P<token>[^_]+)_.+")
+# The scan sees every material/texture file in the game before limiting it to MAX_FILES.
+SCAN_FILES = 8 * MAX_FILES
 TYPES = ("Mesh", "Avatar", "AnimationClip", "AnimatorController", "SkinnedMeshRenderer")
 
 
@@ -87,7 +104,7 @@ def read(folder):
         if (not isinstance(value, dict) or value.get("format") != FORMAT or not valid_rows(value.get("rows"))
                 or value.get("fingerprint") != fingerprint(folder)):
             return "stale", None, 0
-        rows = value["rows"]
+        rows = IndexRows(value["rows"], _unpack_files(value.get("files")))
         return "ready", rows, sum(row["type"] == "Mesh" for row in rows)
     except FileNotFoundError:
         return "missing", None, 0
@@ -107,21 +124,97 @@ def remove(folder):
         pass
 
 
+def _names(value):
+    return {item.casefold() for item in value if isinstance(item, str)} if isinstance(value, list) else set()
+
+
+def _clip_files(client, controllers, cancel):
+    """CABs of every clip the character controllers point to."""
+    if len(controllers) > MAX_CONTROLLERS:
+        raise ValueError("The Genshin Impact installation has too many character controllers to index.")
+    cabs = set()
+    for row in controllers:
+        check_cancelled(cancel)
+        try:
+            controller = client.read(row)
+        except ExtractionCancelled:
+            raise
+        except (ValueError, KeyError, TypeError):
+            # Extraction reads the same controller and fails visibly there.
+            continue
+        states = controller.get("states") if isinstance(controller, dict) else None
+        for state in states if isinstance(states, list) else []:
+            motions = state.get("motions") if isinstance(state, dict) else None
+            for motion in motions if isinstance(motions, list) else []:
+                leaves = motion.get("leaves") if isinstance(motion, dict) else None
+                for leaf in leaves if isinstance(leaves, list) else []:
+                    if isinstance(leaf, dict) and isinstance(leaf.get("cab"), str):
+                        cabs.add(leaf["cab"].casefold())
+    return cabs
+
+
+def limit(client, rows, entries, material_textures, cancel):
+    """Keep only the rows and file locations character extraction reads."""
+    avatars = [row for row in rows if row["type"] == "Avatar"]
+    characters = [row for row in avatars if _family(row["name"])]
+    families = {_family(row["name"]) for row in characters}
+    # A family's last name token also names its skill objects (paired by name only).
+    tokens = {family.rsplit("_", 1)[-1] for family in families}
+    objects = [row for row in avatars if (match := SKILL_OBJECT.fullmatch(row["name"])) and match["token"] in tokens]
+    bundles = {(row["block"], row["offset"]) for row in (*characters, *objects)}
+    mesh_files = {row["cab"].casefold() for row in rows
+                  if row["type"] == "Mesh" and (row["block"], row["offset"]) in bundles}
+    meshes = [row for row in rows if row["type"] == "Mesh" and row["cab"].casefold() in mesh_files]
+    drawn = {(row["cab"].casefold(), row["path_id"]) for row in meshes}
+    renderers, material_files = [], set()
+    for row in rows:
+        if row["type"] != "SkinnedMeshRenderer":
+            continue
+        route = _route(row)
+        mesh = route["renderer"]["mesh"] if route else None
+        if mesh is None or (mesh["cab"].casefold(), mesh["path_id"]) not in drawn:
+            continue
+        # Material files feed only the file table below; routes keep their indexed fields.
+        renderers.append({key: value for key, value in route.items() if key != "materials"})
+        material_files |= _names(row.get("materials"))
+    controllers = [row for row in rows if row["type"] == "AnimatorController" and row["name"] in families]
+    clip_files = _clip_files(client, controllers, cancel)
+    clip_files |= {row["cab"].casefold() for row in rows if row["type"] == "AnimationClip"
+                   and (match := SKILL_CLIP.fullmatch(row["name"])) and match["token"] in tokens}
+    clips = [row for row in rows if row["type"] == "AnimationClip" and row["cab"].casefold() in clip_files]
+    wanted = set(material_files)
+    for cab in material_files:
+        wanted |= material_textures.get(cab, set())
+    kept = [entry for entry in entries if entry[3].casefold() in wanted]
+    if len(kept) > MAX_FILES:
+        raise ValueError("The Genshin Impact file table exceeds its limits.")
+    files = _file_table(kept)
+    return IndexRows([*avatars, *meshes, *renderers, *controllers, *clips], files)
+
+
 def scan(client, folder, progress, cancel):
     root = gi_runtime.validate_folder(folder)
     files = gi_runtime.archives(root)
-    rows = []
+    rows, entries, material_textures = [], [], {}
 
     def consume(batch):
         for row in batch:
-            if row.get("type") == "SkinnedMeshRenderer":
-                row = _route(row)
-                if row is None:
-                    continue
-            rows.append(row)
+            kind = row.get("type")
+            if kind == "File":
+                entries.append((row["block"], row["offset"], row["file_ordinal"], row["cab"]))
+                if len(entries) > SCAN_FILES:
+                    raise ValueError("The Genshin Impact file table exceeds its limits.")
+            elif kind == "Material":
+                # Every material of a referenced file counts; unreadable ones add nothing.
+                material_textures.setdefault(row["cab"].casefold(), set()).update(_names(row.get("textures")))
+            elif kind in TYPES:
+                rows.append(row)
+            else:
+                raise ValueError("The Genshin Impact metadata index is incomplete or ambiguous.")
 
     scan_batches(client, files, progress, cancel, consume)
     progress("index", len(files), len(files))
+    rows = limit(client, rows, entries, material_textures, cancel)
     if not valid_rows(rows):
         raise ValueError("The Genshin Impact metadata index is incomplete or ambiguous.")
     return rows
@@ -132,7 +225,8 @@ def build(client, folder, progress, cancel):
     rows = scan(client, folder, progress, cancel)
     if fingerprint(folder) != current:
         raise ValueError("The Genshin Impact installation changed during indexing. Retry after the game update finishes.")
-    payload = json.dumps(dict(format=FORMAT, fingerprint=current, rows=rows), separators=(",", ":")).encode()
+    payload = json.dumps(dict(format=FORMAT, fingerprint=current, rows=rows, files=_pack_files(rows.files)),
+                         separators=(",", ":")).encode()
     if len(payload) > MAX_BYTES:
         raise ValueError("The Genshin Impact index exceeds its size limit.")
     file = index_path(folder)

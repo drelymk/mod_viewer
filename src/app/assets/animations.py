@@ -27,8 +27,15 @@ def _sequence_number(value):
     return float(value)
 
 
+# Libraries extracted before ``by_name`` flagged name-ordered previews in their names.
+_LEGACY_BY_NAME = " (by name)"
+
+
 def _sequences(raw_sequences, entries):
-    """Return cleaned sequences, or [] when the key is absent or any sequence is invalid."""
+    """Return cleaned sequences, or [] when the key is absent or any sequence is invalid.
+
+    ``by_name`` marks a preview paired by clip names rather than game data.
+    """
     try:
         if not isinstance(raw_sequences, list) or len(raw_sequences) > 256:
             return []
@@ -43,6 +50,11 @@ def _sequences(raw_sequences, entries):
                     or not isinstance(name, str) or not 1 <= len(name) <= 128
                     or type(cyclic) is not bool or not isinstance(steps, list) or not 2 <= len(steps) <= 64):
                 raise ValueError("Invalid animation sequence.")
+            by_name = raw.get("by_name", False)
+            if type(by_name) is not bool:
+                raise ValueError("Invalid animation sequence flag.")
+            if not by_name and name.endswith(_LEGACY_BY_NAME) and len(name) > len(_LEGACY_BY_NAME):
+                name, by_name = name[:-len(_LEGACY_BY_NAME)], True
             restart = _sequence_number(raw.get("restart"))
             if restart < 0:
                 raise ValueError("Invalid animation sequence restart.")
@@ -74,7 +86,8 @@ def _sequences(raw_sequences, entries):
             if cyclic and restart >= cleaned[0]["leave"]:
                 raise ValueError("Invalid animation sequence restart.")
             seen.add(key)
-            sequences.append({"id": key, "name": name, "cyclic": cyclic, "restart": restart, "steps": cleaned})
+            sequences.append({"id": key, "name": name, "cyclic": cyclic, "restart": restart, "steps": cleaned,
+                              **({"by_name": True} if by_name else {})})
         return sequences
     except (ValueError, TypeError, KeyError):
         return []
@@ -239,7 +252,10 @@ _MAX_PROP_TEXTURE_BYTES = 96 * 1024 * 1024
 # Each track carries the clip window it shows in (``start``/``end`` seconds); its
 # animation plays from the window's start and holds its last frame.
 PROP_TRACK_LAYOUT = "prop-track-v1"
-_PROP_TRACK_BYTES = 28
+# Scaling props (objects that grow in or shrink away) store each bone's full asset-space
+# affine delta instead: f32 3x4 rows (row-major), the same placement-relative transform.
+PROP_AFFINE_TRACK_LAYOUT = "prop-track-v2"
+_PROP_TRACK_BYTES = {PROP_TRACK_LAYOUT: 28, PROP_AFFINE_TRACK_LAYOUT: 48}
 MAX_PROP_BONES = 256
 MAX_PROP_TRACKS = 1024
 MAX_PROP_TRACK_BYTES = 128 * 1024 * 1024
@@ -298,9 +314,10 @@ def _prop_animation(prop):
     An animated prop's socket is a rig bone, or null for the character mesh's origin.
     """
     socket, bones, tracks = prop.get("socket"), prop.get("bone_count"), prop.get("tracks")
+    layout = prop.get("track_layout", PROP_TRACK_LAYOUT)
     if tracks is None:
-        return {} if socket is None and bones is None else None
-    if ((socket is not None and (type(socket) is not int or socket < 0)) or type(bones) is not int or not 0 < bones <= MAX_PROP_BONES
+        return {} if socket is None and bones is None and "track_layout" not in prop else None
+    if (layout not in _PROP_TRACK_BYTES or (socket is not None and (type(socket) is not int or socket < 0)) or type(bones) is not int or not 0 < bones <= MAX_PROP_BONES
             or not isinstance(tracks, dict) or not 0 < len(tracks) <= MAX_PROP_TRACKS or any(
                 not isinstance(clip, str) or not _ID.fullmatch(clip) or not isinstance(track, dict)
                 or not isinstance(track.get("file"), str) or not _PROP_FILE.fullmatch(track["file"])
@@ -311,7 +328,7 @@ def _prop_animation(prop):
                 or not 0 <= track["start"] < track["end"] <= 3600
                 for clip, track in tracks.items())):
         return None
-    return dict(socket=socket, bone_count=bones, tracks={
+    return dict(socket=socket, bone_count=bones, track_layout=layout, tracks={
         clip: {key: track[key] for key in ("file", "sha256", "frame_count", "duration", "start", "end")}
         for clip, track in tracks.items()})
 
@@ -323,7 +340,7 @@ def _read_prop_tracks(directory, prop, clips):
     for clip, track in sorted(prop["tracks"].items()):
         if clip not in clips:
             continue
-        size = track["frame_count"] * prop["bone_count"] * _PROP_TRACK_BYTES
+        size = track["frame_count"] * prop["bone_count"] * _PROP_TRACK_BYTES[prop["track_layout"]]
         path = paths.safe_asset_path(directory, track["file"])
         if not path or offset + size > MAX_PROP_TRACK_BYTES:
             raise ValueError("The prop animation is unavailable.")
@@ -550,7 +567,7 @@ class AnimationSessions:
                         track_url = server.publish_geometry(tracks[0], replace=False)
                         session["prop_urls"].append(track_url)
                         item.update(socket=prop["socket"], bone_count=prop["bone_count"], tracks={
-                            "layout": PROP_TRACK_LAYOUT, "url": track_url, "length": len(tracks[0]), "clips": tracks[1]})
+                            "layout": prop["track_layout"], "url": track_url, "length": len(tracks[0]), "clips": tracks[1]})
                     result.append(item)
             return {"status": "ok", "props": result}
         except (OSError, ValueError, TypeError, KeyError) as error:

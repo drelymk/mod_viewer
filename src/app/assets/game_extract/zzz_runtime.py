@@ -8,7 +8,7 @@ from . import runtime
 from .bundle import runtime_directory
 
 PARSER_COMMIT = "76234e9f6f5a839504f41f9612719529fe2309a5"
-VERSION = "zzz-8-" + PARSER_COMMIT[:12]
+VERSION = "zzz-9-" + PARSER_COMMIT[:12]
 # Runtime clip decoding can change without changing cached discovery metadata.
 INDEX_VERSION = "zzz-4-" + PARSER_COMMIT[:12]
 BLOCK_DIRS = ("ZenlessZoneZero_Data/StreamingAssets/Blocks", "ZenlessZoneZero_Data/Persistent/Blocks")

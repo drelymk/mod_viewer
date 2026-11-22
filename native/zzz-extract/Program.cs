@@ -128,20 +128,54 @@ internal static class Program
                         // Renderer routes prove facial curve targets in both games; both games index controllers (authored sequences).
                         if (type is not (ClassIDType.Mesh or ClassIDType.Avatar or ClassIDType.AnimationClip
                             or ClassIDType.SkinnedMeshRenderer or ClassIDType.AnimatorController)
-                            && !(operation == "read" && type is (ClassIDType.Texture2D or ClassIDType.Material))) continue;
+                            && !(operation == "read" && type is (ClassIDType.Texture2D or ClassIDType.Material))
+                            && !(gi && files && type == ClassIDType.Material)) continue;
                         if (operation == "read" && (file.fileName != (string?)request["cab"]
                             || ordinal != (int?)request["file_ordinal"] || info.m_PathID != (long?)request["path_id"])) continue;
                         var reader = new ObjectReader(file.reader, file, info, game);
+                        if (type == ClassIDType.Material && operation == "scan")
+                        {
+                            // Genshin keeps only the file locations its character renderers lead to:
+                            // each material's texture files, null when the material is unreadable.
+                            rows.Add(new
+                            {
+                                name = "",
+                                type = "Material",
+                                offset = file.offset,
+                                cab = file.fileName,
+                                file_ordinal = ordinal,
+                                path_id = info.m_PathID,
+                                textures = PropMaterials.TextureFiles(reader)
+                            });
+                            continue;
+                        }
                         if (type == ClassIDType.SkinnedMeshRenderer && operation == "read")
                         {
-                            // Prop materials: texture slots and their pointers.
-                            if (gi || exported is not null) throw new InvalidDataException();
+                            // Prop materials: texture slots and their pointers (and, for Genshin, default visibility).
+                            if (exported is not null) throw new InvalidDataException();
                             exported = PropMaterials.Renderer(new SkinnedMeshRenderer(reader), manager.assetsFileList, game);
                             continue;
                         }
                         if (type == ClassIDType.SkinnedMeshRenderer)
                         {
-                            var renderer = MorphSources.Renderer(new SkinnedMeshRenderer(reader), manager.assetsFileList, game);
+                            var skinned = new SkinnedMeshRenderer(reader);
+                            var renderer = MorphSources.Renderer(skinned, manager.assetsFileList, game);
+                            if (gi)
+                            {
+                                // Genshin renderer rows also name their material files for the file table.
+                                rows.Add(new
+                                {
+                                    name = "",
+                                    type = type.ToString(),
+                                    offset = file.offset,
+                                    cab = file.fileName,
+                                    file_ordinal = ordinal,
+                                    path_id = info.m_PathID,
+                                    renderer,
+                                    materials = PropMaterials.MaterialFiles(skinned)
+                                });
+                                continue;
+                            }
                             rows.Add(new
                             {
                                 name = "",
@@ -189,6 +223,8 @@ internal static class Program
                                 (false, ClassIDType.Texture2D) => PropMaterials.Texture(new Texture2D(reader), work, (int)request["id"]!),
                                 (false, ClassIDType.Material) => PropMaterials.Describe(new Material(reader), manager.assetsFileList),
                                 (true, ClassIDType.AnimatorController) => GiExport.ReadController(new AnimatorController(reader), file),
+                                (true, ClassIDType.Texture2D) => PropMaterials.Texture(new Texture2D(reader), work, (int)request["id"]!),
+                                (true, ClassIDType.Material) => PropMaterials.Describe(new Material(reader), manager.assetsFileList),
                                 _ => throw new InvalidDataException()
                             };
                         }

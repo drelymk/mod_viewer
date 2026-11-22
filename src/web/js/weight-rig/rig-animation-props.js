@@ -22,12 +22,16 @@ import {
 // and the socket's clip transform (none for a null socket) is applied on top. An
 // animated prop shows only inside its track's clip window (start..end seconds); its
 // animation plays from the window's start and holds its last frame.
+//
+// The viewer's Show props toggle (on by default) shows or hides every prop of every game.
 const LAYOUT = 'prop-v1';
 const TRACK_LAYOUT = 'prop-track-v1';
+// Scaling props store each bone's asset-space affine delta: f32 3x4 rows, row-major.
+const AFFINE_TRACK_LAYOUT = 'prop-track-v2';
 // Per vertex: f32 position/normal/uv (32 bytes), u16x4 joints, f32x4 weights; then u32 indices.
 const VERTEX_BYTES = 56;
-// Per track frame and prop bone: f32 xyz translation and xyzw quaternion.
-const TRACK_FLOATS = 7;
+// Per track frame and prop bone: f32 xyz translation and xyzw quaternion (v1) or 3x4 rows (v2).
+const TRACK_FLOATS = { [TRACK_LAYOUT]: 7, [AFFINE_TRACK_LAYOUT]: 12 };
 const IDENTITY = new Matrix4();
 const ONE = new Vector3(1, 1, 1);
 
@@ -108,12 +112,13 @@ function disposeProp({ mesh, textured }) {
 // Validated per-clip track views of an animated prop, or null when unusable.
 function propTracks(descriptor, buffer) {
   const bones = descriptor.bone_count;
+  const floats = TRACK_FLOATS[descriptor.tracks.layout];
   if ((descriptor.socket !== null && !Number.isInteger(descriptor.socket)) || !Number.isInteger(bones) || bones < 1)
     return null;
   const tracks = new Map();
   for (const [clip, track] of Object.entries(descriptor.tracks.clips || {})) {
     const { offset, frame_count: frames, duration, start, end } = track || {};
-    const size = frames * bones * TRACK_FLOATS * 4;
+    const size = frames * bones * floats * 4;
     if (
       !Number.isInteger(offset) ||
       !Number.isInteger(frames) ||
@@ -125,7 +130,7 @@ function propTracks(descriptor, buffer) {
       offset + size > buffer.byteLength
     )
       return null;
-    tracks.set(clip, { values: new Float32Array(buffer, offset, size / 4), frames, duration, start, end });
+    tracks.set(clip, { values: new Float32Array(buffer, offset, size / 4), frames, duration, start, end, floats });
   }
   return tracks.size ? tracks : null;
 }
@@ -136,6 +141,7 @@ const SAMPLE = {
   rotation: new Quaternion(),
   following: new Quaternion(),
   matrix: new Matrix4(),
+  rows: new Float32Array(12),
 };
 
 // The prop bones' socket-relative transforms at a clip time, set onto the skeleton.
@@ -145,13 +151,22 @@ function poseTrack(prop, track, socket, time) {
   const second = Math.min(first + 1, track.frames - 1);
   const weight = position - first;
   const bones = prop.animation.boneCount;
+  const floats = track.floats;
   prop.palette.forEach((bone, slot) => {
-    const a = (first * bones + bone) * TRACK_FLOATS;
-    const b = (second * bones + bone) * TRACK_FLOATS;
+    const a = (first * bones + bone) * floats;
+    const b = (second * bones + bone) * floats;
     const values = track.values;
-    SAMPLE.translation.fromArray(values, a).lerp(SAMPLE.next.fromArray(values, b), weight);
-    SAMPLE.rotation.fromArray(values, a + 3).slerp(SAMPLE.following.fromArray(values, b + 3), weight);
-    SAMPLE.matrix.compose(SAMPLE.translation, SAMPLE.rotation, ONE);
+    if (floats === 12) {
+      // Adjacent frames are close; interpolating the affine rows keeps scale-to-zero exact.
+      const rows = SAMPLE.rows;
+      for (let index = 0; index < 12; index++)
+        rows[index] = values[a + index] + (values[b + index] - values[a + index]) * weight;
+      SAMPLE.matrix.set(...rows, 0, 0, 0, 1);
+    } else {
+      SAMPLE.translation.fromArray(values, a).lerp(SAMPLE.next.fromArray(values, b), weight);
+      SAMPLE.rotation.fromArray(values, a + 3).slerp(SAMPLE.following.fromArray(values, b + 3), weight);
+      SAMPLE.matrix.compose(SAMPLE.translation, SAMPLE.rotation, ONE);
+    }
     prop.mesh.skeleton.bones[slot].matrixWorld.multiplyMatrices(socket, SAMPLE.matrix);
   });
 }
@@ -165,8 +180,9 @@ export function createAnimationProps({ loadProps, getScene, requestRender, mater
   let reference = null;
   let transforms = null;
   let playback = null;
+  let showProps = true;
   function visible(prop) {
-    if (!transforms) return false;
+    if (!transforms || !showProps) return false;
     if (!prop.animation) return true;
     const track = playback && prop.animation.tracks.get(playback.clip);
     return !!track && playback.time >= track.start - 1e-6 && playback.time <= track.end + 1e-6;
@@ -210,7 +226,7 @@ export function createAnimationProps({ loadProps, getScene, requestRender, mater
     const size = descriptor.vertex_count * VERTEX_BYTES + descriptor.index_count * 4;
     if (descriptor.layout !== LAYOUT) return null;
     const animated = !!descriptor.tracks;
-    if (animated && descriptor.tracks.layout !== TRACK_LAYOUT) return null;
+    if (animated && !TRACK_FLOATS[descriptor.tracks.layout]) return null;
     const buffer = await download(descriptor.data, size);
     const trackBuffer = animated ? await download(descriptor.tracks, descriptor.tracks.length) : null;
     if (current !== generation || !buffer) return null;
@@ -273,6 +289,14 @@ export function createAnimationProps({ loadProps, getScene, requestRender, mater
       transforms = null;
       playback = null;
       update();
+    },
+    // Whether props are shown at all; on by default.
+    setShowProps(value) {
+      showProps = !!value;
+      update();
+    },
+    get showProps() {
+      return showProps;
     },
     dispose,
   };

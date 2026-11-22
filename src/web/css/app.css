@@ -1572,6 +1572,11 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .animation-icon-btn:hover:not(:disabled) { color: var(--text); background: var(--panel-fill-hover); border-color: var(--border); }
 .animation-icon-btn:disabled { opacity: .35; cursor: default; }
 .animation-icon-btn .ui-icon { width: 16px; height: 16px; fill: currentColor; }
+/* The Show props toggle appears only for rigs that have game props. */
+.animation-props-toggle[hidden], .rig-animation-props[hidden] { display: none; }
+.animation-props-toggle .ui-icon { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+.animation-props-toggle[aria-pressed="true"] { color: var(--accent-soft); border-color: var(--accent-soft); }
+.animation-option .animation-by-name-mark { width: 13px; height: 13px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2; }
 .animation-transport { display: flex; align-items: center; gap: 4px; }
 .animation-playback .animation-play {
   width: 34px; height: 34px; min-width: 34px; margin-right: 2px; border-radius: 50%;

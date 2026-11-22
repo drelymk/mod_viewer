@@ -7,8 +7,10 @@ from . import zzz_runtime
 DATA = "GenshinImpact_Data"
 BLOCK_DIRS = (DATA + "/StreamingAssets/AssetBundles/blocks", DATA + "/Persistent/AssetBundles/blocks")
 # Discovery metadata has its own version; clip-only helper changes keep a ready index.
-# gi-2 adds SkinnedMeshRenderer routes for facial curves.
-INDEX_VERSION = "gi-2-" + zzz_runtime.PARSER_COMMIT[:12]
+# gi-2 adds SkinnedMeshRenderer routes for facial curves; gi-3 keeps only character
+# data plus the material and texture files their renderers lead to; gi-4 also keeps
+# each family's skill objects for the name-paired preview.
+INDEX_VERSION = "gi-4-" + zzz_runtime.PARSER_COMMIT[:12]
 ensure_runtime = zzz_runtime.ensure_runtime
 
 
@@ -53,7 +55,8 @@ def archives(root):
 
 
 class Client(zzz_runtime.Client):
-    index_files = False
+    # Scans list material and texture files; the index keeps those character renderers reach.
+    index_files = True
 
     def __init__(self, executable, folder, work, cancel):
         self.root = validate_folder(folder)

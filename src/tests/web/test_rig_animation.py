@@ -121,6 +121,8 @@ def test_auto_weight_rig_load_order_and_viewport_playback_lifecycle(viewer, kind
     page.wait_for_function("!document.querySelector('#animation-play-pause').disabled")
     assert page.locator('#animation-playback').is_visible()
     assert page.locator('#animation-frame').is_visible()
+    # Rigs without props never offer the Show props toggle.
+    assert page.locator('#animation-props').is_hidden()
     assert page.evaluate('''async () => {
       const {getLoadedWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
       window.__autoRig=getLoadedWeightRigFeature();
@@ -1437,3 +1439,97 @@ def test_animated_props_follow_their_clip_tracks_and_abandoned_loads_release_wha
     # load releases the prop it had already built.
     assert result['before'] == {'created': 1, 'released': 0}
     assert result['created'] == 2 and result['released'] == 2 and result['children'] == 0
+
+
+def test_name_paired_sequences_are_marked_and_the_show_props_toggle_hides_every_prop(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three');
+      const {BY_NAME_MARK, fillRigClipSelect} = await import('./js/weight-rig/rig-animation.js');
+      const {createAnimationProps} = await import('./js/weight-rig/rig-animation-props.js');
+      // Name-paired sequences carry a flag; the picker marks them with an icon and a hint.
+      const select = document.createElement('select');
+      fillRigClipSelect(select, [{id:'clip01', name:'Clip01', duration:1}],
+        [{id:'seq01', name:'Authored01'}, {id:'seq02', name:'Named01', by_name:true}]);
+      const options = [...select.querySelectorAll('optgroup option')].map(option => [option.textContent, !!option.title]);
+      // One triangle skinned to prop bone 1; a prop-track-v2 affine track scales it in from nothing.
+      const geometry = new ArrayBuffer(3 * 56 + 12);
+      new Float32Array(geometry, 0, 24).set([1,0,0, 0,0,1, 0,0,  0,1,0, 0,0,1, 1,0,  0,0,1, 0,0,1, 0,1]);
+      new Uint16Array(geometry, 96, 12).set([1,0,0,0, 1,0,0,0, 1,0,0,0]);
+      new Float32Array(geometry, 120, 12).set([1,0,0,0, 1,0,0,0, 1,0,0,0]);
+      new Uint32Array(geometry, 168, 3).set([0,1,2]);
+      const identity = [1,0,0,0, 0,1,0,0, 0,0,1,0];
+      const track = new Float32Array([...identity, 0,0,0,0, 0,0,0,0, 0,0,0,2,  ...identity, ...identity]);
+      const url = blob => URL.createObjectURL(new Blob([blob]));
+      const descriptor = {id:'prop-01', name:'Object01', layout:'prop-v1', vertex_count:3, index_count:3,
+        data:{url:url(geometry), length:geometry.byteLength}, textures:{}, socket:null, bone_count:2,
+        tracks:{layout:'prop-track-v2', url:url(track.buffer), length:track.byteLength,
+                clips:{clip01:{offset:0, frame_count:2, duration:1, start:0, end:1}}}};
+      const scene = new T.Scene();
+      const props = createAnimationProps({loadProps: async () => ({status:'ok', props:[descriptor]}),
+                                          getScene: () => scene, requestRender: () => {}});
+      props.prepare({bones:[{}], animation_session:'session01', animation_props:[{id:'prop-01'}]}, null);
+      await new Promise(r => setTimeout(r, 50));
+      const transforms = new Map([[0, new T.Matrix4()]]);
+      const vertex = time => {
+        props.apply(transforms, {clip:'clip01', time});
+        const mesh = scene.children[0];
+        if (!mesh) return null;
+        return mesh.applyBoneTransform(0, new T.Vector3().fromBufferAttribute(mesh.geometry.attributes.position, 0))
+          .toArray().map(value => Math.round(value * 1000) / 1000);
+      };
+      // Props show by default; the toggle hides and restores them all.
+      const initially = props.showProps;
+      const shown = [vertex(0), vertex(.5), vertex(1)];
+      props.setShowProps(false);
+      const hidden = vertex(.5);
+      props.setShowProps(true);
+      const shownAgain = vertex(.5);
+      props.dispose();
+      return {mark: BY_NAME_MARK, options, initially, shown, hidden, shownAgain};
+    }''')
+    assert result['options'] == [['Authored01', False], [result['mark'] + ' Named01', True]]
+    # Shown by default; the affine track scales the object in from its origin offset.
+    assert result['initially'] is True and result['hidden'] is None
+    assert result['shown'] == [[0, 0, 2], [0.5, 0, 1], [1, 0, 0]] and result['shownAgain'] == [0.5, 0, 1]
+
+
+def test_viewport_dock_marks_name_paired_sequences_and_toggles_every_prop(viewer):
+    payload, weights = weighted_payload()
+    bones = [dict(name='Root', parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1]),
+             dict(name='Joint01', parent=0, translation=[1, 0, 0], rotation=[0, 0, 0, 1])]
+    sequences = [dict(id=f'sequence0{number}', name=f'Sequence0{number}', cyclic=False, restart=0,
+                      steps=[dict(clip=clip, start=0, leave=.5, fade=0) for clip in ['clip01', 'clip02']],
+                      **({'by_name': True} if number == 2 else {})) for number in (1, 2)]
+    weights['game_rigs'] = {'rig01': dict(id='rig01', version=2, bones=bones, animation_session='session01',
+        animations=[dict(id=clip, name=clip, duration=1) for clip in ['clip01', 'clip02']],
+        animation_sequences=sequences, animation_props=[dict(id='prop-01', name='Object01')])}
+    weights['meshes']['mesh-00'].update(game_rig_id='rig01', game_bone_map={'0': 0, '1': 1})
+    page = viewer({'model01': payload, 'fixture-weights': weights}, preferences={'autoLoadWeightRig': True},
+                  native={'fill': {'status': 'nothing_missing'}})
+    page.evaluate('''() => {
+      const values=new Float32Array([0,0,0,0,0,0,1, 1,0,0,0,0,0,1, 1,0,0,0,0,0,1, 1,0,0,0,0,0,1]);
+      const url=URL.createObjectURL(new Blob([values]));
+      window.pywebview.api.get_model_animation=async ()=>({status:'ok',clip:{skeleton_id:'rig01',frame_count:2,
+        bone_count:2,duration:1,data:{url,length:values.byteLength}}});
+      window.pywebview.api.get_model_animation_props=async ()=>({status:'ok',props:[]});
+    }''')
+    open_model(page, 'model01')
+    wait_loaded(page)
+    page.wait_for_function("document.querySelector('#animation-clip .animation-picker-name').textContent==='clip01'")
+    toggle = page.locator('#animation-props')
+    shown = '''async () => {
+      const {getLoadedWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
+      return getLoadedWeightRigFeature().getRigPropsShown();
+    }'''
+    # The rig has props: the dock offers the Show props toggle, on by default.
+    assert toggle.is_visible() and toggle.get_attribute('aria-pressed') == 'true'
+    assert page.evaluate(shown) is True
+    toggle.click()
+    assert toggle.get_attribute('aria-pressed') == 'false' and page.evaluate(shown) is False
+    toggle.click()
+    assert toggle.get_attribute('aria-pressed') == 'true' and page.evaluate(shown) is True
+    # Only the name-paired sequence carries the link mark and its hint.
+    page.locator('#animation-clip').click()
+    marked = page.evaluate('''() => [...document.querySelectorAll('#animation-options .animation-option')]
+      .map(node => [node.dataset.value, !!node.querySelector('.animation-by-name-mark'), !!node.title])''')
+    assert [item for item in marked if item[1] or item[2]] == [['sequence02', True, True]]

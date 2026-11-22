@@ -425,6 +425,9 @@ export const weightRigApi = Object.freeze({
     return { ...rigAnimation.snapshot(), stale: generation !== modelWeightGeneration };
   },
   selectRigAnimation: rigAnimation.select,
+  // Every game prop shows unless the viewer turns them off (the snapshot's `hasProps` says whether any exist).
+  getRigPropsShown: () => animationProps.showProps,
+  setRigPropsShown: (value) => animationProps.setShowProps(value),
   setRigAnimationPlaying: rigAnimation.setPlaying,
   stopRigAnimation: rigAnimation.stop,
   seekRigAnimation: rigAnimation.seek,

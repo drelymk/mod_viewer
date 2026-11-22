@@ -1189,7 +1189,9 @@ of documentation, comments and tests; use portable fixtures instead.
   are reported in the extraction report (`sequences`, `skipped_sequences`, `sequence_error`).
   Intentional exception to name-free ordering, for preview only: converted
   `X_Start`/`X_Loop`/`X_End[n]` clips in one folder also form name-ordered sequences
-  (one per end, hard cuts, each clip once), always labeled `(by name)`, listed after
+  (one per end, hard cuts, each clip once), always flagged `by_name` (the viewer marks
+  name-paired sequences and props with a link icon and a hint instead of a text label;
+  an older library's name ending ` (by name)` reads as flagged), listed after
   authored timelines and counted as `name_sequences`. Names never pair, identify or
   admit clips, and a stem with several starts or loops is skipped.
 - WuWa extraction exports a prop only with evidence of both its attachment and its
@@ -1412,8 +1414,11 @@ of documentation, comments and tests; use portable fixtures instead.
   on each slot's content; its top mip is written unchanged as a single-mip DX10 DDS
   (`Props/<digest>.dds`, sRGB only for diffuse) and listed under the prop's
   `textures`. Normal maps stay unproven (captures do not hold the game's normal
-  texture), so props keep their authored mesh normals. Multi-material props, and
-  props without a proven slot, stay untextured with `texture_error` in the report.
+  texture), so props keep their authored mesh normals. The viewer draws a prop with one
+  material, so a multi-material mesh becomes one prop per material section (`<mesh> <n>`,
+  keeping only the vertices that section's triangles use), each textured from its own
+  section's material; single-material props are unchanged. Props without a proven slot
+  stay untextured with `texture_error` in the report.
   Playback skins them with each clip's bone deltas outside the editable rig and
   shows them only while a clip is applied: never at rest, in manual posing or after
   Stop. They follow the body mesh's model transform; textured props use the body
@@ -1428,7 +1433,16 @@ of documentation, comments and tests; use portable fixtures instead.
   AnimationClip, AnimatorController and SkinnedMeshRenderer metadata as
   `game-gimi-<hash>.json` with the ZZZ reuse/staleness rules; renderer rows keep
   only the path and explicit mesh/Avatar pointers, so null-mesh renderers stay
-  unrouted. Resolve controller clip and renderer pointers only by
+  unrouted. The scan covers every block, but the index keeps only what character
+  extraction reads (`gi_index.limit`): every Avatar, meshes in the serialized files
+  (CABs) of character Avatar bundles (`Avatar_…` families), renderers drawing those
+  meshes, the family controllers and the clip CABs they point to (read once during
+  the build), plus a ZZZ-style file table limited to the material CABs those
+  renderers name and the texture CABs those materials name. Kept meshes, clips and
+  files retain every copy of their CAB, so ambiguity is unchanged; an unknown scan
+  row type still fails the build. Each family's skill objects (`SkillObj_<token>_…`
+  Avatars, where the token is the family name's last part) keep their bundle's meshes,
+  renderers and `Ani_SkillObj_<token>_` clip CABs for the preview below. Resolve controller clip and renderer pointers only by
   case-insensitive CAB name plus PathID; a CAB in several blocks is ambiguous.
   A character's meshes are those sharing its Avatar's bundle (generic mesh names
   are not evidence) and still need the complete ZZZ native proof; an unproven
@@ -1490,6 +1504,41 @@ of documentation, comments and tests; use portable fixtures instead.
   external helpers are the stock texture/ORFix/NNFix ones; any other helper keeps
   inferred rigging. Hash Assets that identify an exact range by first index only
   match a unique captured component by geometry hash and first index.
+  Genshin extraction also exports props (`gi_props.py`, ZZZ's `prop-v1` layout and
+  manifest `props`): the ZZZ attachment proof over meshes in the verified Avatar's
+  bundle (no captured component, inverse binds proving a placement within the GI
+  tolerance, positive weight only on bones no captured palette uses). Genshin clips
+  carry no visibility curves, so timing comes from the game's prefabs: renderers route
+  to the prop only through their explicit mesh pointer, an Avatar among the verified
+  copies and a path under that Avatar, and every routed prefab must draw it by default
+  (renderer enabled, GameObject chain to the Animator active). A prop any such prefab
+  hides waits for gameplay code (skill objects, burst forms) and is reported in
+  `skipped_props`, never shown in every clip; unrouted or unproven visibility is
+  skipped too. Weapons are separate models outside the Avatar's bundle and are not
+  exported. Names never decide. Prop textures follow ZZZ's byte-exact slot learning,
+  with renderers routed by those explicit pointers and captured roles read from the
+  GIMI Asset's own resolved role textures (a payload two roles share proves neither);
+  material and texture pointers outside the prefab's bundle resolve through the
+  limited file table.
+  Intentional exception to name-free proof (`gi_skill_objects.py`):
+  skill objects are separate models with their own skeleton and clips that gameplay
+  configuration spawns and times; that configuration is encrypted and never read. An
+  object clip `Ani_SkillObj_<token>_<object>_<suffix>` pairs with the converted clips of
+  the only body clip named `…_<token>_<suffix>` when both last the same time (within
+  1 ms); shared names are never chosen between, and an object that moves by root motion
+  (MotionT/Q) is skipped. The single placement assumption is the object's origin at the
+  character's origin, facing the same way (both play in place); its own curves, scale
+  included, place and time it from there, so objects grow in and shrink away as the game
+  animates them. Geometry keeps the object's own skin (≤ 256 bones, LODs skipped); each
+  pair is baked into a `prop-track-v2` track (per frame and bone the asset-space affine
+  delta as f32 3x4 rows, for the whole clip) and the manifest prop carries `socket` null
+  and `track_layout`. Textures use the character's learned slots through the
+  object's own renderers. Reports list unpaired, mismatched and moving clips in
+  `skipped_props` (`kind` `skill_object`); failures are `skill_object_error` and leave
+  clips and other props unaffected. Like every game's props, they follow the viewer's
+  Show props toggle (on by default; beside Stop in the viewport playback dock, mirrored by
+  a checkbox in the Weight/Rig animation section, shown only when the rig has props),
+  which shows or hides all props at once.
 - Model Rig assembly is a viewer-owned graph over source rigs. Preserve
   `SourceBoneRef {sourceKey,boneId}` and `${sourceKey}#bone=${boneId}`; only
   models whose sources all declare validated model-wide IDs in one domain (R16

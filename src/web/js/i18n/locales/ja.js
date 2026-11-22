@@ -264,6 +264,8 @@ export default {
   'animation.filterAll': 'すべて',
   'animation.filterClips': 'クリップ',
   'animation.filterShared': '共通',
+  'animation.byNameHint': 'ゲームデータではなく名前でキャラクターのクリップと対応付けています。',
+  'animation.showProps': '小道具を表示',
   'animation.noMatches': '一致するアニメーションはありません',
   'animation.stepCount': '{count} ステップ',
   'animation.showControls': 'アニメーション コントロールを表示',

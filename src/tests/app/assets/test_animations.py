@@ -7,7 +7,7 @@ from copy import deepcopy
 
 import pytest
 
-from app.assets import animation_keys
+from app.assets import animation_keys, animations
 from app.assets.animations import AnimationSessions
 from app.assets.animation_conversion import reference_layer_timing
 from app.assets.skinning import capture_skinning, decode_captured_skinning
@@ -233,11 +233,12 @@ def _mutated_sequences(mutate):
     # The fade must end before the following step's own leave (its start to leave span).
     lambda s: s[0]["steps"][1].update(start=0.3),
     lambda s: s[0].update(restart=0.5),
+    lambda s: s[0].update(by_name=1),
 ], ids=[
     "absent-key", "unknown-clip", "duplicate-id", "id-equals-clip-id", "start-not-before-leave",
     "leave-beyond-duration", "fade-beyond-remaining", "one-step", "non-bool-cyclic",
     "nan-number", "bool-number", "restart-not-before-head-duration",
-    "fade-beyond-next-step-span", "restart-not-before-head-leave",
+    "fade-beyond-next-step-span", "restart-not-before-head-leave", "non-bool-by-name",
 ])
 def test_invalid_animation_sequences_drop_all_sequences_and_keep_clips(tmp_path, mutate):
     rig, source = sample()
@@ -258,6 +259,37 @@ def test_invalid_animation_sequences_drop_all_sequences_and_keep_clips(tmp_path,
     catalog = AnimationSessions().catalog(str(tmp_path), "Asset01", rig, lambda: True)
     assert len(catalog["animations"]) == 1
     assert catalog["animation_sequences"] == []
+
+
+@pytest.mark.parametrize("changes, expected", [
+    (dict(by_name=True), dict(name="Sequence 01", by_name=True)),
+    # Libraries extracted before the flag named their previews; the viewer marks them the same way.
+    (dict(name="Sequence 01 (by name)"), dict(name="Sequence 01", by_name=True)),
+    (dict(name="Sequence 01 (by name)", by_name=True), dict(name="Sequence 01 (by name)", by_name=True)),
+    (dict(), dict(name="Sequence 01")),
+])
+def test_name_paired_sequences_carry_a_flag_instead_of_a_label(changes, expected):
+    [sequence] = animations._sequences([{**_valid_sequence(), **changes}], {"clip01": dict(duration=1)})
+    assert {key: sequence[key] for key in ("name", "by_name") if key in sequence} == expected
+
+
+@pytest.mark.parametrize("changes, valid", [
+    (dict(), True),
+    (dict(track_layout="prop-track-v2"), True),
+    (dict(track_layout="prop-track-v3"), False),
+])
+def test_prop_track_layouts_are_validated(changes, valid):
+    track = dict(file="Props/" + "1" * 32 + ".bin", sha256="2" * 64, frame_count=2, duration=1, start=0, end=1)
+    prop = dict(id="prop-01", name="Prop01", file="Props/" + "0" * 32 + ".bin", layout=animations.PROP_LAYOUT,
+                vertex_count=3, index_count=3, sha256="3" * 64, socket=None, bone_count=2, tracks={"clip01": track},
+                **changes)
+    props = animations._props(dict(props=[prop]))
+    assert bool(props) is valid
+    if valid:
+        assert props["prop-01"]["track_layout"] == changes.get("track_layout", "prop-track-v1")
+    # A rigid prop has no track layout.
+    rigid = {key: value for key, value in prop.items() if key not in ("socket", "bone_count", "tracks")}
+    assert bool(animations._props(dict(props=[rigid]))) is ("track_layout" not in changes)
 
 
 def test_animation_library_containment_integrity_and_session_lifecycle(tmp_path, monkeypatch):

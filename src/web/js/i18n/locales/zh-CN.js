@@ -257,6 +257,8 @@ export default {
   'animation.filterAll': '全部',
   'animation.filterClips': '片段',
   'animation.filterShared': '共享',
+  'animation.byNameHint': '按名称而非游戏数据与角色片段配对。',
+  'animation.showProps': '显示道具',
   'animation.noMatches': '没有匹配的动画',
   'animation.stepCount': '{count} 步',
   'animation.showControls': '显示动画控件',

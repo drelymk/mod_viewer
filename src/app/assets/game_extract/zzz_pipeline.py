@@ -12,7 +12,7 @@ from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
 from . import animator_sequences, zzz_animation, zzz_index, zzz_morphs, zzz_props
 from .native import humanoid_controls
-from .pipeline import clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
+from .pipeline import manifest_props, report_props, clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
 from .runtime import ExtractionCancelled, check_cancelled
 from .zzz_native import avatar_bones, capture, match_attachment_candidates, match_component_candidates, mesh_placement
 
@@ -470,16 +470,14 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                     clips=list(entries.values()), sequences=sequences,
                     runtime_bones=animation_keys.runtime_bones(rig, existing.values()))
     if props:
-        manifest["props"] = [{key: value for key, value in prop.items() if key not in ("source", "texture_error")}
-                             for prop in props]
+        manifest["props"] = manifest_props(props)
     write_document(library / "manifest.json", manifest, 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="zzz", skeleton_id=rig["id"], skeleton=chosen["source"],
                   meshes=chosen["meshes"], proven_components=len(chosen["matched"]), unmatched_components=len(captured) - len(chosen["matched"]),
                   bones=len(rig["bones"]), clips=len(entries), imported=imported, secondary=0, sequences=len(sequences), skipped=len(skipped),
                   skipped_details=skipped, animations=provenance,
-                  props=[dict(id=prop["id"], name=prop["name"], source=prop["source"], textures=sorted(prop.get("textures", {})),
-                              **({"texture_error": prop["texture_error"]} if "texture_error" in prop else {})) for prop in props],
+                  props=report_props(props),
                   skipped_props=skipped_props, **({"prop_error": prop_error} if prop_error else {}))
     write_document(output / "RigExtraction.json", report, 4 * 1024 * 1024)
     return report, fingerprints

@@ -264,6 +264,8 @@ export default {
   'animation.filterAll': 'Все',
   'animation.filterClips': 'Клипы',
   'animation.filterShared': 'Общие',
+  'animation.byNameHint': 'Сопоставлено с клипами персонажа по имени, а не по данным игры.',
+  'animation.showProps': 'Показывать реквизит',
   'animation.noMatches': 'Нет подходящих анимаций',
   'animation.stepCount': 'Шагов: {count}',
   'animation.showControls': 'Показать управление анимацией',
