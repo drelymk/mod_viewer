@@ -4,7 +4,6 @@ import copy
 import hashlib
 import json
 from pathlib import Path
-import re
 from stat import S_ISREG
 import subprocess
 import time
@@ -219,16 +218,6 @@ class Client:
                     self._files(item, destination)
                 files[item["path"]] = item
         return files
-
-    def config(self, name, destination):
-        """One game configuration database (``ConfigDB/<name>.db``), copied unchanged."""
-        if not isinstance(name, str) or not re.fullmatch(r"db_[A-Za-z0-9_]{1,64}", name):
-            raise ValueError("Unsupported game configuration name.")
-        files = self._files(self.call("export", kind="config", path=f"Client/Content/Aki/ConfigDB/{name}.db",
-                                      outDir=str(destination)), destination)
-        if len(files) != 1:
-            raise ValueError("The game configuration export is incomplete.")
-        return files[0]
 
     def texture(self, package, destination, tier):
         """One Texture2D's stored top mip from a quality-tier archive: (file, description)."""

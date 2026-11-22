@@ -1376,7 +1376,8 @@ def test_animated_props_follow_their_clip_tracks_and_abandoned_loads_release_wha
       const descriptor = (id, dataUrl) => ({id, name:id, layout:'prop-v1', vertex_count:3, index_count:3,
         data:{url:dataUrl, length:geometry.byteLength}, textures:{diffuse:'/texture/' + id + '.dds'},
         socket:2, bone_count:2, tracks:{layout:'prop-track-v1', url:trackUrl, length:track.byteLength,
-          clips:{clip01:{offset:0, frame_count:2, duration:1}}}});
+          clips:{clip01:{offset:0, frame_count:2, duration:1},
+                 clip03:{offset:0, frame_count:2, duration:1, start:1, end:3}}}});
       let created = 0, released = 0;
       const materialFor = () => { created++; return {material:new T.MeshBasicMaterial(), bind:() => {},
                                                      dispose:() => { released++; }}; };
@@ -1398,8 +1399,20 @@ def test_animated_props_follow_their_clip_tracks_and_abandoned_loads_release_wha
       };
       // Socket delta on top of the halfway track pose; other clips and past the track's end hide it.
       const states = [shown('clip01', .5), shown('clip02', .5), shown('clip01', 1.5), shown('clip01', 1)];
+      // A windowed track starts its animation at the window's start and holds its last frame until the end.
+      const windowed = [shown('clip03', .5), shown('clip03', 1.5), shown('clip03', 2.5), shown('clip03', 3.5)];
       props.apply(transforms);
       const withoutPlayback = scene.children.length;
+      // A socketless prop stays at the character mesh's origin, ignoring every bone.
+      const looseScene = new T.Scene();
+      const loose = createAnimationProps({loadProps: async () => ({status:'ok', props:[{...descriptor('prop-04', geometryUrl), socket:null}]}),
+                                          getScene: () => looseScene, requestRender: () => {}});
+      loose.prepare({bones:[{},{},{}], animation_session:'session03', animation_props:[{}]}, null);
+      await tick();
+      loose.apply(transforms, {clip:'clip01', time:.5});
+      const looseMesh = looseScene.children[0];
+      const socketless = looseMesh.applyBoneTransform(0, new T.Vector3().fromBufferAttribute(looseMesh.geometry.attributes.position, 0)).toArray();
+      loose.dispose();
       // A second rig's load is abandoned while its second prop still downloads.
       const originalFetch = window.fetch;
       let open;
@@ -1414,9 +1427,11 @@ def test_animated_props_follow_their_clip_tracks_and_abandoned_loads_release_wha
       await tick();
       window.fetch = originalFetch;
       [geometryUrl, trackUrl, slowUrl].forEach(u => URL.revokeObjectURL(u));
-      return {states, withoutPlayback, before, created, released, children: scene.children.length};
+      return {states, windowed, socketless, withoutPlayback, before, created, released, children: scene.children.length};
     }''')
     assert result['states'] == [[.5, 0, 3], None, None, [1, 0, 3]]
+    assert result['windowed'] == [None, [.5, 0, 3], [1, 0, 3], None]
+    assert result['socketless'] == [.5, 0, 1]
     assert result['withoutPlayback'] == 0
     # The first rig's prop is released when the second rig replaces it; the abandoned
     # load releases the prop it had already built.

@@ -1172,13 +1172,12 @@ def test_native_batch_rejects_incomplete_or_uncontained_results(tmp_path, respon
 
 
 @pytest.mark.parametrize("request_kind,response", [
-    ("config-name", None),
     ("texture-tier", None),
     ("texture-absent-tier", None),
     ("texture-metadata", dict(texture=dict(width=0, height=4, format="PF_BC7", srgb=True))),
     ("texture-metadata", dict(texture=dict(width=4, height=4, format="PF_BC7"))),
 ])
-def test_configuration_and_texture_exports_reject_unsafe_requests_and_incomplete_results(tmp_path, request_kind, response):
+def test_texture_exports_reject_unsafe_requests_and_incomplete_results(tmp_path, request_kind, response):
     client = object.__new__(runtime.Client)
     client.paks = tmp_path / "Paks"
     (tmp_path / "HD").mkdir()
@@ -1187,13 +1186,11 @@ def test_configuration_and_texture_exports_reject_unsafe_requests_and_incomplete
     calls = []
     client.call = lambda *args, **kwargs: calls.append(kwargs) or {"rootFiles": [str(file)], **(response or {})}
     with pytest.raises(ValueError):
-        if request_kind == "config-name":
-            client.config("../db_role", tmp_path)
-        elif request_kind == "texture-tier":
+        if request_kind == "texture-tier":
             client.texture(MESH, tmp_path, "LOW")
         else:
             client.texture(MESH, tmp_path, "UHD" if request_kind == "texture-absent-tier" else "HD")
-    # Unsafe names, unknown tiers and tiers absent beside Paks never reach the native helper.
+    # Unknown tiers and tiers absent beside Paks never reach the native helper.
     assert bool(calls) == (request_kind == "texture-metadata")
 
 
@@ -1349,44 +1346,29 @@ def test_character_ribbon_layers_pair_with_shared_clips_by_name_and_exact_timing
     assert list(struct.iter_unpack("<7f", data)) == [(1, 2, 3, 0, 0, 1, 0)] * 2
 
 
-def flatbuffer(ints=(), vectors=()):
-    """A minimal FlatBuffer root table of int32 fields and int32 vector fields."""
-    ints, vectors = dict(ints), dict(vectors)
-    numbers = sorted([*ints, *vectors])
-    vtable = 4 + 2 * (numbers[-1] + 1)
-    table = 4 + vtable + (-vtable % 4)
-    slots = {number: 4 + 4 * ordinal for ordinal, number in enumerate(numbers)}
-    blob = bytearray(table + 4 + 4 * len(numbers))
-    struct.pack_into("<IHH", blob, 0, table, vtable, 4 + 4 * len(numbers))
-    for number in range(numbers[-1] + 1):
-        struct.pack_into("<H", blob, 8 + 2 * number, slots.get(number, 0))
-    struct.pack_into("<i", blob, table, table - 4)
-    for number, value in ints.items():
-        struct.pack_into("<i", blob, table + slots[number], value)
-    for number, values in vectors.items():
-        position = table + slots[number]
-        struct.pack_into("<I", blob, position, len(blob) - position)
-        blob += struct.pack(f"<I{len(values)}i", len(values), *values)
-    return bytes(blob)
-
-
-@pytest.mark.parametrize("scenario", ["signature", "skin", "fallback", "blueprint", "unavailable"])
-def test_game_props_follow_game_configuration_sockets_learned_textures_and_paired_prop_clips(tmp_path, monkeypatch, scenario):
-    import sqlite3
+@pytest.mark.parametrize("scenario", ["blueprint", "untimed", "effect", "unavailable"])
+def test_wuwa_props_need_an_attachment_and_clip_timing(tmp_path, monkeypatch, scenario):
     from app.assets import animations
 
     root, asset, record, client, _ = fixture(tmp_path)
     weapon_root = "Client/Content/Aki/Character/Weapon/Type01/R5Weapon01/"
-    weapon, pair = weapon_root + "Model/R5Weapon01", weapon_root + "Pair/R5Pair01"
-    weapon_blueprint, weapon_rest = weapon_root + "ABP_Weapon01", weapon_root + "CommonAnim/Rest01"
-    starter = "Client/Content/Aki/Character/Weapon/Type01/R2Weapon00/Model/R2Weapon00"
+    weapon = weapon_root + "Model/R5Weapon01"
     prop_root = "Client/Content/Aki/Character/Weapon/Prop/Role/Prop01/"
     prop, prop_skeleton, prop_clip = prop_root + "Model/Prop01", prop_root + "Model/Prop01_Skeleton", prop_root + "BaseAnim/Clip01_Prop01"
+    # An effect mesh plays an animation from a sibling folder, on a skeleton with the same bones.
+    book_root = "Client/Content/Aki/Character/Weapon/Prop/Role/Prop02/"
+    sibling_root = "Client/Content/Aki/Character/Weapon/Prop/Role/Prop03/"
+    book, book_animation = book_root + "Model/Book01", sibling_root + "BaseAnim/Action01"
+    effect_root = "Client/Content/Aki/Effect/"
+    book_group, book_model = effect_root + "EffectGroup/Character01/DA_Group_Book01", effect_root + "DataAsset/DA_Mesh_Book01"
+    loose_group, loose_model = effect_root + "EffectGroup/Character01/DA_Group_Pet01", effect_root + "DataAsset/DA_Mesh_Pet01"
+    claim_group, claim_model = effect_root + "EffectGroup/Character01/DA_Group_Prop01", effect_root + "DataAsset/DA_Mesh_Prop01"
+    particles = effect_root + "EffectGroup/Character01/DA_Group_Sparks01"
     blueprint, base_blueprint = CHARACTER + "/BP_Character01", CHARACTER + "/BP_Base_Character01"
-    body_material, weapon_material = CHARACTER + "/Skin01/Model/Material01", weapon_root + "Model/Material02"
-    body_texture, weapon_texture = CHARACTER + "/Skin01/Model/Texture01", weapon_root + "Model/Texture02"
+    body_material, prop_material = CHARACTER + "/Skin01/Model/Material01", prop_root + "Model/Material02"
+    body_texture, prop_texture = CHARACTER + "/Skin01/Model/Texture01", prop_root + "Model/Texture02"
     # BC7 4x4 top mips: the captured diffuse matches the body's native texture byte for byte.
-    pixels = {body_texture: bytes(range(16)), weapon_texture: bytes(range(16, 32))}
+    pixels = {body_texture: bytes(range(16)), prop_texture: bytes(range(16, 32))}
     geometry = asset / "11111111"
     header = bytearray(148)
     header[:4], header[84:88] = b"DDS ", b"DX10"
@@ -1398,17 +1380,14 @@ def test_game_props_follow_game_configuration_sockets_learned_textures_and_paire
     def game(package, suffix=""):
         return "/Game/" + package.removeprefix("Client/Content/") + "." + package.rsplit("/", 1)[-1] + suffix
 
-    def row(mesh, description, sockets=(), bp=None, abp=None):
+    def row(mesh, description, sockets=(), bp=None):
         return {"网格体_1_" + "A" * 32: dict(AssetPathName=game(mesh)), "描述_2_" + "B" * 32: description,
-                "BattleSockets_3_" + "C" * 32: list(sockets), "蓝图_4_" + "D" * 32: dict(AssetPathName=game(bp, "_C") if bp else "None"),
-                "动画蓝图_5_" + "E" * 32: dict(AssetPathName=game(abp, "_C") if abp else "None")}
+                "BattleSockets_3_" + "C" * 32: list(sockets), "蓝图_4_" + "D" * 32: dict(AssetPathName=game(bp, "_C") if bp else "None")}
 
-    # A skin model row names the character in its description (``<name>…皮肤``).
-    character = "Character01泳装皮肤" if scenario == "skin" else "Character01"
-    rows = {"21010016": row(weapon, "5星-Character01" + ("" if scenario == "fallback" else "专武"), abp=weapon_blueprint),
-            "21110016": row(pair, "Pair01"), "21010011": row(starter, "Starter01")}
+    # The character's signature weapon: a model row that must never be exported.
+    rows = {"21010016": row(weapon, "5星-Character01专武")}
     if scenario != "unavailable":
-        rows["100001"] = row(MESH, character, ["Secondary01", "Root"], blueprint if scenario == "blueprint" else None)
+        rows["100001"] = row(MESH, "Character01", ["Secondary01", "Root"], blueprint)
 
     def uemodel(name, package, bones, bone):
         level = attributes(dict(
@@ -1428,8 +1407,8 @@ def test_game_props_follow_game_configuration_sockets_learned_textures_and_paire
     weapon_bones = [dict(name="Bone01", parent=-1, translation=[0, 0, 0], **identity)]
     prop_bones = [dict(name="Root", parent=-1, translation=[0, 0, 0], **identity),
                   dict(name="Blade01", parent=0, translation=[0, 0, 1], **identity)]
-    meshes = {weapon: uemodel("R5Weapon01", weapon, weapon_bones, 0), pair: uemodel("R5Pair01", pair, weapon_bones, 0),
-              prop: uemodel("Prop01", prop, prop_bones, 1)}
+    meshes = {weapon: uemodel("R5Weapon01", weapon, weapon_bones, 0), prop: uemodel("Prop01", prop, prop_bones, 1),
+              book: uemodel("Book01", book, prop_bones, 1)}
 
     def mesh_document(material, skeleton=SKELETON):
         return [dict(Type="SkeletalMesh", Properties=dict(Skeleton=dict(ObjectPath=skeleton + ".0")),
@@ -1438,13 +1417,7 @@ def test_game_props_follow_game_configuration_sockets_learned_textures_and_paire
 
     template = "OtherCase01_GEN_VARIABLE"
     documents = {wuwa_props.MODEL_CONFIG: [dict(Type="CompositeDataTable", Rows=rows)], MESH: mesh_document(body_material),
-                 weapon: mesh_document(weapon_material), pair: mesh_document(weapon_material),
-                 prop: mesh_document(weapon_material, prop_skeleton),
-                 # The weapon's anim blueprint loops one resting sequence on the weapon's skeleton.
-                 weapon_blueprint: [dict(Type="AnimBlueprintGeneratedClass", Properties=dict(Player=dict(
-                     Sequence=dict(ObjectName="AnimSequence'Rest01'", ObjectPath=weapon_rest + ".0"))))],
-                 weapon_rest: [dict(Type="AnimSequence", Name="Rest01", Properties=dict(
-                     Skeleton=dict(ObjectPath=SKELETON + ".0"), NumFrames=2, SequenceLength=1))],
+                 prop: mesh_document(prop_material, prop_skeleton),
                  # The base blueprint attaches the component to a socket; the derived one sets its mesh.
                  base_blueprint: [dict(Type="BlueprintGeneratedClass", Name="BP_Base_Character01_C"),
                                   dict(Type="SCS_Node", Name="SCS_Node_1", Properties=dict(
@@ -1454,11 +1427,51 @@ def test_game_props_follow_game_configuration_sockets_learned_textures_and_paire
                  blueprint: [dict(Type="BlueprintGeneratedClass", Name="BP_Character01_C",
                                   SuperStruct=dict(ObjectPath=base_blueprint + ".1")),
                              dict(Type="SkeletalMeshComponent", Name=template, Properties=dict(
-                                 SkeletalMesh=dict(ObjectPath=prop + ".0")))]}
-    for material, texture in ((body_material, body_texture), (weapon_material, weapon_texture)):
+                                 SkeletalMesh=dict(ObjectPath=prop + ".0")))],
+                 book: mesh_document(prop_material, book_root + "Model/Book01_Skeleton")}
+
+    def effect_group(model, kind="EffectModelSkeletalMesh_C"):
+        key = kind + "'" + model + "." + model.rsplit("/", 1)[-1] + "'"
+        return [dict(Type="EffectModelGroup_C", Properties=dict(EffectData=[dict(Key=key, Value=0.0)], StartTime=0.0, LoopTime=1.0))]
+
+    def effect_model(mesh, animation=book_animation):
+        return [dict(Type="EffectModelSkeletalMesh_C", Properties=dict(
+            SkeletalMeshRef=dict(ObjectPath=mesh + ".0"), AnimationRef=dict(ObjectPath=animation + ".1"),
+            Looping=False, StartTime=0.0, LoopTime=1.0))]
+
+    def notify(name, start, duration):
+        return dict(NotifyName="AnimNotifyStateEffect_C", LinkValue=start, Duration=duration, LinkMethod="EAnimLinkMethod::Absolute",
+                    NotifyStateClass=dict(ObjectName="AnimNotifyStateEffect_C'Clip01:" + name + "'", ObjectPath=BASE + ".1"))
+
+    def effect(name, group, **settings):
+        return dict(Type="AnimNotifyStateEffect_C", Name=name, Properties=dict(
+            EffectDataAssetRef=dict(AssetPathName=game(group)), SyncEventTimeToEffectTime=True, **settings))
+
+    if scenario == "effect":
+        # Clip01 spawns the book on a socket for its middle half, a pet on no socket
+        # while its root moves, particles with an offset, and the blueprint prop's
+        # own sequence on its mesh at Root through a model the viewer cannot reproduce:
+        # that effect still plays the sequence instead of the component.
+        documents[BASE] = [dict(Type="AnimSequence", Name="Clip01", Properties=dict(
+                               Skeleton=dict(ObjectPath=SKELETON + ".0"), NumFrames=2, SequenceLength=1,
+                               TrackToSkeletonMapTable=[dict(BoneTreeIndex=0)],
+                               Notifies=[notify("AnimNotifyStateEffect_C_" + str(index), *timing)
+                                         for index, timing in enumerate([(0.25, 0.5), (0.5, 0.5), (0, 1), (0, 1)])])),
+                           effect("AnimNotifyStateEffect_C_0", book_group, SocketName="Secondary01", EffectSlotName="Slot01"),
+                           effect("AnimNotifyStateEffect_C_1", loose_group),
+                           effect("AnimNotifyStateEffect_C_2", particles, SocketName="Root", Location=dict(X=1.0, Y=0.0, Z=0.0)),
+                           effect("AnimNotifyStateEffect_C_3", claim_group, SocketName="Root")]
+        documents.update({book_group: effect_group(book_model), loose_group: effect_group(loose_model),
+                          claim_group: effect_group(claim_model),
+                          particles: effect_group(effect_root + "DataAsset/DA_Sparks01", "EffectModelNiagara_C"),
+                          book_model: effect_model(book), loose_model: effect_model(prop),
+                          claim_model: [dict(effect_model(prop, prop_clip)[0], Properties={
+                              **effect_model(prop, prop_clip)[0]["Properties"], "HideFrames": 2})]})
+    for material, texture in ((body_material, body_texture), (prop_material, prop_texture)):
         documents[material] = [dict(Properties=dict(TextureParameterValues=[
             dict(ParameterInfo=dict(Name="MainTex"), ParameterValue=dict(ObjectPath=texture + ".0"))]))]
     original_export, original_batch, original_search, tiers = client.export, client.batch, client.search, []
+    exported_meshes = []
 
     def write(destination, name, data):
         destination.mkdir(parents=True, exist_ok=True)
@@ -1467,6 +1480,8 @@ def test_game_props_follow_game_configuration_sockets_learned_textures_and_paire
         return file
 
     def export(kind, package, destination, format=None):
+        if kind == "mesh":
+            exported_meshes.append(package)
         if kind == "mesh" and package in meshes:
             return [write(destination, package.rsplit("/", 1)[-1] + ".uemodel", meshes[package])]
         if kind == "json" and package in documents:
@@ -1474,25 +1489,33 @@ def test_game_props_follow_game_configuration_sockets_learned_textures_and_paire
                           json.dumps(documents[package], ensure_ascii=False).encode("utf-8"))]
         return original_export(kind, package, destination, format)
 
+    # Prop animations: the blueprint prop's clip, timed like Clip01, and the effect mesh's
+    # shorter one; Blade01 moves one unit along x by their end.
+    prop_animations = {prop_clip: ("Clip01_Prop01", prop_skeleton, 1),
+                       book_animation: ("Action01", sibling_root + "Model/Prop03_Skeleton", 0.25)}
+    motion = [(0, 0, 0, 0, 0, 0, 1), (0, 0, 1, 0, 0, 0, 1), (0, 0, 0, 0, 0, 0, 1), (1, 0, 1, 0, 0, 0, 1)]
+
     def batch(kind, packages, destination, format=None):
-        if packages == [weapon_rest] and kind == "anim":
-            # The resting pose starts with the weapon lifted one unit along z.
-            file = write(destination, "Rest01.psa", psa(weapon_bones, [(0, 0, 1, 0, 0, 0, 1), (0, 0, 2, 0, 0, 0, 1)]))
-            return {weapon_rest: dict(state="completed", rootFiles=[str(file)], failures=[])}
-        if packages != [prop_clip]:
-            return original_batch(kind, packages, destination, format)
-        # The prop's own clip, timed like Clip01: Blade01 moves one unit along x by its end.
-        if kind == "json":
-            data = json.dumps([dict(Type="AnimSequence", Name="Clip01_Prop01", Properties=dict(
-                Skeleton=dict(ObjectPath=prop_skeleton + ".0"), NumFrames=2, SequenceLength=1))]).encode()
-        else:
-            data = psa(prop_bones, [(0, 0, 0, 0, 0, 0, 1), (0, 0, 1, 0, 0, 0, 1), (0, 0, 0, 0, 0, 0, 1), (1, 0, 1, 0, 0, 0, 1)])
-        file = write(destination, "Clip01_Prop01" + (".json" if kind == "json" else ".psa"), data)
-        return {prop_clip: dict(state="completed", rootFiles=[str(file)], failures=[])}
+        result, rest = {}, []
+        for package in packages:
+            name = package.rsplit("/", 1)[-1]
+            if kind == "json" and package in documents:
+                data = json.dumps(documents[package], ensure_ascii=False).encode("utf-8")
+            elif package in prop_animations:
+                name, skeleton, length = prop_animations[package]
+                data = psa(prop_bones, motion, length) if kind != "json" else json.dumps([dict(
+                    Type="AnimSequence", Name=name, Properties=dict(
+                        Skeleton=dict(ObjectPath=skeleton + ".0"), NumFrames=2, SequenceLength=length))]).encode()
+            else:
+                rest.append(package)
+                continue
+            file = write(destination, name + (".json" if kind == "json" else ".psa"), data)
+            result[package] = dict(state="completed", rootFiles=[str(file)], failures=[])
+        return {**(original_batch(kind, rest, destination, format) if rest else {}), **result}
 
     def search(query, kind, under, *, recursive=True):
         if under.startswith(prop_root.rstrip("/")):
-            return [prop_clip] if kind == "AnimSequence" else []
+            return [prop_clip] if kind == "AnimSequence" and scenario != "untimed" else []
         return original_search(query, kind, under)
 
     def texture(package, destination, tier):
@@ -1500,57 +1523,58 @@ def test_game_props_follow_game_configuration_sockets_learned_textures_and_paire
         file = write(destination, package.rsplit("/", 1)[-1] + ".mip", pixels[package] if tier == "HD" else bytes(16))
         return file, dict(width=4, height=4, format="PF_BC7", srgb=True)
 
-    def config(name, destination):
-        destination.mkdir(parents=True, exist_ok=True)
-        file = destination / (name + ".db")
-        file.unlink(missing_ok=True)
-        connection = sqlite3.connect(file)
-        connection.execute("CREATE TABLE roleinfo (Id INT, BinData BLOB)")
-        connection.execute("CREATE TABLE weaponconf (ItemId INT, BinData BLOB)")
-        # A role on the verified model whose starter weapon id encodes its own weapon type,
-        # and a malformed role that must be ignored.
-        connection.execute("INSERT INTO roleinfo VALUES (1, ?), (2, ?)",
-                           (flatbuffer({23: 100001, 42: 21010011, 43: 1}), b"\x00"))
-        connection.execute("INSERT INTO weaponconf VALUES (21010016, ?)",
-                           (flatbuffer({0: 21010016}, {7: [21010016, 21110016]}),))
-        connection.commit()
-        connection.close()
-        return file
-
-    client.export, client.batch, client.search, client.texture, client.config = export, batch, search, texture, config
+    client.export, client.batch, client.search, client.texture = export, batch, search, texture
     output = tmp_path / "output"
     report, _ = pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
     manifest = json.loads((output / "Animation/manifest.json").read_text())
     assert [entry["id"] for entry in manifest["clips"]] == ["Clip01"]
+    # The regular weapon is never read or reported, in any scenario.
+    assert "weapon" not in report and weapon not in exported_meshes
     if scenario == "unavailable":
         # Props never block clips.
         assert "props" not in manifest and report["props"] == []
         assert report["prop_error"] == "No game model configuration uses the verified mesh."
         return
-    weapon_report = dict(choice="fallback" if scenario == "fallback" else "signature", models=[21010016, 21110016],
-                         sockets=["Secondary01", "Root"], texture_tier="HD")
-    assert tiers == ["HD", "HD"] and report["skipped_props"] == []
+    if scenario == "untimed":
+        # A blueprint prop without a paired clip is reported and never exported.
+        assert "props" not in manifest and report["props"] == []
+        assert "prop_error" not in report
+        assert report["skipped_props"] == [dict(kind="blueprint", source=prop, reason="No clip has a paired animation for the prop.")]
+        assert tiers == []
+        return
+    assert tiers == ["HD", "HD"]
     rig = validate_rig(json.loads((output / "Rig.json").read_text()))
     library = str(output / "Animation")
     props = animations._props(manifest)
-    if scenario != "blueprint":
-        assert report["weapon"] == weapon_report
-        assert [entry["name"] for entry in props.values()] == ["R5Weapon01", "R5Pair01"]
-        # The main weapon rests in its anim blueprint's pose; the pair has none, so it keeps its bind pose.
-        for entry, socket, offset in zip(props.values(), (1, 0), ([1, 2, 4], [0, 0, 0])):
-            data = animations._read_prop(library, entry, len(rig["bones"]))
-            records = np.frombuffer(data, "<f4", count=24).reshape(3, 8)
-            # Rigid at the socket's rest transform, fully weighted to the socket bone; V flips like captured parts.
-            assert records[:, :3].tolist() == (np.array([[0, 0, 0], [1, 0, 0], [0, 0, 1]]) + offset).tolist()
-            assert records[:, 3:6].tolist() == [[0, 1, 0]] * 3 and records[:, 6:].tolist() == [[0, 1], [1, 1], [0, 0]]
-            assert np.frombuffer(data, "<u2", count=12, offset=96).tolist() == [socket, 0, 0, 0] * 3
-            assert np.frombuffer(data, "<f4", count=12, offset=120).tolist() == [1, 0, 0, 0] * 3
-            # The learned MainTex slot feeds the weapon's own diffuse texture, written unchanged as sRGB BC7.
-            dds = (output / "Animation" / entry["textures"]["diffuse"]["file"]).read_bytes()
-            assert dds[148:] == pixels[weapon_texture] and struct.unpack_from("<I", dds, 128)[0] == 99
+    shutil.copytree(output, asset, dirs_exist_ok=True)
+    published = []
+    monkeypatch.setattr("app.assets.animations.server.publish_geometry",
+                        lambda blob, **_: published.append(blob) or f"/geometry/{len(published)}")
+    monkeypatch.setattr("app.assets.animations.server.release_geometry", lambda url: None)
+    sessions = animations.AnimationSessions()
+    if scenario == "effect":
+        # The component loses the sequence its clip's unsupported effect plays; that effect
+        # and the socketless pet (while the root moves) are reported; the particles spawn
+        # no mesh and are not props.
+        assert report["skipped_props"] == [
+            dict(kind="blueprint", source=prop, reason="No clip has a paired animation for the prop."),
+            dict(kind="effect", source=loose_model, clips=["Clip01"], reason="The clip moves its root when the effect spawns."),
+            dict(kind="effect", source=claim_model, clips=["Clip01"],
+                 reason="The effect mesh model has settings the viewer does not support: HideFrames.")]
+        [effect_prop] = props.values()
+        assert effect_prop["name"] == "Book01" and effect_prop["socket"] == 1 and effect_prop["bone_count"] == 2
+        # The book's own animation plays from its window's start, which the track records.
+        track = effect_prop["tracks"]["Clip01"]
+        assert {key: track[key] for key in ("frame_count", "duration", "start", "end")} == dict(
+            frame_count=2, duration=0.25, start=0.25, end=0.75)
+        values = np.frombuffer((output / "Animation" / track["file"]).read_bytes(), "<f4").reshape(2, 2, 7)
+        np.testing.assert_allclose(values[1, 1], [1, 0, 0, 0, 0, 0, 1], atol=1e-6)
+        catalog = sessions.catalog(str(root), "Character01", rig, lambda: True)
+        [served] = sessions.load_props(catalog["animation_session"])["props"]
+        assert served["tracks"]["clips"] == {"Clip01": dict(offset=0, frame_count=2, duration=0.25, start=0.25, end=0.75)}
+        sessions.clear()
         return
-    # Blueprint props replace the character's regular weapon.
-    assert report["weapon"] == dict(weapon_report, hidden="The character's blueprint props replace its weapon.")
+    assert report["skipped_props"] == []
     [blueprint_prop] = props.values()
     assert blueprint_prop["name"] == "Prop01"
     # The blueprint prop keeps its own skin, placed at its socket's rest transform.
@@ -1558,24 +1582,123 @@ def test_game_props_follow_game_configuration_sockets_learned_textures_and_paire
     assert blueprint_prop["socket"] == 1 and blueprint_prop["bone_count"] == 2
     assert np.frombuffer(data, "<f4", count=24).reshape(3, 8)[:, :3].tolist() == [[1, 2, 3], [2, 2, 3], [1, 2, 4]]
     assert np.frombuffer(data, "<u2", count=12, offset=96).tolist() == [1, 0, 0, 0] * 3
+    # The learned MainTex slot feeds the prop's own diffuse texture, written unchanged as sRGB BC7.
+    dds = (output / "Animation" / blueprint_prop["textures"]["diffuse"]["file"]).read_bytes()
+    assert dds[148:] == pixels[prop_texture] and struct.unpack_from("<I", dds, 128)[0] == 99
     # Its paired clip becomes per-frame socket-relative bone transforms.
     track = blueprint_prop["tracks"]["Clip01"]
     assert set(blueprint_prop["tracks"]) == {"Clip01"} and track["frame_count"] == 2 and track["duration"] == 1
     values = np.frombuffer((output / "Animation" / track["file"]).read_bytes(), "<f4").reshape(2, 2, 7)
     np.testing.assert_allclose(values, [[[0, 0, 0, 0, 0, 0, 1]] * 2, [[0, 0, 0, 0, 0, 0, 1], [1, 0, 0, 0, 0, 0, 1]]], atol=1e-6)
     # Serving publishes the geometry and one track blob for the session's clips.
-    shutil.copytree(output, asset, dirs_exist_ok=True)
-    published = []
-    monkeypatch.setattr("app.assets.animations.server.publish_geometry",
-                        lambda blob, **_: published.append(blob) or f"/geometry/{len(published)}")
-    monkeypatch.setattr("app.assets.animations.server.release_geometry", lambda url: None)
-    sessions = animations.AnimationSessions()
     catalog = sessions.catalog(str(root), "Character01", rig, lambda: True)
     [served] = sessions.load_props(catalog["animation_session"])["props"]
     assert served["socket"] == 1 and served["bone_count"] == 2
-    assert served["tracks"]["clips"] == {"Clip01": dict(offset=0, frame_count=2, duration=1)}
+    assert served["tracks"]["clips"] == {"Clip01": dict(offset=0, frame_count=2, duration=1, start=0, end=1)}
     assert published[-1] == values.tobytes() and served["tracks"]["length"] == len(values.tobytes())
     sessions.clear()
+
+
+MODEL01 = "Client/Content/Aki/Effect/DataAsset/DA_Mesh01"
+ABSOLUTE = "EAnimLinkMethod::Absolute"
+MESH_KEY = f"EffectModelSkeletalMesh_C'{MODEL01}.DA_Mesh01'"
+REFS = dict(SkeletalMeshRef=dict(ObjectPath=MESH + ".0"), AnimationRef=dict(ObjectPath=BASE + ".1"))
+
+
+@pytest.mark.parametrize("check,value,expected", [
+    # Notify windows start inside the clip, linked absolutely.
+    ("window", dict(start=0.25, duration=0.5, link=ABSOLUTE), (0.25, 0.75)),
+    ("window", dict(start=0.5, duration=1, link=ABSOLUTE), (0.5, 1.5)),
+    ("window", dict(start=1, duration=0.5, link=ABSOLUTE), None),
+    ("window", dict(start=0, duration=0.5, link="EAnimLinkMethod::Relative"), None),
+    # Groups list their mesh models with their play delays and the group's lifetime;
+    # other effect assets spawn none.
+    ("group", [dict(Type="EffectModelGroup_C", Properties=dict(StartTime=15.7, ContinuousLoop=True,
+                                                                EffectData=[dict(Key=MESH_KEY, Value=0.5)]))],
+     ([(MODEL01, 0.5)], (15.7, 0.0, 0.0), None)),
+    ("group", [dict(Type="EffectModelNiagara_C", Properties={})], ([], None, None)),
+    ("group", [dict(Type="EffectModelGroup_C", Properties=dict(Location=dict(bUseCurve=True), EffectData=[
+        dict(Key=MESH_KEY, Value=0.0)]))],
+     ([(MODEL01, 0.0)], (0.0, 0.0, 0.0), "The effect group has settings the viewer does not support: Location.")),
+    ("group", None, None),
+    # Mesh models play their named animation once; an unsupported model still names its
+    # mesh and animation, which its clip's effect then claims.
+    ("model", dict(REFS, StartTime=0.1, LoopTime=1, EndTime=1.2, ContinuousLoop=True, Looping=False),
+     ((MESH, BASE), (0.1, 1.0, 1.2), None)),
+    ("model", dict(REFS, Looping=True), ((MESH, BASE), None, "The effect mesh animation loops.")),
+    ("model", dict(REFS, HideFrames=2),
+     ((MESH, BASE), None, "The effect mesh model has settings the viewer does not support: HideFrames.")),
+    ("model", dict(SkeletalMeshRef=dict(ObjectPath=MESH + ".0")),
+     (None, None, "The effect mesh model names no character mesh and animation.")),
+    # The mesh plays after its delay and hides when its group or model lifetime ends:
+    # by itself without a loop, at the stop when the notify stops it at once, else after
+    # playing out its lifetime from its time wrapped into the loop; never after the clip.
+    ("visible", (dict(start=1, duration=4, faster_stop=True), 0.5, (0, 1, 0), (0, 1, 0)), (1.5, 5.0)),
+    ("visible", (dict(start=1, duration=4, faster_stop=True), 0, (2, 0, 0), (0, 1, 0)), (1.0, 3.0)),
+    ("visible", (dict(start=1, duration=4, faster_stop=False), 0, (0, 0.25, 0.4), (0, 1, 1)), (1.0, 5.65)),
+    ("visible", (dict(start=1, duration=4.1, faster_stop=False), 0, (0, 1, 0.5), (0.5, 1, 0)), (1.0, 5.5)),
+    ("visible", (dict(start=1, duration=8.5, faster_stop=False), 0, (0, 1, 2), (0, 1, 2)), (1.0, 10.0)),
+    ("visible", (dict(start=1, duration=1, faster_stop=True), 1, (0, 1, 0), (0, 1, 0)), None),
+])
+def test_effect_props_follow_the_game_effect_lifetimes(check, value, expected):
+    from app.assets.game_extract import wuwa_effect_props
+
+    def run():
+        if check == "window":
+            return wuwa_effect_props.window(value, 1)
+        if check == "group":
+            return wuwa_effect_props.mesh_models(value)
+        if check == "model":
+            return wuwa_effect_props.mesh_model([dict(Type="EffectModelSkeletalMesh_C", Properties=value)])
+        notify, delay, group, model = value
+        return wuwa_effect_props.visible(dict(notify, link=ABSOLUTE), 10, delay, group, model)
+
+    if expected is None:
+        with pytest.raises(ValueError):
+            run()
+    else:
+        result = run()
+        assert (pytest.approx(result) if check == "visible" else result) == expected
+
+
+@pytest.mark.parametrize("socket,attached,start,expected", [
+    # Without a socket: the mesh's origin, while the root rests at spawn.
+    (None, True, 0, ("fixed", "origin")),
+    (None, True, 1.5, "The clip moves its root when the effect spawns."),
+    # Attached: follows the socket. Placed: the socket's world at spawn, even while it moves later.
+    ("Bone01", True, 0, ("socket", 1)),
+    ("Bone01", False, 0, ("fixed", "bone")),
+    ("Bone01", False, 0.5, "The effect spawns while its socket moves between frames."),
+    ("Bone03", True, 0, "The effect socket is not a unique bone of the verified rig."),
+])
+def test_effect_placement_reproduces_the_notify_attachment(tmp_path, socket, attached, start, expected):
+    from app.assets.game_extract import wuwa_effect_props
+
+    rig = dict(bones=[dict(name="Root", parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
+                      dict(name="Bone01", parent=0, translation=[0, 0, 1], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
+                      dict(name="Bone02", parent=0, translation=[0, 1, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])])
+    frames = np.zeros((4, 3, 7), "<f4")
+    frames[..., 6] = 1
+    frames[:, 1, 2] = [1, 2, 3, 4]  # Bone01 rises; Bone02 stays.
+    frames[:, 2, 1] = 1
+    frames[2:, 0, 0] = 2  # The root moves from the third frame.
+    (tmp_path / "Clip01.bin").write_bytes(frames.tobytes())
+    (tmp_path / "Clip01.json").write_text(json.dumps(dict(layout="frame-major-tq-f32le", frame_count=4, bone_count=3,
+                                                          duration=3, data_file="Clip01.bin")))
+    notify = dict(socket=socket, attached=attached, start=start, settings=[])
+    use = dict(clip="Clip01", notify=notify)
+    poses = wuwa_effect_props._Poses(tmp_path, rig)
+    try:
+        kind, where = wuwa_effect_props.placement(use, ["Root", "Bone01", "Bone02"], poses)
+    except ValueError as error:
+        assert str(error) == expected
+        return
+    if expected[1] == "origin":
+        assert kind == "fixed" and np.allclose(where, np.eye(4))
+    elif expected[1] == "bone":
+        assert kind == "fixed" and np.allclose(where[:3, 3], [0, 0, 1])
+    else:
+        assert (kind, where) == expected
 
 
 @pytest.mark.parametrize("sequences,expected", [

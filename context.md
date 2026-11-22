@@ -1109,11 +1109,10 @@ of documentation, comments and tests; use portable fixtures instead.
   WuWa AES keys at build time and verify them with the runtime manifest. Extraction
   needs no network access and never downloads or updates keys at runtime. A game
   update may require a new viewer build with updated keys or parser support.
-  Expose only package search/folders, mesh/property and animation export, plus two
-  narrow reads for weapon props: one `ConfigDB/db_*.db` file copied unchanged, and one
-  Texture2D's stored top mip from a quality-tier folder (`HD`/`UHD` beside `Paks`),
-  mounted lazily as its own provider so it never changes package resolution, without
-  image decoding. Keep one mounted provider
+  Expose only package search/folders, mesh/property and animation export, plus one
+  narrow read for prop textures: one Texture2D's stored top mip from a quality-tier
+  folder (`HD`/`UHD` beside `Paks`), mounted lazily as its own provider so it never
+  changes package resolution, without image decoding. Keep one mounted provider
   per job, export only into private staging, and terminate it before staging
   cleanup on completion, failure or cancellation. Monitor the native work
   directory before commands, while awaiting responses and on completion; exceeding
@@ -1193,45 +1192,24 @@ of documentation, comments and tests; use portable fixtures instead.
   (one per end, hard cuts, each clip once), always labeled `(by name)`, listed after
   authored timelines and counted as `name_sequences`. Names never pair, identify or
   admit clips, and a stem with several starts or loops is skipped.
-- WuWa extraction also exports the character's weapon as playback props
-  (`Animation/Props/`, the shared `prop-v1` layout and manifest `props`, served and
-  played like ZZZ props). Captures never draw weapons; the game attaches separate
-  weapon models to battle sockets. The weapon is a `CDT_ModelConfig` weapon model whose
-  developer description tags it as the signature weapon (`<name>专武`; skin and
-  deprecated variants excluded) of a name that a model row under the verified
-  character folder carries exactly, or that leads a skin row's description
-  (`<name>…皮肤…`, as when the base row uses another name). Intentional exception to name-free proof, since
-  no game data links a character to its signature weapon: without a match, a
-  mesh-seeded deterministic five-star weapon of the character's type is used. The
-  type comes only from `db_role` roleinfo rows whose model is one of the verified
-  mesh's model rows and whose starter weapon id encodes the row's own type. A
-  weapon's models and their order come from `db_weapon` weaponconf (the list must
-  contain the item), else the paired model at id + 100000. Model i attaches to
-  battle socket i; all of the verified mesh's model rows with sockets must agree on
-  that prefix, and the socket must be a unique rig bone. Each material section is one
-  rigid prop at the socket's rest world, fully weighted to that bone, with native
-  normals and triangle order (reversed for a mirrored socket) and V flipped like every
-  mesh the viewer draws, captured parts included. The weapon rests in the first frame
-  of the one sequence its anim blueprint (`动画蓝图`) plays directly, on the weapon's
-  skeleton (such as a closed blade with its strings folded); without exactly one such
-  sequence, or when it cannot be read, it keeps its bind pose. Textures try the HD tier, then UHD; material parameters are
-  learned per extraction as for ZZZ (a parameter takes a role only when its top mip is
-  byte-identical to a captured texture of that role on a proven body section, with no
-  competing parameter or role) and read from each weapon section's own material; the
-  top mip is written unchanged as a single-mip DX10 DDS. ConfigDB FlatBuffer rows are
-  read by fixed field numbers with bounds checks (roleinfo 23/42/43, weaponconf 7); a
-  changed layout yields no type or the id + 100000 pairing, never an unchecked value.
-  A character with blueprint props fights with them, so its regular weapon is then
-  left out (the report's `weapon` says `hidden`). Weapon and blueprint props fail
-  independently; failures never block clips
-  (`prop_error`, `skipped_props`, per-prop `texture_error`); the report's `weapon`
-  records the choice, models, sockets and tier. A prop's id covers its geometry and
-  its animation fields, so equal geometry moving differently stays two props.
-  Game data is not a reason to hide the regular weapon: `weaponhideconfig` only lists
-  gameplay states (climbing, dodging, sprinting…) during which it hides.
+- WuWa extraction exports a prop only with evidence of both its attachment and its
+  timing: the animated blueprint and effect props below (`Animation/Props/`, the shared `prop-v1`
+  layout and manifest `props`, served and played like ZZZ props). The character's
+  regular weapon is not exported: the game attaches weapon models to battle sockets,
+  but nothing extraction reads says when the weapon is drawn, so showing it would be a
+  guess (always on hand); do not add it back from model descriptions, ConfigDB weapon
+  tables or deterministic picks. Prop textures try the HD tier, then UHD; material
+  parameters are learned per extraction as for ZZZ (a parameter takes a role only when
+  its top mip is byte-identical to a captured texture of that role on a proven body
+  section, with no competing parameter or role) and read from each prop section's own
+  material; the top mip is written unchanged as a single-mip DX10 DDS, and V flips like
+  every mesh the viewer draws. Prop failures never block clips (`prop_error`,
+  `skipped_props`, per-prop `texture_error`). A prop's id covers its geometry and its
+  animation fields, so equal geometry moving differently stays two props.
 - WuWa blueprint props are animated: a character blueprint's construction-script
   component (`SCS_Node` under `CharacterMesh0` with an `AttachToName` socket, its mesh
-  from the most derived component template; weapon cases excluded; no relative offset)
+  from the most derived component template; weapon cases excluded, since they hold the
+  regular weapon; no relative offset)
   that the character's notifies show while the game plays the prop's own animation
   (such as a character's scissors). Its geometry keeps its own skin (joints index its
   own skeleton, ≤ 256 bones) placed at the socket's rest world. The prop's animation
@@ -1244,14 +1222,57 @@ of documentation, comments and tests; use portable fixtures instead.
   `prop-track-v1` track: per frame and prop bone, the asset-space transform (xyz
   translation, xyzw quaternion) relative to the socket's rest pose, which must be
   rigid. A prop sequence on another reference pose plays its authored tracks over
-  its skeleton's reference, as clips do. Manifest props then carry `socket`, `bone_count` and `tracks` (clip id ->
-  file, sha256, frame_count, duration). Serving checks every track and publishes one
-  fresh single-use blob of the session's clips per load; a prop without a track for
-  any session clip is left out. Playback applies the socket's clip transform on top of
-  the track sampled at the clip time (a crossfade hands over halfway) and shows the
-  prop only while its paired animation runs: other clips, past the track's end, at
+  its skeleton's reference, as clips do. Manifest props then carry `socket`,
+  `bone_count` (the socket a rig bone, or null for an effect at the mesh's origin) and
+  `tracks` (clip id -> file, sha256, frame_count, duration, and
+  optionally the clip window `start`/`end` in seconds, both or neither; without them
+  the window runs from 0 to the track's duration). Serving checks every track and
+  publishes one fresh single-use blob of the session's clips per load, with each
+  clip's window; a prop without a track for any session clip is left out. Playback
+  applies the socket's clip transform on top of the track sampled at the clip time
+  minus the window's start, holding the last frame (a crossfade hands over halfway),
+  and shows the prop only inside its window: other clips, outside the window, at
   rest, in manual posing and after Stop hide it. An abandoned or failed prop load
   disposes what it already built.
+- WuWa effect props are meshes a clip's own effect notify spawns, reproduced as the
+  game's own effect scripts run them (`AnimNotifyStateEffect`, `EffectModelGroupSpec`,
+  `EffectModelSkeletalMeshSpec`, `EffectSpec`, `EffectLifeTime`). Each clip sequence's
+  `AnimNotifyStateEffect_C` notify states are kept by `pipeline.sequence` as facts
+  (effect asset, `SocketName`, `Attached`, `FasterStop`, link time, duration, other
+  settings). An effect group (`EffectModelGroup_C`) lists effect models with play
+  delays (`Value`); each `EffectModelSkeletalMesh_C` names its mesh
+  (`SkeletalMeshRef`) and the animation it plays once (`AnimationRef`), which may live
+  in another folder on a skeleton with the same bones (such as a book). The mesh,
+  animation, placement and timing all come from the game data; nothing pairs by name,
+  and other effect assets spawn no prop. An animation a clip's effect plays belongs to
+  that effect: blueprint name pairing never claims it for that clip (such as the UI
+  clips' scissors or an idle action's bottle), even when the viewer cannot reproduce
+  the effect; the prop is then absent from that clip rather than misplaced.
+  Placement: an attached effect follows its socket (a unique rig bone); `Attached`
+  defaults to on (cooked notifies store only values differing from the default, and
+  across every body type they store it only as off); one with it off is placed once
+  at its socket's clip-pose world at spawn (manifest `socket` null, the geometry and
+  track baked at that world); one without a socket is placed at the character mesh's
+  origin, accepted only while the clip's root bones rest at spawn, so that origin does
+  not depend on whether the game moves the character by root motion. Timing: the
+  effect spawns at the notify's absolute start inside the clip; the mesh plays after
+  its group delay; each level (group, model) has a three-stage lifetime
+  (`StartTime`/`LoopTime`/`EndTime`) that, without a loop, ends by itself after their
+  sum and, with one, lives until the notify ends and then plays out `Start + Loop +
+  End` minus its time wrapped into the loop, unless the notify stops it at once
+  (`FasterStop`, on by default). The mesh hides when either level ends and never
+  after the clip; `ContinuousLoop` only concerns particle groups. Supported notify
+  settings are the effect, socket, `Attached`, `FasterStop`, time sync,
+  `EffectSlotName` (the instance a later effect replaces), inner-notify ending on stop
+  and skill-end handling (the viewer's clip has no skill); offsets, follow rules
+  (`NotRealAttach`), tag gates, looping mesh animations and other group or model
+  settings are reported in `skipped_props` (`kind` `effect`, the source, its clips and
+  the reason), never approximated. The animation must convert onto the mesh's own
+  bones (on another reference pose, over its own skeleton's reference). One mesh at
+  one placement is one prop with a track per clip; a clip spawning it several times
+  shows several instances (the n-th spawn, by animation, is the n-th instance). Tracks
+  are baked like blueprint props and carry the clip window `start`/`end` (play to
+  hide); the animation plays from the window's start and holds its last frame.
 - ZZZ uses a separate minimal native reader built from pinned original AnimeStudio
   source and its rebuilt ZZZ V2 ACL decoder, plus the same pinned Oodle decoder as
   WuWa. No GUI, Ultimate fork, media exporters or updater is bundled. The shared

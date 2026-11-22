@@ -4,15 +4,16 @@ A character blueprint can declare extra skeletal mesh components on its construc
 script (an ``SCS_Node`` whose parent is ``CharacterMesh0`` and whose ``AttachToName``
 names a socket); the character's notifies show them while the game plays the prop's
 own animation, such as a character's scissors during attacks. A derived blueprint may
-override a component's template (its mesh). Weapon cases belong to the weapon props
-and are excluded, and only components without their own relative offset are
-supported.
+override a component's template (its mesh). Weapon cases are excluded: they hold the
+regular weapon, which is not exported. Only components without their own relative
+offset are supported.
 
 The prop's animation for a clip is the prop sequence in the prop mesh's folder, on the
 prop's own skeleton, named after the clip exactly or with a ``_<suffix>`` (the longest
 matching clip name wins), sampled at the same frame interval and no longer than the
 clip, since the prop plays from the clip's start. A clip paired with two sequences is
-never guessed between. Intentional exception to name-free proof, like ribbon layers'
+never guessed between, and a sequence one of the clip's own effects plays belongs to
+that effect (see wuwa_effect_props), never to the component. Intentional exception to name-free proof, like ribbon layers'
 ``Rib_`` names: the game pairs them in its animation blueprints. Each pair is baked
 into per-frame prop bone transforms relative to the socket (``prop-track-v1``), and a
 prop shows only while its paired animation runs.
@@ -208,59 +209,6 @@ def convert(client, package, item, bones, skeleton, cache):
     return frames, binary
 
 
-def rest_sequence(client, blueprint, skeleton):
-    """(package, metadata) of the single sequence an anim blueprint plays directly, on
-    ``skeleton``; None otherwise.
-
-    A weapon's anim blueprint loops its resting animation (such as a closed blade),
-    which the game shows instead of the mesh's bind pose.
-    """
-    if not blueprint:
-        return None
-    exports = document(client.export("json", blueprint, client.work / "weapon-blueprints")[0], 16 * 1024 * 1024)
-    found, stack = set(), [exports]
-    while stack:
-        value = stack.pop()
-        if isinstance(value, dict):
-            name = value.get("ObjectName")
-            if isinstance(name, str) and name.startswith("AnimSequence'"):
-                found.add(package_name(value.get("ObjectPath")))
-            stack.extend(value.values())
-        elif isinstance(value, list):
-            stack.extend(value)
-    found.discard("")
-    if len(found) != 1:
-        return None
-    package = next(iter(found))
-    item = sequence(client.export("json", package, client.work / "weapon-sequences")[0])
-    properties = item.get("Properties", {}) if item else {}
-    if package_name(properties.get("Skeleton", {}).get("ObjectPath")) != skeleton or type(properties.get("NumFrames")) is not int:
-        return None
-    return package, item
-
-
-def posed(client, mesh, package, item, skeleton):
-    """A copy of ``mesh`` skinned to the first frame of a sequence (positions and normals)."""
-    bones = mesh["bones"]
-    _frames, binary = convert(client, package, item, bones, skeleton, {})
-    world = _poses(binary, 1, bones)[0]
-    skin = world @ np.linalg.inv(np.asarray(rest_worlds(bones, affine=True)))
-    positions = np.asarray(mesh["positions"], dtype=float)
-    normals = np.asarray(mesh.get("normals") or np.zeros_like(positions), dtype=float)
-    blended = np.zeros((len(positions), 4, 4))
-    for vertex, influences in enumerate(mesh["weights"]):
-        total = sum(weight for _bone, weight in influences)
-        if not total:
-            raise ValueError("The weapon has unweighted vertices.")
-        for bone, weight in influences:
-            blended[vertex] += skin[bone] * (weight / total)
-    placed = np.einsum("vij,vj->vi", blended[:, :3, :3], positions) + blended[:, :3, 3]
-    turned = np.einsum("vij,vj->vi", np.linalg.inv(np.swapaxes(blended[:, :3, :3], -1, -2)), normals)
-    if not np.isfinite(placed).all() or not np.isfinite(turned).all():
-        raise ValueError("The weapon pose is invalid.")
-    return {**mesh, "positions": [tuple(row) for row in placed], "normals": [tuple(row) for row in turned]}
-
-
 def bake(binary, frames, bones, anchor):
     """``PROP_TRACK_LAYOUT`` bytes: per frame and prop bone, the asset-space transform
     (xyz translation, xyzw quaternion) that moves the bone's rest skin to its pose,
@@ -288,8 +236,11 @@ def skeleton_of(exports):
     return package_name(skeleton.get("ObjectPath")) if isinstance(skeleton, dict) else ""
 
 
-def _tracks(client, mesh, skeleton, folder, clips, anchor, writer, cancel):
-    """Clip id -> written track entry for every paired prop sequence of one prop mesh."""
+def _tracks(client, mesh, skeleton, folder, clips, anchor, writer, cancel, claimed=frozenset()):
+    """Clip id -> written track entry for every paired prop sequence of one prop mesh.
+
+    A (clip id, sequence) pair in ``claimed`` is played by one of the clip's effects instead.
+    """
     packages = [package for package in list_packages(client, "AnimSequence", folder, cancel)][:MAX_SEQUENCES]
     if not packages:
         return {}
@@ -306,7 +257,8 @@ def _tracks(client, mesh, skeleton, folder, clips, anchor, writer, cancel):
             continue
         items[package] = item
         sequences[package] = (package.rsplit("/", 1)[-1], properties["NumFrames"], float(properties["SequenceLength"]))
-    paired = pairs(sequences, clips)
+    paired = {clip_id: package for clip_id, package in pairs(sequences, clips).items()
+              if (clip_id, package) not in claimed}
     tracks, references, baked = {}, {}, {}
     for clip_id, package in sorted(paired.items()):
         check_cancelled(cancel)
@@ -327,8 +279,11 @@ def _tracks(client, mesh, skeleton, folder, clips, anchor, writer, cancel):
     return tracks
 
 
-def extract(client, own, names, worlds, clips, writer, cancel):
-    """Add the blueprint props of the verified mesh's model rows (``own``) to ``writer``."""
+def extract(client, own, names, worlds, clips, writer, cancel, claimed=frozenset()):
+    """Add the blueprint props of the verified mesh's model rows (``own``) to ``writer``.
+
+    ``claimed`` (clip id, sequence) pairs belong to the clips' effects and never pair.
+    """
     found = components(client, {row["blueprint"] for row in own.values() if row["blueprint"]}, cancel)
     for variable, choices in sorted(found.items())[:MAX_COMPONENTS]:
         check_cancelled(cancel)
@@ -342,11 +297,11 @@ def extract(client, own, names, worlds, clips, writer, cancel):
             if names.count(socket) != 1:
                 raise ValueError("The prop socket is not a unique bone of the verified rig.")
             anchor = worlds[names.index(socket)]
-            mesh, exports, parts = mesh_parts(client, package, None, anchor)
+            mesh, exports, parts = mesh_parts(client, package, anchor)
             if not 0 < len(mesh["bones"]) <= MAX_PROP_BONES:
                 raise ValueError("The prop skeleton is unsupported.")
             folder = package.split("/Model/", 1)[0] if "/Model/" in package else package.rsplit("/", 1)[0]
-            tracks = _tracks(client, mesh, skeleton_of(exports), folder, clips, anchor, writer, cancel)
+            tracks = _tracks(client, mesh, skeleton_of(exports), folder, clips, anchor, writer, cancel, claimed)
             if not tracks:
                 raise ValueError("No clip has a paired animation for the prop.")
         except ExtractionCancelled:

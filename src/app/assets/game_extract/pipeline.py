@@ -54,6 +54,54 @@ def exported_file(item, directory, extension):
 
 
 SEQUENCE_PROPERTIES = ("Skeleton", "AdditiveAnimType", "RefPoseType", "NumFrames", "SequenceLength")
+# Notify states that spawn an effect (which may be an animated mesh) for their window.
+EFFECT_NOTIFY = "AnimNotifyStateEffect_C"
+# Effect notify settings prop extraction reproduces (see wuwa_effect_props): the
+# effect, its socket and attachment, its stop, time sync, its replacement slot, its inner
+# notifies and what happens when a skill ends (the viewer's clip has no skill). Any other
+# one (an offset, a follow rule, a tag gate...) is reported, never approximated.
+EFFECT_SETTINGS = frozenset(("EffectDataAssetRef", "SocketName", "Attached", "FasterStop", "SyncEventTimeToEffectTime",
+                             "SyncEventTimeContinuous", "EffectSlotName", "EndInnerAnimNotifyStatesOnStop",
+                             "DetachWhenSkillEnd", "WhenSkillEnd", "exportIndex", "CurrentTimeLength"))
+MAX_EFFECT_NOTIFIES = 64
+
+
+def effect_notifies(row, rows):
+    """The effect notify states of one exported sequence ``row`` as plain facts:
+    ``[{effect, socket, attached, faster_stop, start, duration, link, settings}]``.
+    Both flags default to on: ``FasterStop`` in the notify class, and ``Attached`` in its
+    native base, which cooked notifies only ever turn off (only values differing from the
+    default are stored, and no notify stores it on). ``settings`` lists the notify
+    object's other (or unreadable) property names. Nothing here is validated."""
+    objects = {}
+    for item in rows:
+        if isinstance(item, dict) and item.get("Type") == EFFECT_NOTIFY and isinstance(item.get("Name"), str):
+            # A name exported twice is never guessed between.
+            objects[item["Name"]] = None if item["Name"] in objects else item
+    notifies = (row.get("Properties") or {}).get("Notifies")
+    found = []
+    for notify in notifies if isinstance(notifies, list) else []:
+        state = notify.get("NotifyStateClass") if isinstance(notify, dict) else None
+        name = state.get("ObjectName") if isinstance(state, dict) else None
+        if not isinstance(name, str) or not name.startswith(EFFECT_NOTIFY + "'"):
+            continue
+        target = objects.get(name[len(EFFECT_NOTIFY) + 1:].rstrip("'").rsplit(":", 1)[-1])
+        properties = target.get("Properties") if isinstance(target, dict) else None
+        properties = properties if isinstance(properties, dict) else {}
+        reference, socket = properties.get("EffectDataAssetRef"), properties.get("SocketName")
+        attached, faster = properties.get("Attached", True), properties.get("FasterStop", True)
+        settings = sorted(set(properties) - EFFECT_SETTINGS) if target else ["(unreadable)"]
+        settings += [key for key, value in (("Attached", attached), ("FasterStop", faster))
+                     if value is not None and not isinstance(value, bool)]
+        found.append(dict(
+            effect=package_name(reference.get("AssetPathName")) if isinstance(reference, dict) else "",
+            socket=socket if isinstance(socket, str) and socket not in ("", "None") else None,
+            attached=attached is not False, faster_stop=faster is not False,
+            start=notify.get("LinkValue"), duration=notify.get("Duration"), link=notify.get("LinkMethod"),
+            settings=sorted(settings)))
+        if len(found) == MAX_EFFECT_NOTIFIES:
+            break
+    return found
 
 
 def sequence(file, morph_names=(), *, skeleton=None):
@@ -72,7 +120,7 @@ def sequence(file, morph_names=(), *, skeleton=None):
         slim["TrackToSkeletonMapTable"] = [dict(BoneTreeIndex=row["BoneTreeIndex"]) for row in table
                                            if isinstance(row, dict) and "BoneTreeIndex" in row]
     return dict(Type="AnimSequence", Name=matches[0].get("Name"), Properties=slim,
-                MorphWeights=sample_curves(matches[0], morph_names))
+                MorphWeights=sample_curves(matches[0], morph_names), Effects=effect_notifies(matches[0], rows))
 
 
 def animation_reference(client, skeleton, rig):
@@ -629,6 +677,9 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     if sum(file.stat().st_size for file in library.rglob("*") if file.is_file()) > 2 * 1024 ** 3:
         raise ValueError("The extracted animation library exceeds its size limit.")
     converted = {item["source"]: (item["id"], entries[item["id"]]["duration"]) for item in provenance}
+    # Each clip's own effect notify windows, for props the game spawns while they run.
+    clip_effects = {item["id"]: (entries[item["id"]]["duration"], bases[item["source"]].get("Effects") or [])
+                    for item in provenance}
     sequences, skipped_sequences, sequence_error = [], [], None
     try:
         montages = sorted(list_packages(client, "AnimMontage", character_root, cancel))[:montage_sequences.MAX_MONTAGES]
@@ -662,9 +713,9 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         sequences.append(item)
         total += len(item["steps"])
         name_sequences += 1
-    # Weapons the capture never drew; a failure leaves the clips unaffected.
+    # Props the capture never drew, shown only while the clips that attach and time them play.
     from . import wuwa_props
-    props, skipped_props, weapon, prop_error = [], [], None, None
+    props, skipped_props, prop_error = [], [], None
     # The Asset's own clips by source name (a skin folder may convert a name again), for
     # props whose animations pair with them.
     own_clips = collections.defaultdict(list)
@@ -672,13 +723,13 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         own_clips[item["source"].rsplit("/", 1)[-1]].append(
             (item["id"], existing[item["id"]]["frame_count"], entries[item["id"]]["duration"]))
     try:
-        props, skipped_props, weapon = wuwa_props.extract(
+        props, skipped_props = wuwa_props.extract(
             client, Path(root), record, captured, {index: palette_by_component[index] for index in proven if index not in companions},
-            mesh_package, mesh_document, rig, character_root, own_clips, library, cancel)
+            mesh_package, mesh_document, rig, own_clips, clip_effects, library, cancel)
     except ExtractionCancelled:
         raise
     except (ValueError, KeyError, TypeError, IndexError, OSError) as error:
-        prop_error = str(error) if isinstance(error, ValueError) else "The weapon props could not be extracted."
+        prop_error = str(error) if isinstance(error, ValueError) else "The props could not be extracted."
     manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()), sequences=sequences,
                     runtime_bones=animation_keys.runtime_bones(rig, existing.values()),
                     shared_layers=layers, shared_layer_masks=layer_masks, layer_bones=sorted(layer_bones))
@@ -698,6 +749,6 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                   shared_layers=len(layers),
                   props=[dict(id=prop["id"], name=prop["name"], source=prop["source"], textures=sorted(prop.get("textures", {})),
                               **({"texture_error": prop["texture_error"]} if "texture_error" in prop else {})) for prop in props],
-                  skipped_props=skipped_props, weapon=weapon, **({"prop_error": prop_error} if prop_error else {}))
+                  skipped_props=skipped_props, **({"prop_error": prop_error} if prop_error else {}))
     (output / "RigExtraction.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report, fingerprints

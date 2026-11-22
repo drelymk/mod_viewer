@@ -20,7 +20,9 @@ import {
 // Rigid props are skinned to rig bones. Animated props have their own skeleton: per
 // paired clip, a track gives each prop bone's asset-space transform relative to its
 // socket's rest pose, and the socket's clip transform is applied on top. An animated
-// prop shows only while its paired animation runs.
+// prop shows only inside its track's clip window (start..end seconds, by default the
+// track's own duration from the clip's start); its animation plays from the window's
+// start and holds its last frame.
 const LAYOUT = 'prop-v1';
 const TRACK_LAYOUT = 'prop-track-v1';
 // Per vertex: f32 position/normal/uv (32 bytes), u16x4 joints, f32x4 weights; then u32 indices.
@@ -107,21 +109,24 @@ function disposeProp({ mesh, textured }) {
 // Validated per-clip track views of an animated prop, or null when unusable.
 function propTracks(descriptor, buffer) {
   const bones = descriptor.bone_count;
-  if (!Number.isInteger(descriptor.socket) || !Number.isInteger(bones) || bones < 1) return null;
+  if ((descriptor.socket !== null && !Number.isInteger(descriptor.socket)) || !Number.isInteger(bones) || bones < 1)
+    return null;
   const tracks = new Map();
   for (const [clip, track] of Object.entries(descriptor.tracks.clips || {})) {
-    const { offset, frame_count: frames, duration } = track || {};
+    const { offset, frame_count: frames, duration, start = 0, end = duration } = track || {};
     const size = frames * bones * TRACK_FLOATS * 4;
     if (
       !Number.isInteger(offset) ||
       !Number.isInteger(frames) ||
       frames < 2 ||
       !(duration > 0) ||
+      !(start >= 0) ||
+      !(end > start) ||
       offset % 4 ||
       offset + size > buffer.byteLength
     )
       return null;
-    tracks.set(clip, { values: new Float32Array(buffer, offset, size / 4), frames, duration });
+    tracks.set(clip, { values: new Float32Array(buffer, offset, size / 4), frames, duration, start, end });
   }
   return tracks.size ? tracks : null;
 }
@@ -134,9 +139,9 @@ const SAMPLE = {
   matrix: new Matrix4(),
 };
 
-// The prop bones' socket-relative transforms at a track time, set onto the skeleton.
+// The prop bones' socket-relative transforms at a clip time, set onto the skeleton.
 function poseTrack(prop, track, socket, time) {
-  const position = Math.max(0, Math.min(1, time / track.duration)) * (track.frames - 1);
+  const position = Math.max(0, Math.min(1, (time - track.start) / track.duration)) * (track.frames - 1);
   const first = Math.floor(position);
   const second = Math.min(first + 1, track.frames - 1);
   const weight = position - first;
@@ -165,7 +170,7 @@ export function createAnimationProps({ loadProps, getScene, requestRender, mater
     if (!transforms) return false;
     if (!prop.animation) return true;
     const track = playback && prop.animation.tracks.get(playback.clip);
-    return !!track && playback.time <= track.duration + 1e-6;
+    return !!track && playback.time >= track.start - 1e-6 && playback.time <= track.end + 1e-6;
   }
   function update() {
     const scene = getScene();
@@ -175,7 +180,8 @@ export function createAnimationProps({ loadProps, getScene, requestRender, mater
         continue;
       }
       if (prop.animation) {
-        const socket = transforms.get(prop.animation.socket) || IDENTITY;
+        // A null socket is the character mesh's origin.
+        const socket = (prop.animation.socket !== null && transforms.get(prop.animation.socket)) || IDENTITY;
         poseTrack(prop, prop.animation.tracks.get(playback.clip), socket, playback.time);
       } else {
         prop.palette.forEach((bone, slot) => {

@@ -147,13 +147,8 @@ internal sealed class GameSession(string paks, string work) : IDisposable
         }
         if (operation == "search") return Search(request);
         var kind = (string?)request["kind"];
-        if (kind is not ("json" or "mesh" or "anim" or "texture" or "config")) throw new InvalidDataException();
+        if (kind is not ("json" or "mesh" or "anim" or "texture")) throw new InvalidDataException();
         var destination = Contract.Destination(work, (string?)request["outDir"]);
-        if (kind == "config")
-        {
-            if (operation != "export") throw new InvalidDataException();
-            return new { rootFiles = new[] { await ExportConfig((string?)request["path"], destination) } };
-        }
         if (kind == "texture")
         {
             if (operation != "export") throw new InvalidDataException();
@@ -211,20 +206,6 @@ internal sealed class GameSession(string paks, string work) : IDisposable
         foreach (var extension in new[] { ".uasset", ".umap" })
             if (source.TryGetGameFile(path + extension, out var file)) return source.LoadPackage(file);
         throw new FileNotFoundException();
-    }
-
-    // One game configuration database, copied unchanged. Only ConfigDB/db_*.db files qualify.
-    private async Task<string> ExportConfig(string? path, string destination)
-    {
-        const string prefix = "Client/Content/Aki/ConfigDB/db_";
-        if (path is null || !path.StartsWith(prefix, StringComparison.Ordinal) || !path.EndsWith(".db", StringComparison.Ordinal)
-            || path.IndexOf('/', prefix.Length) >= 0) throw new InvalidDataException();
-        Contract.Package(path[..^3]);
-        if (!provider!.TryGetGameFile(path, out var file) || file.Size is <= 0 or > 64 * 1024 * 1024) throw new FileNotFoundException();
-        var target = Contract.Destination(destination, Path.Combine(destination, path));
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        await File.WriteAllBytesAsync(target, file.Read());
-        return target;
     }
 
     // The stored top mip of one Texture2D, unchanged: no image decoding or conversion.

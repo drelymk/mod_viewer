@@ -225,7 +225,8 @@ _PROP_FILE = re.compile(r"Props/[0-9a-f]{32}\.bin")
 PROP_LAYOUT = "prop-v1"
 # Per vertex: f32 position/normal/uv record (32 bytes), u16x4 joints, f32x4 weights; then u32 indices.
 _PROP_VERTEX_BYTES = 56
-MAX_PROPS = 16
+# Each material section is one prop; geometry stays within the extractors' byte budgets.
+MAX_PROPS = 64
 MAX_PROP_VERTICES = 250000
 MAX_PROP_INDICES = 1500000
 _PROP_TEXTURE_FILE = re.compile(r"Props/[0-9a-f]{32}\.dds")
@@ -234,7 +235,9 @@ _PROP_TEXTURE_ROLES = ("diffuse", "light_map", "material_map", "normal_map")
 _MAX_PROP_TEXTURE_BYTES = 96 * 1024 * 1024
 # Animated props carry their own skeleton: per paired clip, frame-major f32 records of
 # each prop bone's asset-space transform (xyz translation, xyzw quaternion) relative to
-# its socket's rest pose; the socket's clip motion is applied on top.
+# its socket's rest pose; the socket's clip motion is applied on top. A track may carry
+# the clip window it shows in (``start``/``end`` seconds; default from 0 to its own
+# duration); its animation plays from the window's start and holds its last frame.
 PROP_TRACK_LAYOUT = "prop-track-v1"
 _PROP_TRACK_BYTES = 28
 MAX_PROP_BONES = 256
@@ -255,7 +258,7 @@ def pack_prop(positions, normals, texcoords, joints, weights, triangles):
 
 
 def _props(raw):
-    """The catalog's game props (weapons shown during playback); invalid data yields none."""
+    """The catalog's game props (shown during clip playback); invalid data yields none."""
     try:
         props = raw.get("props", [])
         if not isinstance(props, list) or len(props) > MAX_PROPS:
@@ -290,22 +293,37 @@ def _props(raw):
 
 
 def _prop_animation(prop):
-    """An animated prop's socket, skeleton size and clip tracks; {} for a rigid prop, None when invalid."""
+    """An animated prop's socket, skeleton size and clip tracks; {} for a rigid prop, None when invalid.
+
+    An animated prop's socket is a rig bone, or null for the character mesh's origin.
+    """
     socket, bones, tracks = prop.get("socket"), prop.get("bone_count"), prop.get("tracks")
     if tracks is None:
         return {} if socket is None and bones is None else None
-    if (type(socket) is not int or socket < 0 or type(bones) is not int or not 0 < bones <= MAX_PROP_BONES
+    if ((socket is not None and (type(socket) is not int or socket < 0)) or type(bones) is not int or not 0 < bones <= MAX_PROP_BONES
             or not isinstance(tracks, dict) or not 0 < len(tracks) <= MAX_PROP_TRACKS or any(
                 not isinstance(clip, str) or not _ID.fullmatch(clip) or not isinstance(track, dict)
                 or not isinstance(track.get("file"), str) or not _PROP_FILE.fullmatch(track["file"])
                 or not isinstance(track.get("sha256"), str) or not _DIGEST.fullmatch(track["sha256"])
                 or type(track.get("frame_count")) is not int or not 1 < track["frame_count"] <= 60000
                 or type(track.get("duration")) not in (int, float) or not 0 < track["duration"] <= 3600
+                or _prop_window(track) is None
                 for clip, track in tracks.items())):
         return None
     return dict(socket=socket, bone_count=bones, tracks={
-        clip: dict(file=track["file"], sha256=track["sha256"], frame_count=track["frame_count"], duration=track["duration"])
+        clip: dict(file=track["file"], sha256=track["sha256"], frame_count=track["frame_count"], duration=track["duration"],
+                   **({"start": track["start"], "end": track["end"]} if "start" in track else {}))
         for clip, track in tracks.items()})
+
+
+def _prop_window(track):
+    """A track's (start, end) clip window; None when invalid. Both or neither are given."""
+    if "start" not in track and "end" not in track:
+        return 0, track["duration"]
+    start, end = track.get("start"), track.get("end")
+    if type(start) not in (int, float) or type(end) not in (int, float) or not 0 <= start < end <= 3600:
+        return None
+    return start, end
 
 
 def _read_prop_tracks(directory, prop, clips):
@@ -324,7 +342,8 @@ def _read_prop_tracks(directory, prop, clips):
         if len(data) != size or hashlib.sha256(data).hexdigest() != track["sha256"] or not bounded(np.frombuffer(data, "<f4")):
             raise ValueError("The prop animation is incomplete or has changed.")
         blobs.append(data)
-        index[clip] = dict(offset=offset, frame_count=track["frame_count"], duration=track["duration"])
+        start, end = _prop_window(track)
+        index[clip] = dict(offset=offset, frame_count=track["frame_count"], duration=track["duration"], start=start, end=end)
         offset += size
     return b"".join(blobs), index
 
@@ -334,7 +353,7 @@ def _read_prop(directory, prop, bone_count):
 
     An animated prop's joints index its own skeleton and its socket a ``bone_count`` rig bone.
     """
-    if "tracks" in prop and prop["socket"] >= bone_count:
+    if "tracks" in prop and prop["socket"] is not None and prop["socket"] >= bone_count:
         raise ValueError("The prop does not match the loaded rig.")
     vertices, indices = prop["vertex_count"], prop["index_count"]
     size = vertices * _PROP_VERTEX_BYTES + indices * 4
