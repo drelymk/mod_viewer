@@ -1,618 +1,306 @@
 # 3DMigoto Mod Viewer
 
-3DMigoto Mod Viewer is a desktop app for opening character mods and inspecting
-them in 3D without launching the game. Select a mod folder and the app reads its
-active INIs, buffers, and texture bindings, reconstructs the model, and presents
-it in an interactive WebGPU viewport. Preview variants and supported animations,
-inspect textures and skin weights, pose the model, and stage INI or mesh edits.
+A desktop app for inspecting 3DMigoto character mods in 3D without launching the
+game. Pick a mod folder and the viewer reads its INIs, buffers and textures,
+rebuilds the model in a WebGPU viewport, and lets you preview toggles and
+animations, inspect textures and weights, pose the model, and stage INI or mesh
+edits that are written only when you click `Export`.
 
-It supports Zenless Zone Zero (ZZMI), Genshin Impact (GIMI), and Wuthering Waves
-(WWMI) mods, with conservative support for Honkai: Star Rail (SRMI) mods.
+Supports Zenless Zone Zero (ZZMI), Genshin Impact (GIMI) and Wuthering Waves
+(WWMI) mods, with conservative support for Honkai: Star Rail (SRMI).
 
 ![3DMigoto Mod Viewer](https://github.com/drelymk/mod_viewer/blob/main/media/3DMigoto%20Mod%20Viewer.gif)
 
+## Quick start
+
+- **Portable build:** run the executable on 64-bit Windows. It needs the
+  Microsoft Edge WebView2 Runtime (built into Windows 11, delivered to Windows 10
+  through Windows Update) and a WebGPU-capable GPU.
+- **From source:** see [Running from source](#running-from-source).
+
+Then click `Open Mod`, choose a mod folder, and drag in the viewport to look
+around. The UI is available in English, Simplified Chinese, Japanese, Korean,
+Spanish and Russian (`Settings` > `Language`); the steps below use the English
+labels.
+
 ## What the app can do
 
-The instructions below use the English UI labels. Open `Settings` in the top
-toolbar and use `Language` to switch between English, Simplified Chinese,
-Japanese, Korean, Spanish, and Russian. The portable build includes Export,
-Toggle editing, and mesh editing. Disabled-mod loading is hidden by default;
-source runs enable all features. See
-[Compatibility and limitations](#compatibility-and-limitations).
+### 1. Load a mod
 
-### 1. Open the app and load a mod
+- **Folder:** `Open Mod` and select the folder that holds the mod's INI, buffers
+  and textures. Builds that allow it show an `Open disabled mod` checkbox for
+  `DISABLED`-prefixed INIs.
+- **Archive:** the arrow beside `Open Mod` > `Open Archive…` previews a ZIP, 7z or
+  RAR without extracting it (7z/RAR need 7-Zip installed). Archive previews are
+  read-only.
+- **Import (GIMI):** the same menu's `Import Mod…` consolidates static variant
+  buffers into a shared, deduplicated layout for this session. The source files
+  are not changed, and Export is unavailable for imported mods.
+- **Mod Library:** open `Mod Library` on the left, click `+`, name a folder and
+  `Add` it. Click any mod or archive in the tree to load it; folder menus offer
+  `Open Folder`, `Edit` and `Remove`.
 
-1. Launch the portable executable, or follow [Running the app](#running-the-app)
-   to start from source.
-2. Click `Open Mod` and select the mod folder containing its INI, buffers, and
-   textures. If available in your build, enable the `Open disabled mod`
-   checkbox beside the button to preview a disabled mod.
-3. To preview a compressed mod, open the arrow beside `Open Mod` and choose
-   `Open Archive...`. Select a ZIP, 7z, or RAR file without manually extracting
-   it. ZIP works directly; 7z and RAR require an installed 7-Zip. Archive previews
-   are read-only: controls and diagnostics work, but changes cannot be exported
-   or saved back to the archive. Extract the mod to a folder to edit it.
-4. For quick access later, open `Mod Library` on the left and click `+` or
-   `Add Mod Folder`. Enter a name, use `Browse` to choose a folder, and click
-   `Add`. Expand folders with their arrows, then click a mod folder's name to
-   load it. Supported archives also appear in the library. The folder's menu
-   includes `Open Folder` to open its location in the file manager; registered
-   library roots also have `Edit` and `Remove` actions.
+To hide one INI of a multi-INI mod, right-click its header in `Meshes` and choose
+`Remove`. The viewer reloads without it and remembers the exclusion in
+`.mod_viewer.json` (the INI itself is untouched).
 
-### 2. Explore the model and its appearance
+### 2. Navigate and inspect
 
-1. Drag with the left mouse button to orbit, drag with the right mouse button
-   to pan, and scroll to zoom. Use `Reset`, `Turn`, or `Tilt` in the viewport
-   toolbar to adjust the view. Drag the navigation gizmo to orbit, click an
-   axis to snap to it, or use its toolbar button to show or hide the gizmo.
-2. Open `Meshes` on the left. Expand components and use the INI, component, or
-   mesh eye buttons to show or hide their meshes. `Reset mesh visibility`
-   restores visibility from the current controls. Right-click a mesh row or the
-   mesh in the viewport and choose `Rename` to change its viewer name; press
-   Enter to confirm or Escape to cancel.
-3. Click a mesh row or the model to select a mesh. Shift-click selects a range of
-   expanded rows in MESHES; Ctrl+Shift-click adds that range to the selection.
-   Ctrl-click toggles meshes in the selection, and Ctrl-drag in the viewport adds
-   meshes crossing the selection rectangle. Double-click a mesh row or the model
-   to frame it and open `Inspector`. Ctrl+A in MESHES selects all mesh rows,
-   including hidden meshes and collapsed groups; in the viewport it selects
-   visible meshes. Press `F` to frame the selection or `H` to hide it. Clicking
-   a selected mesh's eye in MESHES or Inspector shows or hides the entire
-   selection together, using that eye's new state; an unselected mesh's eye
-   affects only that mesh. Control changes update only meshes wired to the
-   changed visibility variables, preserving other manual visibility choices.
-   Right-click the selection and choose `Isolate Selected` to focus on those
-   meshes; use `Exit Isolation` in the `Meshes` header to restore the view.
-4. Select a component or mesh and open `Inspector` on the right. Choose a
-   material kind under `Material`, or leave it on `Auto`. For a selected mesh,
-   choose a texture, `Automatic`, or `None` under `Texture`. Use
-   `Manage textures` to add existing texture files and assign their maps for
-   preview; these choices are saved separately from the INI bindings. Texture
-   choices include discovered DDS, PNG, JPG, and JPEG files, including images
-   not declared by the INIs.
-5. Use the viewport tools to toggle wireframe, silhouette outlines, smooth
-   shading, `Toon shadows`, and the grid. Click `Glossy materials` or
-   `Ambient occlusion` to adjust their strength from 0–100%. The texture display
-   menu offers `All maps`, `Diffuse and NormalMap`, `Diffuse only`, and
-   `No textures` for comparing the material response. `Emission bloom` is
-   available when a supported GlowMap is detected. Ambient occlusion adds soft
-   contact shading; setting it to 0% disables its rendering passes.
-6. Click `Key light` to adjust its intensity, including turning it off at 0%.
-   Drag the light marker in the viewport to move it across the view; hold Shift
-   when starting the drag to move it toward or away from the camera.
-7. Use the top-bar environment menu to choose `Default`, `Studio`, `Indoor`,
-   `Outdoor`, or `Sunset`. Studio stands the model on polished tile, Indoor on
-   varnished wood boards, and Outdoor and Sunset on packed dirt. Open
-   `Settings` to adjust `Panel opacity` for panels,
-   dialogs, menus, and button backgrounds without fading text or texture previews.
-   Language, environment, panel opacity, and viewport tool preferences persist
-   between launches; camera and model orientation do not.
+**Viewport.** Left-drag orbits, right-drag pans, scroll zooms. The toolbar groups
+its tools into:
 
-#### Inspect UVs and texture tiling
+- **Display:** wireframe, outlines, smooth shading, `Toon shadows`, grid, `Glossy
+  materials` and `Ambient occlusion` (0–100%), the texture filter (`All maps`,
+  `Diffuse and NormalMap`, `Diffuse only`, `No textures`) and `Emission bloom`
+  when a GlowMap is found.
+- **Lighting:** `Key light` intensity, plus environments `Default`, `Studio`,
+  `Indoor`, `Outdoor` and `Sunset`. Drag the light marker to move it (hold Shift
+  to move it toward or away from the camera).
+- **View:** `Reset`, `Turn`, `Tilt`, the navigation gizmo (drag to orbit, click an
+  axis to snap) and focus mode.
 
-1. Select a mesh or separated part and expand `UV` below `Color` in
-   `Inspector`. The view overlays its triangle wireframe on the current diffuse
-   texture. Meshes without a diffuse texture still show their UV layout.
-2. Click `Expand UV view` to display it over the viewport. The view follows
-   mesh selection and texture changes; use its close button or click the expand
-   button again to return to the inline view.
-3. UVs outside the 0–1 region display the repeated texture across their full
-   bounds, matching the model's texture tiling. During `Separate by Selection`,
-   selected faces are highlighted in the UV view as well.
+**Panels.** The left icon rail switches between `Meshes`, `Mod Library` and
+`Assets`; the right dock holds `Inspector`, `Controls` and `Weight/Rig`. Drag a
+dock edge to resize it, use `[` / `]` to collapse the left/right dock, and `\` for
+focus mode, which hides both.
 
-UV inspection is read-only and does not require starting a mesh edit.
+**Meshes.** Eye buttons show or hide an INI, component or mesh; headers show
+visible/total counts. Type in the filter box to search mesh, component and INI
+names, and switch between `All`, `Visible` and `Hidden`. Right-click a mesh to
+`Rename` it, `Isolate Selected` (undo with `Exit Isolation` in the header), or
+reach the edit actions below.
 
-### 3. Preview existing controls and save combinations
+**Selection shortcuts**
 
-1. Open `Controls` on the right and click the cycle buttons in `Key Toggle` to
-   preview the mod's existing variants.
-2. If `Menu Toggle` is available, click its buttons or images to cycle menu
-   options. Move any supported shape sliders to preview shape changes.
+| Action | Input |
+| --- | --- |
+| Select / frame and open Inspector | Click / double-click a row or the model |
+| Toggle in selection / add a rectangle | Ctrl-click / Ctrl-drag in the viewport |
+| Select a range of rows / add a range | Shift-click / Ctrl+Shift-click |
+| Select all | Ctrl+A (panel: every row passing the filter; viewport: visible meshes) |
+| Frame / hide the selection | `F` / `H` |
 
-Recognized animations play automatically while their mod conditions are active.
-The viewer supports baked mesh animation, supported GIMI compute-driven pose
-and shape animation, and narrow WWMI sparse shape animation patterns. Toggle
-and menu changes can activate or stop these tracks. Custom shader programs may
-remain static; this is a reconstruction of supported patterns, so playback can
-differ from the game.
+Clicking the eye of a selected mesh shows or hides the whole selection.
 
-#### Pause animation or inspect a frame
+**Inspector.** Choose a `Material` kind (or `Auto`) and a `Texture` (a file,
+`Automatic` or `None`). `Manage textures` assigns any DDS, PNG or JPG in the mod to
+a map role for the preview, without changing the INI. Expand `UV` to see the
+triangle layout over the diffuse texture, including tiling outside 0–1;
+`Expand UV view` shows it over the viewport.
 
-1. While a supported animation is active, click `Pause animation` (or press
-   Space while the viewport has focus) to freeze playback, and `Play animation`
-   to resume it. `Stop` pauses and returns to the first frame.
-2. For baked animations sharing one synchronized timeline, the playback dock
-   above the viewport toolbar shows the `Animation frame` slider. Seeking pauses
-   playback and shows the current frame counter; click `Play animation` to
-   continue from that frame. The film-strip button at the end of the toolbar
-   hides or shows the dock; while it is hidden, Play/Pause stays beside it.
-3. Compute animations and independent timelines provide Play/Pause in the
-   toolbar without frame seeking. Playback controls appear only for visible
-   animated geometry that is not currently controlled by Rig or Physics.
-4. With a rig animation library loaded, click the animation name in the dock to
-   open a searchable list. Type any part of a name, filter `Clips` or
-   `Sequences`, use the arrow keys and Enter to choose, or pick `Rest pose`.
-   Previous/Next step through the current kind in list order. A sequence's time
-   slider runs over its step bar, so you can drag or click anywhere across all
-   of its steps. Play after `Stop` resumes the last choice.
+### 3. Preview controls, animations and PRESENT combinations
 
-Pausing and seeking affect only the preview. They do not change the mod's
-control values or write animation data.
+Open `Controls`. Each `Key Toggle` row has a cycle button (and a previous-value
+button for three or more positions); `Menu Toggle` buttons and shape sliders work
+the same way. Control changes only touch meshes wired to the changed variables,
+so your manual visibility choices elsewhere stay put.
 
-#### Create and manage PRESENT combinations
+**Animation.** Supported animations play automatically while their conditions
+are active: baked mesh animation, GIMI compute-driven pose/shape animation, and
+narrow WWMI shape patterns. Custom shaders may stay static, so playback can
+differ from the game. The playback dock above the toolbar provides:
 
-PRESENT lets one shortcut switch several control values together. For example,
-you can save one combination of outfit and accessory options, then another.
+- Play/Pause (Space), `Stop` (back to the first frame) and, for baked timelines,
+  an `Animation frame` slider.
+- With a game rig loaded (see step 7), a searchable picker for `Clips`,
+  `Sequences` and WWMI `Shared` body-type clips, Previous/Next, and a time slider
+  that spans every step of a sequence. Sequences crossfade between steps and
+  carry root motion.
+- `Show props` for weapons and skill objects that appear during clips.
 
-1. Set the combination you want using `Key Toggle`, `Menu Toggle`, and any
-   supported shape sliders. PRESENT captures these control values.
-2. If no PRESENT exists, open the `...` menu beside `Present` and choose
-   `Add PRESENT`. Enter a `Key` such as `p` or `ctrl p`, optionally set a
-   `Back key` for cycling backward, and click `Save`. This captures the current
-   combination as `Present 1`.
-3. Change the controls to another combination, click `New` under `Present`,
-   enter a name, and confirm. Repeat for additional combinations, up to ten.
-   If the values duplicate another present, the app asks whether to save it
-   anyway.
-4. Click the `Present` cycle button to move through the saved combinations.
-   Check that the model and control values change together as expected.
-5. To revise a combination, cycle to it, change the controls, and click
-   `Update`. Check the present named in the confirmation, keep or edit its
-   name, and confirm. To rename it without changing its values, use `Update`
-   immediately after cycling to it.
-6. To remove a combination, cycle to it, click `Delete`, and confirm. At least
-   one present must remain. To remove the entire PRESENT cycle, use
-   `...` > `Remove PRESENT key` instead.
-7. To change the forward or backward shortcut, use `...` > `Edit key binding`.
-8. When the combinations are ready, click `Export` to write the PRESENT
-   changes to the participating INIs. The assigned shortcut cycles those
-   combinations in game.
+The film-strip button hides the dock. Playback never changes control values.
 
-If no key or menu controls are available, create and record a Key Toggle in
-the next section first. For a multi-INI mod showing `Unavailable`, read the
-message under `Present`: use `Complete PRESENT` when offered to add missing
-entries, then check every combination. Conflicting entries need review in
-`View INI` before the cycle can be used.
+**PRESENT combinations** let one shortcut switch several controls at once:
 
-### 4. Create and record a Key Toggle
+1. Set the controls, then `...` beside `Present` > `Add PRESENT`. Enter a `Key`
+   (and optional `Back key`) and `Save` — this records `Present 1`.
+2. Change the controls and click `New` for each further combination (up to ten).
+   Cycle to one and use `Update` to revise or rename it, or `Delete` to remove it.
+3. `...` > `Edit key binding` or `Remove PRESENT key` manage the shortcut.
+4. `Export` writes the PRESENT cycle into the participating INIs.
 
-Use a Key Toggle when you want one keyboard shortcut to switch between mesh
-variants.
+If a multi-INI mod shows `Unavailable`, use `Complete PRESENT` when offered, or
+fix conflicting entries in `View INI`.
 
-#### Create a show/hide toggle from selected meshes
+### 4. Create a Key Toggle
 
-1. Select one or more authored meshes from the same INI. Ctrl-click adds meshes
-   to the selection.
-2. Right-click a selected mesh in the viewport or `Meshes` panel and choose
-   `Create Toggle` when offered.
-3. Review the prefilled name, variable name, and suggested unused key. The INI
-   and two values (`0,1`) are fixed for this shortcut. Click `Save` to create a
-   toggle already assigned to the selected draws.
-4. Cycle it in `Controls` to check the show/hide result, then use `Export` to
-   write the change. The action is available only for supported editable draws;
-   finish any active recording or mesh edit first.
+**From selected meshes (show/hide):** select meshes from one INI, right-click >
+`Create Toggle`, check the suggested name and key, and `Save`. The toggle is
+already wired to those meshes.
 
-#### Create a custom cycle and record its mesh visibility
+**Custom cycle:**
 
-1. Open the `Controls` tab on the right.
-2. In `Key Toggle`, click the `+` button.
-3. Fill in the form:
+1. In `Controls` > `Key Toggle`, click `+`. Pick the `Ini file`, a `Name`, `Key`
+   (e.g. `1` or `ctrl 1`), optional `Back key`, a new `Variable name` (no `$`) and
+   at least two `Values` (e.g. `0,1,2`). `Save`.
+2. Open the toggle's actions menu and choose record. At each position, set mesh visibility
+   in `Meshes`, then click the cycle button to move on.
+3. `Save` the recording, cycle through to check it, and `Export`.
 
-   - Choose the `Ini file` containing the meshes you want to control.
-   - Enter a display `Name` and the keyboard `Key` (for example, `1` or
-     `ctrl 1`). Add a `Back key` if you want a shortcut for the previous
-     position.
-   - Enter a new `Variable name` without the `$` and at least two unique
-     `Values`, separated by commas (for example, `0,1,2`). Leave
-     `Default value` blank to use the first value.
-
-4. Click `Save`. The toggle appears in the panel with a warning badge because
-   it is not assigned to any meshes yet. Export becomes available once the
-   toggle controls a mesh, or you delete the unused toggle.
-5. Click the circular record button beside the new toggle.
-6. At each displayed position, use the visibility buttons in the `Meshes`
-   panel to show only the meshes that should be active for that position.
-7. Click the toggle's cycle button to move to `Next position`, set its mesh
-   visibility, and repeat until every position is recorded. The current
-   position and variable values are shown in the toggle row.
-8. Click `Save` in the recording row, or `Cancel` to abandon the recording.
-   After saving, cycle through the toggle again to check the result. Review
-   any reported skipped lines in `View INI` before exporting.
-
-Use the pencil or delete button beside an existing toggle to edit or remove
-it. Its record button lets you update which meshes appear at each position.
-All these INI changes stay in memory until `Export`.
+The same menu edits or deletes the toggle. A toggle that controls no meshes shows
+a warning badge and blocks Export until it is recorded or deleted.
 
 ### 5. Separate and merge mesh parts
 
-Mesh editing is enabled in the portable build. It requires a writable mod folder
-and supported authored draws; archive previews and original Assets cannot be
-edited this way.
+Requires a writable mod folder (not archives or Assets). Use the edit icons in the
+Inspector header or the right-click menu:
 
-1. Select a mesh and use the edit icons to the left of the eye in the Inspector
-   header, or right-click a mesh row or the mesh in the viewport, and choose a
-   separation method. Hover an icon for its action name or disabled reason:
+- `Separate by Loose Parts` splits by connectivity; `Connection tolerance`
+  (0–0.01) can join nearby vertices.
+- `Separate by Selection` lets you pick faces (click, Ctrl-click, Ctrl+A,
+  Ctrl-drag) and `Apply Selection`. Mode icons beside the left-panel tabs choose
+  `Set`, `Extend`, `Subtract`, `Difference` or `Intersect`; `Select through
+  (click)` also hits hidden faces. `Select Connected Faces` and `Invert Selection`
+  are in Inspector. Escape cancels.
+- `Merge Meshes` joins two or more parts of the same original mesh.
 
-   - `Separate by Loose Parts`: adjust `Connection tolerance` from 0 to 0.01
-     and click `Separate`. Zero uses exact vertex positions; a small tolerance
-     can connect nearby positions into the same part.
-   - `Separate by Selection`: click faces to select them, Ctrl-click to add or
-     remove faces, Ctrl+A to select every face of the mesh or part being edited,
-     or Ctrl-drag to select faces crossing a rectangle. Leave at least one face
-     unselected, then choose `Apply Selection`. Inspector also
-     provides `Select Connected Faces` and `Invert Selection`. While selecting
-     faces, use the mode icons to the right of the left-panel tabs. These appear
-     only during Separate by Selection and control both clicks and Ctrl-drag
-     rectangles: `Set` replaces
-     the selection, `Extend` adds, `Subtract` removes, `Difference` toggles hit
-     faces, and `Intersect` keeps only previously selected hits. Ctrl-click
-     still toggles faces independently of the chosen mode. Clicks select the
-     nearest visible face; enable `Select through (click)` to include faces
-     behind other faces. Rectangles always select through. `Cancel Selection` or
-     Escape exits without splitting.
-
-2. Right-click a mesh in the viewport or MESHES panel and use `Isolate Selected`
-   to show selected meshes or parts and hide all others. The action stays
-   available and can be repeated for a different selection; use `Exit Isolation`
-   in the `Meshes` header to restore the view. To combine parts, Ctrl-click or
-   Shift-click two or more parts from the same original
-   mesh and choose `Merge Meshes`. Parts from different sources cannot be merged.
-   Undo/Redo icons beside the component's `Edited` badge restore recent preview
-   layouts and face selections. Ctrl+Z undoes and Ctrl+Y redoes; text inputs keep
-   their normal editing shortcuts. History is cleared when changes are applied,
-   canceled, or the model is reloaded.
-
-   Isolation changes only visibility and does not stage a mesh edit.
-3. Inspector shows part, mesh-selection and face-selection counts, plus preview
-   or staged status. Choose `Apply Mesh Changes` beside the component's `Edited`
-   badge, or select the component and use its Inspector header or context menu,
-   to stage the new draw ranges and index-buffer layout in memory and reload
-   the preview. `Cancel Mesh Changes` abandons the unapplied layout.
-4. Check the reloaded parts, then click `Export` to write the staged buffer and
-   INI changes with backups. Apply or cancel the current layout before starting
-   another mesh edit; unapplied layouts block Export.
-
-Separation, merging, and `Apply Selection` affect the preview first.
-`Apply Mesh Changes` stages an edit, and `Export` writes it to disk.
+Undo/Redo (Ctrl+Z / Ctrl+Y) cover layout and face-selection steps. When the
+layout is right, `Apply Mesh Changes` stages it (or `Cancel Mesh Changes`), and
+`Export` writes the buffers and INIs.
 
 ### 6. Inspect weights and preview secondary motion
 
-Weight tools preview authored skinning; they do not rewrite the mod's weight
-buffers.
+In `Weight/Rig` > `WEIGHT`:
 
-1. Open the `Weight/Rig` tab on the right. The first time it opens, the app loads
-   the model's weight data.
-2. Click `Select bones` to open the bone list. Search by bone ID, optionally
-   enable `Selected bones only`, and check the IDs you want. IDs are grouped
-   by their source buffer, so select them under the source that owns them.
-3. To discover influences at a point, click `Pick from model`, then click the
-   model once. The list opens at `At picked point` with the nearby IDs; check
-   the bones you want to select. Use `All bones` to return to the full list.
-4. Turn on `Show Weight Heatmap` to see the selected bones' influence on the
-   model.
-5. With one or more bones selected, hold the right mouse button and drag the
-   model to test the secondary motion. Enable optional `Gravity`, then open
-   `Advanced Settings` under `WEIGHT` to adjust `Frequency`, `Damping`, the
-   response sliders, and `Joint limits`. Use `Reset physics` to restart the
-   motion without resetting a manual pose.
-6. Click `Save` beside the bone selection to store the selected IDs in the
-   mod's `.mod_viewer.json`. Use `Load` to restore them or `Clear` to disable
-   the selection. These choices are viewer metadata, not INI edits.
+1. `Select bones` to choose bone IDs (grouped by source buffer), or `Pick from
+   model` to list the bones influencing a clicked point.
+2. `Show Weight Heatmap` to see their influence.
+3. Hold right-click and drag the model to test secondary motion, optionally with
+   `Gravity`. `Advanced Settings` tunes frequency, damping, response and joint
+   limits; `Reset physics` restarts the motion.
+4. `Save` / `Load` / `Clear` store the bone selection in `.mod_viewer.json`.
 
-### 7. Pose the model and save Rig presets
+Weight tools are preview-only and never rewrite weight buffers.
 
-The `RIG` section in `Weight/Rig` provides an inferred rig and a fitted humanoid
-control rig when usable skin weights and geometry are available. These are
-viewer posing tools; they do not recover the game's original named skeleton or
-write poses into the mod's buffers.
+### 7. Pose the model and play game animations
 
-An original Asset can additionally provide a validated `Rig.json`. For supported
-WWMI skin streams with a verified Blend fingerprint, the viewer uses that file's
-named game skeleton, hierarchy, pivots and rest axes. Explicit humanoid mappings
-also give IK exact limb pivots and lengths, with stable bending and limb roll.
-An Asset-declared merged palette lets compatible stock WWMI mods share this rig
-automatically, without registering each mod's skin-buffer fingerprint.
-Both legacy and merge-status templates are recognized. Verified shared IDs remain
-unshifted; supported proxy remaps use full vertex-group IDs after checking the
-paired forward/reverse maps.
-Missing or incompatible rig
-data retains the inferred rig. See [Asset rig sidecars](docs/asset-rig.md) for the
-format, conversion tool and binding requirements. Rig loading never changes the
-mod's weights or source files.
+`RIG` builds an inferred rig and a fitted humanoid control rig from the skin
+weights. Pick a `Selected Joint` (or `Pick from model`) and drag the rotation
+gizmo; `Reset Joint` / `Reset Pose` undo it. `Advanced Settings` adds rotation
+snap, `Set selected as root` and `Enable Inverse Kinematics` (drag hand/foot
+control points). `Main Rig` > `Edit Rig` corrects the fitted points, and `Pose
+presets` saves named poses to `.mod_viewer.json`.
 
-1. Choose a `Selected Joint`, or use `Pick from model` in the `RIG` section to
-   select a joint from the viewport. Drag the rotation gizmo to pose it.
-   `Reset Joint` clears that joint's manual rotation; `Reset Pose` clears the
-   manual pose.
-2. Open `Advanced Settings` under `RIG` to set `Rotation snap`, change the
-   root with `Set selected as root`, or enable `Enable Inverse Kinematics`.
-   With IK enabled, select a supported hand or foot control point and drag its
-   move gizmo to pose the limb.
-3. If the fitted control points need correction, choose `Main Rig` > `Edit Rig`.
-   Click a point, move it, and click again to release it. Use `Save` to store
-   the corrections or `Cancel` to abandon them. `Reset Rig` removes saved
-   corrections after confirmation.
-4. Use `Save` under `Pose presets` to name and store a pose. Choose it from
-   the preset list to apply it later; `Rename` and `Delete` manage saved entries.
-   Presets are saved in `.mod_viewer.json` and are not applied automatically
-   when loading the mod. They store pose and root choices, not live physics
-   motion.
+When an original Asset has an extracted game rig (step 9), Assets and compatible
+mods use its named skeleton instead, and `ANIMATION` lists the game's clips and
+sequences. Clips include facial morphs, spring-bone secondary motion and props;
+in-game cloth simulation and game events are not replayed. Animation suspends
+Weight physics, and manual posing stops playback. Turn on `Settings` > `Auto load
+Weight/Rig` to load the rig and start the first animation automatically. See
+[Asset rig sidecars](docs/asset-rig.md) for the formats.
 
-Rig posing and weight-driven physics can work together. Geometry-changing shape
-controls rebuild the affected rig, and Rig/Physics temporarily takes control
-of affected geometry from animation playback. Inferred joints and connections
-can differ from the authored skeleton, so some poses may stretch unexpectedly.
+Rig tools only pose the preview; they never write poses into the mod.
 
-Original WWMI Assets with captured weights also support temporary Weight/Rig
-inspection and posing. Open the Asset, then `Weight/Rig`. When its verified rig
-has an `Animation` library, choose a clip in the new `ANIMATION` section. Use
-Play/Pause or the time slider to inspect it; `Stop / Rest pose` restores the
-original geometry. Compatible mods use that same Asset library automatically.
-Animation suspends Weight physics, and manual posing stops playback. These clips
-contain skeletal transforms; game events, facial curves and cloth simulation
-are not replayed. See [Asset animation format](docs/asset-rig.md#direct-asset-weights-and-animation)
-for conversion and installation.
+### 8. Recolor a mesh and save it to a texture
 
-### 8. Adjust a mesh color and save it to a texture
+1. Select a mesh whose `Texture` resolves to a diffuse map from the mod.
+2. In `Color`, adjust `Hue`, `Saturation`, `Brightness` (0–400%), `Contrast`,
+   `R`/`G`/`B` and `Tint`. The preview updates live and is saved to
+   `.mod_viewer.json`; `Reset Color` removes it.
+3. `Save to Texture...` bakes the preview into a mod-owned BC7 DDS. Review the
+   affected meshes and `Save`; a backup is created and the controls reset.
 
-Color sliders first create a viewer preview. `Save to Texture...` is the step
-that modifies the source texture file.
+### 9. Work with original Assets
 
-1. In the `Meshes` panel, click a mesh row to select it. Click the row itself,
-   not its visibility button.
-2. In the `Inspector`'s `Texture` section, choose a diffuse texture (or leave
-   `Automatic` if it resolves to one). Color editing is unavailable when the
-   mesh has no diffuse texture or uses an Asset texture.
-3. In the `Color` section, adjust `Hue`, `Saturation`, `Brightness`, and
-   `Contrast`, then fine-tune `R`, `G`, `B`, and `Tint` as needed. Choose a
-   `Tint` color to recolor the texture while preserving its shading; use
-   `Clear` to disable it. Brightness keeps its 0–400% range with 100% centered
-   on the slider. The model updates immediately, and the preview settings are
-   saved in `.mod_viewer.json`. Use `Reset Color` to remove the preview
-   adjustment.
-4. To bake the preview into a BC7 UNORM or BC7 sRGB DDS texture owned by the
-   mod, click `Save to Texture...`. Other texture formats remain preview-only.
-5. Review the texture and the list of meshes with color changes. Saving
-   includes the changed meshes sharing that texture. Click `Save` to write
-   the texture immediately, create a backup, and reload the result. The color
-   controls reset after saving; `Reset Color` does not undo a texture save.
+Original Assets are clean game extractions that fill gaps in mods and carry game
+rigs and animations.
 
-### 9. Preview and manage original Assets or fill missing parts
+1. **Add a folder:** `Assets` > `+`, choose `ZZMI`, `GIMI` or `WWMI`, browse to the
+   folder, `Add`. Use its `ON`/`OFF` switch for mod matching and `Rebuild asset
+   index` after changing it outside the viewer.
+2. **Fill missing parts:** with a mod loaded, `Load missing parts` in the `Meshes`
+   header previews the original components the mod does not replace. `Settings` >
+   `Auto restore missing mod parts from assets` does this on every load. Filled
+   parts are preview-only.
+3. **Extract a game rig and animations:** right-click an indexed Asset >
+   `Extract Rig/Animation`, point to the game folder (or set it once in `Settings`
+   > `Game directory`), and `OK`. The viewer verifies the game mesh against the
+   Asset before saving `Rig.json`, `Animation` and props into it; a failed run
+   keeps the previous files. ZZZ and Genshin build a one-time game index first.
+   Extraction is offline; a game update may need a new viewer release. Details:
+   [game-folder extraction](docs/asset-rig.md#game-folder-extraction).
+4. **Extract from a frame dump:** right-click an Asset Folder > `Add asset`, or an
+   Asset > `Update asset` to replace it. Each Asset keeps an
+   `extraction_report.json` listing skipped resources; a partial extraction shows a
+   warning.
+5. **Edit an opened Asset:** set textures in `Inspector` / `Manage textures`, or
+   right-click a source header in `Meshes` > `Remove` to drop that source group.
+   `Export` (or `Save Asset Edits`) saves texture assignments to the Asset's
+   metadata or disables the removed folder with a `DISABLED_` prefix.
 
-1. Open `Assets` on the left and click `Add Asset Folder` or `+`. Choose its
-   type (`ZZMI`, `GIMI`, or `WWMI`), browse to the extracted Asset folder, and
-   click `Add`. Expand its folders and select an indexed Asset to preview it.
-2. Use a folder's `ON`/`OFF` switch to include it in mod matching, and
-   `Rebuild asset index` after changing its contents.
-3. With a mod loaded and a matching original Asset available, click
-   `Load missing parts` in the `Meshes` header to preview original components
-   the mod does not replace. Click it again to remove them from the preview.
-4. To restore missing parts on each mod load or reload, open `Settings` and
-   enable `Auto restore missing mod parts from assets`. This is off by default
-   and is saved automatically. Restoration requires a unique matching Asset
-   from an enabled Asset Folder; parts explicitly handled or skipped by the mod
-   are left alone.
+### 10. Check, edit and export
 
-Loading an Asset or filling missing parts leaves the original files untouched.
-Filled parts are preview-only. Reloading clears them and, if automatic
-restoration is enabled, restores eligible parts again; switching models clears
-the previous fill.
+- **Diagnostics** (top toolbar) lists INI errors and warnings by INI, with filters
+  for `Errors`, `Conditions`, `Resources` and `Files`, file counts, and an Asset
+  match summary. It includes staged edits and works even if the model fails to
+  load. Double-click an issue to open its line in the editor.
+- **View INI** edits the text of any INI in the same staged session as toggles and
+  recording; `Save` applies it to the preview.
+- **Export** writes pending INI and mesh-buffer changes with timestamped `.BAK`
+  backups. Failed writes stay pending for retry; switching mods warns before
+  discarding staged work.
+- **Blender / glTF (.glb)…** (arrow beside `Export`) saves the visible model as it
+  currently looks — pose, shapes, animation frame, normals, UVs and Blender-ready
+  textures — with skin weights as numbered vertex groups. Original texture roles
+  and draw provenance are kept in `extras.modViewer`. Game rigs, animation tracks,
+  shape keys and hidden toggle states are not exported. Not available for archives
+  or Assets.
 
-#### Save Asset texture assignments
+In a narrow window, `View INI`, `Diagnostics` and `Export` move into the toolbar's
+`...` menu.
 
-1. Open an Asset directly from `Assets`, select a mesh, and use `Inspector` >
-   `Texture` or `Manage textures` to choose its diffuse texture and map roles.
-   Use `None` to explicitly clear a binding. Added image files must belong to
-   that Asset.
-2. Click `Export`, or open its arrow and choose `Save Asset Edits`, to save the
-   assignments in the Asset's existing metadata and refresh its index. This
-   changes texture bindings without recoloring or rewriting image files.
-3. Reopen the Asset to use the saved defaults. Missing-part restoration and
-   matched mod texture defaults also use these assignments. Export before
-   switching models to keep pending Asset edits.
+## What is saved, and when
 
-#### Remove an Asset source group
-
-Direct Asset previews group meshes in `Meshes` by their source metadata. Where
-a source header is shown, right-click it and choose `Remove` to remove that
-whole group from the preview. Click `Export` to disable its owning folder with a
-`DISABLED_` prefix and refresh the Asset index. The files remain on disk, and
-disabled folders are skipped on future loads. Switching models before Export
-discards the pending removal. Individual mesh separation and merging remain
-unavailable for Assets.
-
-#### Extract a game rig and animations
-
-For an indexed WWMI, ZZMI or GIMI Asset, open its `…` menu or right-click it and
-choose `Extract Rig/Animation`. Browse to the game's installation folder (for
-Wuthering Waves, the installation or its `Paks` folder; for Genshin Impact, the
-folder containing `GenshinImpact_Data`), check the prefilled character name, and
-click `OK`. Set each folder once under `Settings` > `Game directory` (GIMI, ZZMI
-and WWMI rows, each with `Select folder`); the saved folder for the Asset's game
-is prefilled here. Choose a folder: a character's mesh, skeleton and animations
-can span several archives. ZZZ and Genshin Impact build a one-time game index
-first.
-
-The application bundles the pinned extraction helper and checksum-verified
-WuWa AES keys during packaging. Extraction works offline; a game update may
-require a new Mod Viewer release with updated keys or parser support. The viewer
-verifies the matching mesh against the Asset's captured positions, UVs and
-weights before saving `Rig.json`, `Animation`, and `RigExtraction.json` inside
-the Asset. It imports compatible skeletal clips from the character's game
-folder and includes verified companion cloth/hair layers. Existing compatible
-clips and original exports are preserved. Progress and cancellation are shown
-in the dialog; a failed extraction preserves the previous sidecars.
-
-The current Asset reloads after a successful save. Open `Weight/Rig` to inspect
-the rig and select an animation. Runtime cloth collision simulation is outside
-its scope; Genshin Impact body motion is converted from Humanoid curves in place.
-See [game extraction details](docs/asset-rig.md#game-folder-extraction).
-
-#### Extract or update an Asset
-
-To extract from a frame dump, right-click an Asset Folder and choose `Add asset`.
-Enter a name, browse to the dump folder, and click OK. Use `Update asset` on an
-indexed asset to replace all of its files with a new extraction. Both actions
-refresh the index automatically; a failed update restores the previous asset and
-index. A partial extraction shows a warning; review it before relying on the Asset
-to restore every missing component. Each installed Asset keeps
-`extraction_report.json` with its source provenance, skipped resources and
-unresolved candidates. After adding, removing or renaming Asset folders outside
-the viewer, rebuild the Asset Folder index.
-
-### 10. Check the INIs and export your edits
-
-#### Read and act on Diagnostics
-
-Diagnostics checks the current INIs, including staged edits. Opening the
-report does not modify files, and it is available even when a resource problem
-prevents the model from loading.
-
-1. Click `Diagnostics` in the top toolbar to open `INI Diagnostics`. Read the
-   error and warning totals at the top; each issue shows a `!` for an error
-   or a triangle for a warning.
-2. Choose a filter to focus the report:
-
-   - `All`: every finding, including INI syntax and key-binding warnings.
-   - `Errors`: errors across all categories, such as unreadable INIs or
-     missing resource files.
-   - `Conditions`: malformed expressions or broken `if`/`elif`/`endif`
-     structure.
-   - `Resources`: missing declarations or files, unsafe paths, invalid
-     resource settings, and unused resource sections.
-   - `Files`: asset files not declared by the active INIs.
-
-3. Check the file counts in the summary. `Referenced assets` are files
-   declared by active INIs; `inactive-only` files are referenced only by
-   disabled INIs, and `viewer-only` files are used by viewer texture choices.
-   Use these distinctions when investigating a file warning.
-4. Read the issue's message, INI name, section, line number, and source text
-   where shown. Issues are grouped by INI; findings without an INI appear
-   under `Asset files`. Double-click an INI issue to open its reported line
-   in the editor.
-5. Make the correction and click `Save` in the editor. Reopen `Diagnostics`
-   to review the refreshed report against the staged changes, then check the
-   model preview again. For example, after correcting a resource's `filename`
-   entry, check whether its missing-file error has cleared.
-6. If Asset folders are configured, also check the Asset resolution summary
-   for exact, partial, ambiguous, or missing matches. If it reports an
-   unavailable index, return to `Assets` and use `Rebuild asset index` for
-   the affected folder.
-
-#### Edit an INI directly and export
-
-1. Click `View INI` to open a file directly, choosing the INI from the menu
-   when the mod has several. Edit its text and click `Save` to apply it to
-   the same in-memory session used by toggles and recording.
-2. Recheck `Diagnostics` and preview the affected controls or meshes.
-3. Click `Export` to write pending INI changes and applied mesh-buffer changes
-   with timestamped `.BAK` backups. A failed buffer write blocks its dependent
-   INIs, and failed changes remain pending for retry. Export before switching
-   mods or closing the app to keep your staged work; switching mods warns before
-   discarding it.
-
-In a narrow window, `View INI`, `Diagnostics`, and `Export` may be under the
-toolbar's `...` menu. Texture color saves use their own confirmation in step 8.
-
-#### Export the visible model for Blender
-
-Use the arrow beside `Export` and choose `Blender / glTF (.glb)…`, then select
-a destination in the native save dialog. In a narrow window this option is in
-the toolbar's `...` menu. Import the result in Blender with
-`File → Import → glTF 2.0 (.glb/.gltf)`. The main `Export` button and the
-dropdown's `Save Mod Edits` action still save pending mod edits as described above.
-
-GLB export works even when no mod edits are pending. It captures the currently
-visible draws and loose parts as separate named objects, including their current
-pose, shape, animation frame, orientation, normals, and UVs. Temporary Weight
-heatmap colors are excluded. Standard materials include diffuse textures,
-supported RGB normal maps, and supported emission maps. DDS material maps are converted at their original
-resolution; textures are embedded so the file can be moved independently.
-
-Only Blender-ready images are embedded. Bound texture identities for all six
-roles are retained in `materials[].extras.modViewer.textures`, without embedding
-duplicate original resource bytes. Packed maps remain role keys for reference;
-Blender does not automatically reproduce their shader behavior. Mesh identity,
-source draw provenance, material profiles, and color adjustment settings are
-preserved in `extras.modViewer`. Color adjustments and game-specific packed
-shader effects are not baked into standard materials yet.
-
-Authored skin weights are loaded on export and imported into Blender as numbered
-vertex groups, scoped to each exact Blend source. Up to eight influences per
-vertex are retained; duplicate IDs combine and weights normalize for glTF.
-Zero-weight vertices use an `Unweighted` placeholder group. Large authored bone
-IDs retain their numeric group names through a compact export palette. Export
-uses neutral placeholder joints to carry the groups while preserving the current
-mesh pose; these joints do not reconstruct game bone positions or hierarchy.
-Weight loading does not activate the viewer's Rig or Physics. If advertised
-weights cannot be loaded, export reports an error instead of silently omitting them.
-
-Editable game rigs, animation tracks, shape keys, hidden toggle alternatives, and
-viewer lighting/debug effects are not exported. Missing or unconvertible textures
-are reported after saving; geometry and available resources still export. A GLB
-snapshot does not commit staged INI or buffer edits. GLB export is unavailable
-for compressed mods and direct Asset previews; direct Assets use `Export` for
-their own pending edits as described in step 9.
-
-### What is saved, and when
-
-| Change | Save behavior |
+| Change | Saved |
 | --- | --- |
-| INI text, Toggle CRUD/Record, and PRESENT combinations | Staged in memory until `Export`. |
-| Mesh separation and merging | Preview-only until `Apply Mesh Changes`, then staged until `Export`. |
-| Direct Asset texture assignments and source-group removals | Pending until `Export` / `Save Asset Edits`, which updates Asset metadata or disables source folders and refreshes the index. |
-| Mesh names, material/texture choices, and color previews | Saved as viewer metadata in `.mod_viewer.json` for writable mod folders. |
-| Bone selections, Rig corrections, and pose presets | Saved to `.mod_viewer.json` by their own `Save` actions. |
-| `Save to Texture...` | Writes the supported source DDS immediately after confirmation, with a backup. |
-| Language, environment, panel opacity, viewport tool preferences, and automatic missing-part restoration | Saved globally as app settings. |
+| INI text, Key Toggles, recordings, PRESENT | In memory until `Export` |
+| Mesh separation and merging | Preview until `Apply Mesh Changes`, then until `Export` |
+| Asset texture assignments and source-group removals | Until `Export` / `Save Asset Edits` |
+| Mesh names, material/texture choices, color previews, removed INIs | `.mod_viewer.json`, automatically |
+| Bone selections, Rig corrections, pose presets | `.mod_viewer.json`, by their `Save` buttons |
+| `Save to Texture...` | Source DDS immediately, with a backup |
+| Language, environment, dock widths, panel opacity, tool and Settings options | App settings, automatically |
 
-Archive previews cannot persist edits or metadata. Missing-part fills, manual
-visibility, camera/model orientation, and live physics motion are session-only.
+Archives and imported mods cannot save edits or metadata. Filled missing parts,
+manual visibility, camera and live physics are session-only.
 
 ## Compatibility and limitations
 
-The app requires a WebGPU-capable system. Texture preview works best with mods
-that use SlotFix/Stable Texture conventions. Unusual or highly customized mod
-layouts may not be reconstructed completely; diagnostics remain available for
-examining those folders.
-Original Asset indexing currently offers ZZMI, GIMI, and WWMI types.
+- Needs a WebGPU-capable system.
+- Reconstruction covers common mod layouts; textures work best with
+  SlotFix/Stable Texture conventions. Unusual layouts may load partially —
+  Diagnostics still works on them.
+- Animation, shapes, Rig tools and mesh editing depend on recognized layouts.
+  Texture saving supports mod-owned BC7 DDS files only.
+- Asset folders support ZZMI, GIMI and WWMI. Game extraction covers Wuthering
+  Waves, Zenless Zone Zero and Genshin Impact.
+- Password-protected archives are not supported.
 
-Animation, shapes, Rig tools, mesh editing, and texture saving depend on the
-recognized source layout. Texture saving supports mod-owned BC7 DDS files only
-and may reject overlapping color edits or a file also used as an auxiliary map.
-Password-protected archives are not supported; 7z and RAR previews require
-7-Zip to be installed.
-
-## Running the app
-
-The portable Windows build requires no installation. Run the executable on
-64-bit Windows with the Microsoft Edge WebView2 Runtime available. WebView2 is
-included with Windows 11 and is normally delivered to Windows 10 through Windows
-Update.
-
-To run from source:
+## Running from source
 
 ```console
 pip install -r src/requirements.txt
 python src/viewer_app.py
 ```
 
-To create a portable build:
+Source runs show every feature. To build the portable app into `dist/`:
 
 ```console
 python src/build.py
 ```
 
-Build output is written to `dist/`.
+Native extraction helpers are rebuilt only when their sources or pinned
+dependencies change (`--rebuild-helpers` forces it). Set flags in
+`src/features.ini` before building to hide Export, Toggle editing, disabled-mod
+loading or mesh editing in the portable build; the checked-in file hides only
+disabled-mod loading.
 
-Native extraction helpers are rebuilt only when their sources, pinned
-dependencies or .NET SDK change; pass `--rebuild-helpers` to force a rebuild.
+### Optional MCP companion
 
-Before building, `src/features.ini` can hide optional Export, Toggle editing,
-disabled-mod loading, and mesh-editing actions in the portable executable. The
-checked-in settings enable mesh editing and hide disabled-mod loading. These are
-build-time UI settings; running from source enables every feature.
-
+`python src/mcp_server.py` starts an MCP server that lets an MCP client inspect
+mods in your Mod Library and add, edit or delete Key Toggles. It uses the same
+staged session as the app: nothing is written until `export_mod_changes` is
+called.
 
 ## License
 
