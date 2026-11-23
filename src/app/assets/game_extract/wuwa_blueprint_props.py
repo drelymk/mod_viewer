@@ -5,8 +5,8 @@ script (an ``SCS_Node`` whose parent is ``CharacterMesh0`` and whose ``AttachToN
 names a socket); the character's notifies show them while the game plays the prop's
 own animation, such as a character's scissors during attacks. A derived blueprint may
 override a component's template (its mesh). Weapon cases are excluded: they hold the
-regular weapon, which is not exported. Only components without their own relative
-offset are supported.
+regular weapon, which is not exported. Only components without their own relative offset
+(beyond float noise) are supported.
 
 The prop's animation for a clip is the prop sequence in the prop mesh's folder, on the
 prop's own skeleton, named after the clip exactly or with a ``_<suffix>`` (the longest
@@ -34,6 +34,8 @@ MAX_COMPONENTS = 8
 MAX_SEQUENCES = 512
 _TEMPLATE = "_GEN_VARIABLE"
 _OFFSETS = {"RelativeLocation": (0, 0, 0), "RelativeRotation": (0, 0, 0), "RelativeScale3D": (1, 1, 1)}
+# Offsets this small (cm, degrees, scale) are editor float noise and count as none.
+_NEGLIGIBLE = 1e-3
 
 
 def _chain(client, blueprint, cache, cancel):
@@ -62,7 +64,7 @@ def _chain(client, blueprint, cache, cancel):
 
 
 def _identity(template):
-    """Whether a component template keeps its socket transform (no relative offset)."""
+    """Whether a component template keeps its socket transform (no relative offset beyond float noise)."""
     for key, neutral in _OFFSETS.items():
         value = template.get(key)
         if value is None:
@@ -71,7 +73,7 @@ def _identity(template):
             return False
         numbers = [value.get(axis) for axis in (("Pitch", "Yaw", "Roll") if key == "RelativeRotation" else ("X", "Y", "Z"))]
         if any(type(number) not in (int, float) for number in numbers) or \
-                any(abs(number - expected) > 1e-6 for number, expected in zip(numbers, neutral)):
+                any(abs(number - expected) > _NEGLIGIBLE for number, expected in zip(numbers, neutral)):
             return False
     return True
 

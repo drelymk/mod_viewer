@@ -1361,6 +1361,50 @@ def test_game_props_load_once_skin_by_rig_deltas_and_exist_only_while_a_clip_is_
     assert result['world'] == [5, 0, 3]
 
 
+def test_rigid_props_with_clip_windows_show_only_inside_them(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three');
+      const {createAnimationProps} = await import('./js/weight-rig/rig-animation-props.js');
+      // One triangle skinned fully to rig bone 2; layout prop-v1 (records, joints, weights, indices).
+      const buffer = new ArrayBuffer(3 * 56 + 12);
+      new Float32Array(buffer, 0, 24).set([0,0,1, 0,0,1, 0,0,  1,0,1, 0,0,1, 1,0,  0,1,1, 0,0,1, 0,1]);
+      new Uint16Array(buffer, 96, 12).set([2,0,0,0, 2,0,0,0, 2,0,0,0]);
+      new Float32Array(buffer, 120, 12).set([1,0,0,0, 1,0,0,0, 1,0,0,0]);
+      new Uint32Array(buffer, 168, 3).set([0,1,2]);
+      const url = URL.createObjectURL(new Blob([buffer]));
+      const descriptor = (name, visible) => ({id: name, name, layout:'prop-v1', vertex_count:3, index_count:3,
+        data:{url, length:buffer.byteLength}, visible});
+      const scene = new T.Scene();
+      const props = createAnimationProps({
+        // The second prop's window is inverted, so the loader must drop it.
+        loadProps: async token => ({status:'ok', props:[descriptor('valid', {clip01:[[0.5, 1]]}),
+          descriptor('invalid', {clip01:[[1, 0.5]]})]}),
+        getScene: () => scene, requestRender: () => {},
+      });
+      const rig = {id:'rig01', bones:[{},{},{}], animation_session:'session01',
+        animation_props:[{id:'valid', name:'valid'}, {id:'invalid', name:'invalid'}]};
+      props.prepare(rig, null);
+      await new Promise(r => setTimeout(r, 50));
+      const transforms = new Map([[0, new T.Matrix4()], [1, new T.Matrix4()], [2, new T.Matrix4()]]);
+      const names = () => scene.children.map(child => child.name);
+      props.apply(transforms, {clip:'clip01', time:0.25});
+      const hiddenInsideNoWindow = names();
+      props.apply(transforms, {clip:'clip01', time:0.75});
+      const shownInsideWindow = names();
+      props.apply(transforms, {clip:'clip02', time:0.75});
+      const hiddenOtherClip = names();
+      props.apply(transforms);
+      const hiddenWithoutPlayback = names();
+      props.hide();
+      const hiddenAfterHide = names();
+      props.dispose();
+      URL.revokeObjectURL(url);
+      return {hiddenInsideNoWindow, shownInsideWindow, hiddenOtherClip, hiddenWithoutPlayback, hiddenAfterHide};
+    }''')
+    assert result == dict(hiddenInsideNoWindow=[], shownInsideWindow=['valid'], hiddenOtherClip=[],
+                          hiddenWithoutPlayback=[], hiddenAfterHide=[])
+
+
 def test_animated_props_follow_their_clip_tracks_and_abandoned_loads_release_what_they_built(module_page):
     result = module_page.evaluate('''async () => {
       const T = await import('three');

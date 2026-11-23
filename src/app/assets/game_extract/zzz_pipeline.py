@@ -329,6 +329,49 @@ def _controller_label(family, name):
     return "_".join(token for token in tokens if token and token != "Controller")
 
 
+def _clip_pointers(clips, converted):
+    """(CAB casefold, PathID) -> the converted (key, duration) values of the clip rows at that pointer."""
+    pointers = {}
+    for row in clips:
+        if zzz_index.identity(row) in converted:
+            pointers.setdefault((row["cab"].casefold(), row["path_id"]), set()).add(converted[zzz_index.identity(row)])
+    return pointers
+
+
+def _controller_clips(client, index, keys, clips, converted, cancel):
+    """{controller key: converted clip ids its states' motion leaves play} for the indexed, readable keys.
+
+    A key is (CAB casefold, PathID). Index copies of one controller share one read; a controller
+    that is not indexed or cannot be read is left out.
+    """
+    wanted, copies = set(keys), {}
+    for row in index:
+        if row["type"] == "AnimatorController" and (row["cab"].casefold(), row["path_id"]) in wanted:
+            copies.setdefault((row["cab"].casefold(), row["path_id"]), []).append(row)
+    pointers = _clip_pointers(clips, converted)
+    result = {}
+    for key in sorted(copies):
+        rows = sorted(copies[key], key=zzz_index.identity)
+        check_cancelled(cancel)
+        try:
+            controller = client.read(rows[0])
+        except ExtractionCancelled:
+            raise
+        except (ValueError, KeyError, TypeError):
+            continue
+        played = set()
+        states = controller.get("states") if isinstance(controller, dict) else None
+        for state in states if isinstance(states, list) else []:
+            motions = state.get("motions") if isinstance(state, dict) else None
+            for motion in motions if isinstance(motions, list) else []:
+                leaves = motion.get("leaves") if isinstance(motion, dict) else None
+                for leaf in leaves if isinstance(leaves, list) else []:
+                    if isinstance(leaf, dict) and isinstance(leaf.get("cab"), str) and type(leaf.get("path_id")) is int:
+                        played.update(clip[0] for clip in pointers.get((leaf["cab"].casefold(), leaf["path_id"]), ()))
+        result[key] = played
+    return result
+
+
 def _sequences(client, index, family, clips, converted, cancel):
     """Authored sequences of the character's controllers (battle, then suffixed ones).
 
@@ -341,10 +384,7 @@ def _sequences(client, index, family, clips, converted, cancel):
         label = _controller_label(family, row["name"]) if row["type"] == "AnimatorController" else None
         if label is not None:
             named.setdefault((label, row["name"]), []).append(row)
-    pointers = {}
-    for row in clips:
-        if zzz_index.identity(row) in converted:
-            pointers.setdefault((row["cab"].casefold(), row["path_id"]), set()).add(converted[zzz_index.identity(row)])
+    pointers = _clip_pointers(clips, converted)
     result, seen, total = [], set(), 0
     for label, name in sorted(named)[:MAX_CONTROLLERS]:
         rows = sorted(named[(label, name)], key=zzz_index.identity)
@@ -457,9 +497,14 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     # Weapons the capture never drew; a failure leaves the clips unaffected.
     props, skipped_props, prop_error = [], [], None
     try:
-        props, skipped_props = zzz_props.extract(client, chosen, rig, index, library, cancel,
-                                                 lambda family, row: _mesh_family_hint(family, row["name"]),
-                                                 captured, asset)
+        # Each prop's clip windows come from the clips just written (validated again on read).
+        written = ((key, *read_clip(str(library), entry, rig, validated_morphs=validated_morphs))
+                   for key, entry in entries.items())
+        props, skipped_props = zzz_props.extract(
+            client, chosen, rig, index, library, cancel,
+            lambda family, row: _mesh_family_hint(family, row["name"]),
+            captured, asset, clips=written, alternates=True,
+            controller_clips=lambda keys: _controller_clips(client, index, keys, clips, converted, cancel))
     except ExtractionCancelled:
         raise
     except (ValueError, KeyError, TypeError, OSError) as error:

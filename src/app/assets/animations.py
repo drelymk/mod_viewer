@@ -259,6 +259,8 @@ _PROP_TRACK_BYTES = {PROP_TRACK_LAYOUT: 28, PROP_AFFINE_TRACK_LAYOUT: 48}
 MAX_PROP_BONES = 256
 MAX_PROP_TRACKS = 1024
 MAX_PROP_TRACK_BYTES = 128 * 1024 * 1024
+# A rigid prop may show only inside clip windows: each clip lists its [start, end] seconds.
+MAX_PROP_WINDOWS = 64
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
@@ -300,12 +302,44 @@ def _props(raw):
             animated = _prop_animation(prop)
             if animated is None:
                 return {}
+            visible = _prop_windows(prop)
+            if visible is None:
+                return {}
             result[key] = dict(id=key, name=name, file=file, vertex_count=vertices, index_count=indices, sha256=digest,
                                textures={role: dict(file=texture["file"], sha256=texture["sha256"])
-                                         for role, texture in textures.items()}, **animated)
+                                         for role, texture in textures.items()}, **animated,
+                               **({"visible": visible} if visible else {}))
         return result
     except (AttributeError, TypeError):
         return {}
+
+
+def _prop_windows(prop):
+    """A rigid prop's clip windows {clip: [[start, end], ...]}; {} when absent, None when invalid.
+
+    Only a rigid prop has windows: an animated prop (with ``tracks``) never carries them.
+    """
+    if "visible" not in prop:
+        return {}
+    raw = prop["visible"]
+    if "tracks" in prop or not isinstance(raw, dict) or not 0 < len(raw) <= MAX_PROP_TRACKS:
+        return None
+    result = {}
+    for clip, windows in raw.items():
+        if (not isinstance(clip, str) or not _ID.fullmatch(clip) or not isinstance(windows, list)
+                or not 1 <= len(windows) <= MAX_PROP_WINDOWS):
+            return None
+        cleaned = []
+        for window in windows:
+            if (not isinstance(window, list) or len(window) != 2
+                    or any(type(value) not in (int, float) or not math.isfinite(value) for value in window)):
+                return None
+            start, end = float(window[0]), float(window[1])
+            if not 0 <= start <= end <= 3600 or (cleaned and start <= cleaned[-1][1]):
+                return None
+            cleaned.append([start, end])
+        result[clip] = cleaned
+    return result
 
 
 def _prop_animation(prop):
@@ -529,7 +563,8 @@ class AnimationSessions:
         """Publish the session's props: fresh single-use geometry (and animated props'
         track) URLs on each call, and textures through one session texture publication
         released with the session. An animated prop without a track for any of the
-        session's clips is left out."""
+        session's clips is left out. A rig prop with clip windows is left out when none of
+        the session's clips shows it."""
         try:
             with self._lock:
                 session = self._sessions.get(token) if isinstance(token, str) else None
@@ -542,12 +577,17 @@ class AnimationSessions:
                 tracks = _read_prop_tracks(session["directory"], prop, clips) if "tracks" in prop else None
                 if tracks is not None and not tracks[1]:
                     continue
+                windows = None
+                if "visible" in prop:
+                    windows = {clip: value for clip, value in prop["visible"].items() if clip in clips}
+                    if not windows:
+                        continue
                 loaded.append((prop, _read_prop(session["directory"], prop, len(session["rig"]["bones"])),
-                               _prop_textures(session["directory"], prop), tracks))
+                               _prop_textures(session["directory"], prop), tracks, windows))
             with self._lock:
                 if self._sessions.get(token) is not session or not session["is_current"]():
                     raise ValueError("The animation preview is no longer active.")
-                if session["prop_textures"] is None and any(textures for _prop, _data, textures, _tracks in loaded):
+                if session["prop_textures"] is None and any(textures for _prop, _data, textures, _tracks, _windows in loaded):
                     publication = server.begin_texture_publication()
                     publication.commit(replace=False)
                     session["prop_textures"] = publication
@@ -555,7 +595,7 @@ class AnimationSessions:
                     server.release_geometry(url)
                 session["prop_urls"] = []
                 result = []
-                for prop, data, textures, tracks in loaded:
+                for prop, data, textures, tracks, windows in loaded:
                     url = server.publish_geometry(data, replace=False)
                     session["prop_urls"].append(url)
                     urls = {role: session["prop_textures"].register(path, role) for role, path in textures.items()}
@@ -563,6 +603,8 @@ class AnimationSessions:
                             "vertex_count": prop["vertex_count"], "index_count": prop["index_count"],
                             "data": {"url": url, "length": len(data)},
                             "textures": {role: url for role, url in urls.items() if url}}
+                    if windows is not None:
+                        item["visible"] = windows
                     if tracks is not None:
                         track_url = server.publish_geometry(tracks[0], replace=False)
                         session["prop_urls"].append(track_url)

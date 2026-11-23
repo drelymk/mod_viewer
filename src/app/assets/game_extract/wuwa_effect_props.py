@@ -1,8 +1,9 @@
 """Wuthering Waves meshes a clip's own effect notifies spawn, shown while the game shows them.
 
 A character sequence can carry an effect notify state (``AnimNotifyStateEffect_C``)
-whose effect group (``EffectModelGroup_C``) lists effect models. An
-``EffectModelSkeletalMesh_C`` model names a skeletal mesh and the animation it plays,
+whose effect group (``EffectModelGroup_C``) lists effect models; the notify's effect may
+also be an ``EffectModelSkeletalMesh_C`` itself, which plays at spawn with only its own
+lifetime. An ``EffectModelSkeletalMesh_C`` model names a skeletal mesh and the animation it plays,
 such as a book a character reads during an idle action. Everything is read from the game
 data and follows the game's own effect scripts; nothing is paired by name, and an
 animation a clip's effect plays belongs to that effect: blueprint props never claim it
@@ -17,7 +18,8 @@ tag-gated notifies are reported, never approximated.
 
 Timing (``EffectModelGroupSpec``, ``EffectSpec``, ``EffectLifeTime``): the effect spawns
 at the notify's start; a group plays each model after its delay (``Value``), and the
-mesh model then plays its animation once. Each level (group, model) has a three-stage
+mesh model then plays its animation once; an effect without a group has only the model
+level. Each level (group, model) has a three-stage
 lifetime (``StartTime``/``LoopTime``/``EndTime``): without a loop it ends by itself
 after their sum; with one it lives until the notify ends, then plays out its lifetime
 (``Start + Loop + End`` minus its time wrapped into the loop) unless the notify stops
@@ -95,15 +97,18 @@ def lifetime(properties):
     return stages
 
 
-def mesh_models(exports):
-    """(mesh models as [(package, delay seconds)], group lifetime, reason it cannot be
-    exported or None) of one effect.
+def mesh_models(exports, package):
+    """(mesh models as [(package, delay seconds)], group lifetime or None, reason it cannot
+    be exported or None) of one effect.
 
+    An effect that is itself one skeletal mesh model plays at spawn with no group level.
     Other effect assets (no effect group) spawn no mesh; an unreadable effect raises.
     """
     if not isinstance(exports, list):
         raise ValueError("The effect is unreadable.")
     if not any(isinstance(item, dict) and item.get("Type") == GROUP for item in exports):
+        if any(isinstance(item, dict) and item.get("Type") == MESH_MODEL for item in exports):
+            return [(package, 0.0)], None, None
         return [], None, None
     properties = _one(exports, GROUP)
     data = properties.get("EffectData") if properties else None
@@ -188,15 +193,17 @@ def finish(stages, begin, stop, immediately):
 def visible(notify, length, delay, group, model):
     """(play, hide) clip seconds of one mesh model, or a ValueError.
 
-    The mesh plays its animation after its group's delay and hides when its group or
-    model ends, at the clip's end at the latest.
+    The mesh plays its animation after its group's delay and hides when its group (if any)
+    or model ends, at the clip's end at the latest.
     """
     spawn, stop = window(notify, length)
     play = spawn + delay
     if play >= stop:
         raise ValueError("The effect stops before its mesh plays.")
     immediately = notify.get("faster_stop", True)
-    hide = min(finish(group, spawn, stop, immediately), finish(model, play, stop, immediately), length)
+    hide = min(finish(model, play, stop, immediately), length)
+    if group is not None:
+        hide = min(hide, finish(group, spawn, stop, immediately))
     if not hide > play:
         raise ValueError("The effect mesh ends before it shows.")
     return play, hide
@@ -219,7 +226,7 @@ def resolve(client, effects, cancel):
     models = {}
     for clip, length, notify in notified:
         try:
-            found, group, reason = mesh_models(groups.get(notify["effect"]))
+            found, group, reason = mesh_models(groups.get(notify["effect"]), notify["effect"])
         except ValueError as error:
             skipped.setdefault((notify["effect"], str(error)), set()).add(clip)
             continue

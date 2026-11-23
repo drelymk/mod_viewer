@@ -35,6 +35,9 @@ Prop materials and textures are read without decoding: renderer reads list each
 material's texture slots and pointers, and Texture2D reads return the stored image
 bytes for the caller to wrap. ZZZ scans may also list every serialized file holding
 a Material or Texture2D so those pointers can be located.
+Renderer reads also report the prefab's default visibility (renderer enabled and every
+GameObject up to the Animator active) and, for ZZZ, that Animator's GameObject name and
+controller pointer; an Animator layout the reader cannot parse leaves the controller unknown.
 Avatar reads stop after the skeleton, reference pose and path-hash table: optional
 HumanDescription authoring metadata is unnecessary for skinning and varies across
 native asset layouts. Mesh shapes filter unrelated outfit families before opening

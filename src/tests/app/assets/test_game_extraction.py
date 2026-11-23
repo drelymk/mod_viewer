@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from app.assets import index
-from app.assets.game_extract import native, pipeline, runtime, wuwa_props
+from app.assets.game_extract import native, pipeline, runtime, unity_dds, wuwa_props
 from app.assets.game_extract.native import capture, read_mesh, match_components, make_rig, humanoid_controls
 from app.assets.rig import validate_rig
 from app.bridge.api import ModViewerAPI
@@ -1360,7 +1360,7 @@ def test_wuwa_props_need_an_attachment_and_clip_timing(tmp_path, monkeypatch, sc
     sibling_root = "Client/Content/Aki/Character/Weapon/Prop/Role/Prop03/"
     book, book_animation = book_root + "Model/Book01", sibling_root + "BaseAnim/Action01"
     effect_root = "Client/Content/Aki/Effect/"
-    book_group, book_model = effect_root + "EffectGroup/Character01/DA_Group_Book01", effect_root + "DataAsset/DA_Mesh_Book01"
+    book_model = effect_root + "DataAsset/DA_Mesh_Book01"
     loose_group, loose_model = effect_root + "EffectGroup/Character01/DA_Group_Pet01", effect_root + "DataAsset/DA_Mesh_Pet01"
     claim_group, claim_model = effect_root + "EffectGroup/Character01/DA_Group_Prop01", effect_root + "DataAsset/DA_Mesh_Prop01"
     particles = effect_root + "EffectGroup/Character01/DA_Group_Sparks01"
@@ -1418,12 +1418,14 @@ def test_wuwa_props_need_an_attachment_and_clip_timing(tmp_path, monkeypatch, sc
     template = "OtherCase01_GEN_VARIABLE"
     documents = {wuwa_props.MODEL_CONFIG: [dict(Type="CompositeDataTable", Rows=rows)], MESH: mesh_document(body_material),
                  prop: mesh_document(prop_material, prop_skeleton),
-                 # The base blueprint attaches the component to a socket; the derived one sets its mesh.
+                 # The base blueprint attaches the component to a socket with a float-noise offset; the derived one sets its mesh.
                  base_blueprint: [dict(Type="BlueprintGeneratedClass", Name="BP_Base_Character01_C"),
                                   dict(Type="SCS_Node", Name="SCS_Node_1", Properties=dict(
                                       InternalVariableName="OtherCase01", AttachToName="Secondary01",
                                       ParentComponentOrVariableName="CharacterMesh0")),
-                                  dict(Type="SkeletalMeshComponent", Name=template, Properties=dict(bHideLogicallyOnBeginPlay=True))],
+                                  dict(Type="SkeletalMeshComponent", Name=template, Properties=dict(
+                                      bHideLogicallyOnBeginPlay=True, RelativeLocation=dict(X=-2e-5, Y=1e-5, Z=0.0),
+                                      RelativeRotation=dict(Pitch=-6e-5, Yaw=6e-5, Roll=4e-5)))],
                  blueprint: [dict(Type="BlueprintGeneratedClass", Name="BP_Character01_C",
                                   SuperStruct=dict(ObjectPath=base_blueprint + ".1")),
                              dict(Type="SkeletalMeshComponent", Name=template, Properties=dict(
@@ -1448,20 +1450,20 @@ def test_wuwa_props_need_an_attachment_and_clip_timing(tmp_path, monkeypatch, sc
             EffectDataAssetRef=dict(AssetPathName=game(group)), SyncEventTimeToEffectTime=True, **settings))
 
     if scenario == "effect":
-        # Clip01 spawns the book on a socket for its middle half, a pet on no socket
-        # while its root moves, particles with an offset, and the blueprint prop's
-        # own sequence on its mesh at Root through a model the viewer cannot reproduce:
-        # that effect still plays the sequence instead of the component.
+        # Clip01 spawns the book's mesh model directly on a socket for its middle half, a pet
+        # on no socket while its root moves, particles with an offset, and the blueprint
+        # prop's own sequence on its mesh at Root through a model the viewer cannot
+        # reproduce: that effect still plays the sequence instead of the component.
         documents[BASE] = [dict(Type="AnimSequence", Name="Clip01", Properties=dict(
                                Skeleton=dict(ObjectPath=SKELETON + ".0"), NumFrames=2, SequenceLength=1,
                                TrackToSkeletonMapTable=[dict(BoneTreeIndex=0)],
                                Notifies=[notify("AnimNotifyStateEffect_C_" + str(index), *timing)
                                          for index, timing in enumerate([(0.25, 0.5), (0.5, 0.5), (0, 1), (0, 1)])])),
-                           effect("AnimNotifyStateEffect_C_0", book_group, SocketName="Secondary01", EffectSlotName="Slot01"),
+                           effect("AnimNotifyStateEffect_C_0", book_model, SocketName="Secondary01", EffectSlotName="Slot01"),
                            effect("AnimNotifyStateEffect_C_1", loose_group),
                            effect("AnimNotifyStateEffect_C_2", particles, SocketName="Root", Location=dict(X=1.0, Y=0.0, Z=0.0)),
                            effect("AnimNotifyStateEffect_C_3", claim_group, SocketName="Root")]
-        documents.update({book_group: effect_group(book_model), loose_group: effect_group(loose_model),
+        documents.update({loose_group: effect_group(loose_model),
                           claim_group: effect_group(claim_model),
                           particles: effect_group(effect_root + "DataAsset/DA_Sparks01", "EffectModelNiagara_C"),
                           book_model: effect_model(book), loose_model: effect_model(prop),
@@ -1599,6 +1601,56 @@ def test_wuwa_props_need_an_attachment_and_clip_timing(tmp_path, monkeypatch, sc
     sessions.clear()
 
 
+@pytest.mark.parametrize("native,expected", [
+    # Byte-identical, or the same image re-encoded within a few levels, proves the role.
+    ("same", {"MainTex": "diffuse"}),
+    ("near", {"MainTex": "diffuse"}),
+    # A different image, or another size, proves nothing.
+    ("far", {}),
+    ("small", {}),
+    # A byte-identical parameter is not contested by a near one of the same part.
+    ("both", {"MainTex": "diffuse"}),
+    # Sections may name their diffuse differently: each parameter proves the role.
+    ("sections", {"MainTex": "diffuse", "BaseCol": "diffuse"}),
+])
+def test_wuwa_texture_roles_need_matching_captured_pixels(native, expected):
+    base = bytes((index * 7) % 200 + 20 for index in range(64))
+    variants = {
+        "same": (4, 4, base),
+        "near": (4, 4, bytes(value + 3 for value in base)),
+        "far": (4, 4, bytes((value + 60) % 256 for value in base[:32]) + base[32:]),
+        "small": (2, 2, base[:16]),
+    }
+
+    def texture(variant):
+        width, height, data = variants[variant]
+        return dict(width=width, height=height, format="PF_R8G8B8A8", data=data)
+
+    picks = {"MainTex": "same", "OtherTex": "near"} if native == "both" else         {"MainTex": "same", "BaseCol": "same"} if native == "sections" else {"MainTex": native}
+    parameters = {name: f"Texture{index:02d}" for index, name in enumerate(picks, 1)}
+    textures = {parameters[name]: texture(variant) for name, variant in picks.items()}
+    payloads = {hashlib.sha256(base).hexdigest(): ("diffuse", unity_dds.wrap(4, 4, 28, base))}
+    parts = [(payloads, {name: parameters[name]}) for name in parameters] if native == "sections"         else [(payloads, parameters)]
+
+    class Reader:
+        def read(self, tier, package):
+            return textures.get(package)
+
+    assert wuwa_props._learn(Reader(), "HD", parts) == expected
+
+
+@pytest.mark.parametrize("parameters,expected", [
+    # A prop material's proven parameter feeds its role; unproven parameters feed nothing.
+    ({"MainTex": "Texture01", "Ramp": "Texture02"}, {"diffuse": "Texture01"}),
+    # Two proven parameters naming one texture agree; naming two textures, the role is left out.
+    ({"MainTex": "Texture01", "BaseCol": "Texture01"}, {"diffuse": "Texture01"}),
+    ({"MainTex": "Texture01", "BaseCol": "Texture02", "LightTex": "Texture03"}, {"light_map": "Texture03"}),
+])
+def test_wuwa_prop_roles_are_never_guessed_between_textures(parameters, expected):
+    slots = {"MainTex": "diffuse", "BaseCol": "diffuse", "LightTex": "light_map"}
+    assert wuwa_props._role_textures(slots, parameters) == expected
+
+
 MODEL01 = "Client/Content/Aki/Effect/DataAsset/DA_Mesh01"
 ABSOLUTE = "EAnimLinkMethod::Absolute"
 MESH_KEY = f"EffectModelSkeletalMesh_C'{MODEL01}.DA_Mesh01'"
@@ -1621,6 +1673,8 @@ REFS = dict(SkeletalMeshRef=dict(ObjectPath=MESH + ".0"), AnimationRef=dict(Obje
         dict(Key=MESH_KEY, Value=0.0)]))],
      ([(MODEL01, 0.0)], (0.0, 0.0, 0.0), "The effect group has settings the viewer does not support: Location.")),
     ("group", None, None),
+    # A notify may name one mesh model directly: it plays at spawn without a group level.
+    ("group", [dict(Type="EffectModelSkeletalMesh_C", Properties=REFS)], ([(MODEL01, 0.0)], None, None)),
     # Mesh models play their named animation once; an unsupported model still names its
     # mesh and animation, which its clip's effect then claims.
     ("model", dict(REFS, StartTime=0.1, LoopTime=1, EndTime=1.2, ContinuousLoop=True, Looping=False),
@@ -1635,6 +1689,8 @@ REFS = dict(SkeletalMeshRef=dict(ObjectPath=MESH + ".0"), AnimationRef=dict(Obje
     # playing out its lifetime from its time wrapped into the loop; never after the clip.
     ("visible", (dict(start=1, duration=4, faster_stop=True), 0.5, (0, 1, 0), (0, 1, 0)), (1.5, 5.0)),
     ("visible", (dict(start=1, duration=4, faster_stop=True), 0, (2, 0, 0), (0, 1, 0)), (1.0, 3.0)),
+    ("visible", (dict(start=1, duration=4, faster_stop=True), 0, None, (0, 1, 0)), (1.0, 5.0)),
+    ("visible", (dict(start=1, duration=4, faster_stop=True), 0, None, (2, 0, 0)), (1.0, 3.0)),
     ("visible", (dict(start=1, duration=4, faster_stop=False), 0, (0, 0.25, 0.4), (0, 1, 1)), (1.0, 5.65)),
     ("visible", (dict(start=1, duration=4.1, faster_stop=False), 0, (0, 1, 0.5), (0.5, 1, 0)), (1.0, 5.5)),
     ("visible", (dict(start=1, duration=8.5, faster_stop=False), 0, (0, 1, 2), (0, 1, 2)), (1.0, 10.0)),
@@ -1647,7 +1703,7 @@ def test_effect_props_follow_the_game_effect_lifetimes(check, value, expected):
         if check == "window":
             return wuwa_effect_props.window(value, 1)
         if check == "group":
-            return wuwa_effect_props.mesh_models(value)
+            return wuwa_effect_props.mesh_models(value, MODEL01)
         if check == "model":
             return wuwa_effect_props.mesh_model([dict(Type="EffectModelSkeletalMesh_C", Properties=value)])
         notify, delay, group, model = value

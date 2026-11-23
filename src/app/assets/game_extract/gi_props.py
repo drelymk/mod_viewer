@@ -16,7 +16,7 @@ from pathlib import Path
 import zlib
 
 from app.assets.loader.hash_asset import load_hash_asset
-from . import zzz_index, zzz_prop_textures, zzz_props
+from . import unity_dds, zzz_index, zzz_prop_textures, zzz_props
 from .runtime import ExtractionCancelled, check_cancelled
 from .zzz_morphs import _references
 
@@ -91,7 +91,7 @@ def captured_payloads(root, record):
                 path = Path(file)
                 if path.stat().st_size > MAX_TEXTURE_BYTES:
                     continue
-                payload = zzz_prop_textures.dds_payload(path.read_bytes())
+                payload = unity_dds.top_mip(path.read_bytes())
             except OSError:
                 continue
             if payload is not None:
