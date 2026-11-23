@@ -25,6 +25,7 @@ internal static class PropMaterials
     internal static object Renderer(SkinnedMeshRenderer renderer, IReadOnlyList<SerializedFile> files, Game game)
     {
         if (renderer.m_Materials.Count > 64) throw new InvalidDataException();
+        var visible = Visible(renderer, game, files, out var animator);
         return new
         {
             materials = renderer.m_Materials.Select(pointer =>
@@ -36,16 +37,18 @@ internal static class PropMaterials
                 if (objects.Length != 1 || (ClassIDType)objects[0].classID != ClassIDType.Material) throw new InvalidDataException();
                 return Describe(new Material(new ObjectReader(file[0].reader, file[0], objects[0], game)), files, reference);
             }).ToArray(),
-            // Genshin props need the prefab's default visibility; ZZZ props do not use it.
-            visible = game.Type == GameType.GI ? Visible(renderer, game) : null
+            visible,
+            // The Animator the prefab's renderer belongs to: its GameObject name and controller.
+            animator = game.Type == GameType.GI ? null : animator
         };
     }
 
     // Whether the prefab draws the renderer by default: it is enabled and its GameObject and
     // every ancestor up to and including the Animator's are active. Null when the renderer or
     // a GameObject's serialized layout does not prove those flags (each must be consumed exactly).
-    private static bool? Visible(SkinnedMeshRenderer renderer, Game game)
+    private static bool? Visible(SkinnedMeshRenderer renderer, Game game, IReadOnlyList<SerializedFile> files, out object? animator)
     {
+        animator = null;
         if (renderer.m_Enabled is not bool enabled) return null;
         var file = renderer.assetsFile;
         T? Read<T>(long pathId, ClassIDType kind, Func<ObjectReader, T> create) where T : class
@@ -77,7 +80,27 @@ internal static class PropMaterials
             var components = gameObject.m_Components.Where(p => p.m_FileID == 0)
                 .Select(p => file.m_Objects.FirstOrDefault(o => o.m_PathID == p.m_PathID)).ToArray();
             if (components.Length != gameObject.m_Components.Count || components.Any(o => o is null)) return null;
-            if (components.Any(o => (ClassIDType)o!.classID == ClassIDType.Animator)) return enabled && active;
+            var animators = components.Where(o => (ClassIDType)o!.classID == ClassIDType.Animator).ToArray();
+            if (animators.Length > 0)
+            {
+                // ZZZ props learn which controller plays each prefab; an Animator layout the
+                // reader does not prove leaves it unknown and the visibility answer unchanged.
+                if (animators.Length == 1 && game.Type != GameType.GI)
+                {
+                    try
+                    {
+                        var component = Read(animators[0]!.m_PathID, ClassIDType.Animator, reader => new Animator(reader));
+                        if (component is not null)
+                            animator = new { name = gameObject.m_Name, controller = Reference(file, component.m_Controller, files) };
+                    }
+                    catch (Exception error) when (error is InvalidDataException or IOException or ArgumentException
+                        or IndexOutOfRangeException or EndOfStreamException)
+                    {
+                        animator = null;
+                    }
+                }
+                return enabled && active;
+            }
             var transforms = components.Where(o => (ClassIDType)o!.classID == ClassIDType.Transform).ToArray();
             if (transforms.Length != 1) return null;
             var transform = Read(transforms[0]!.m_PathID, ClassIDType.Transform, reader => new Transform(reader));

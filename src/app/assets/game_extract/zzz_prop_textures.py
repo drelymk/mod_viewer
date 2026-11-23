@@ -22,16 +22,40 @@ CAPTURED_ROLES = {"Diffuse": "diffuse", "LightMap": "light_map", "MaterialMap": 
 MAX_TEXTURE_READS = 96
 MAX_RENDERERS = 8
 MAX_COPIES = 4
+MAX_CONTEXT_READS = 256
 
 
-class _Reader:
-    """Cached native reads; a texture keeps only its top mip, and differing copies resolve to None."""
+class Reader:
+    """Cached native reads for one extraction's props: routed renderers, renderer reads and
+    textures (a texture keeps only its top mip, and differing copies resolve to None)."""
 
     def __init__(self, client, index, cancel, route=None):
         self.client, self.index, self.files, self.cancel = client, index, getattr(index, "files", {}), cancel
         # A game may route renderers itself: route(chosen, mesh, source identity) -> renderer rows.
         self.route = route
         self.cache, self.reads, self.routes, self.avatars = {}, 0, None, None
+        self.routed_rows, self.renderer_reads = {}, {}
+
+    def routed(self, chosen, mesh, source):
+        """The renderer rows proven to draw ``mesh`` (the game's ``route`` or :func:`renderers`)."""
+        if source not in self.routed_rows:
+            check_cancelled(self.cancel)
+            self.routed_rows[source] = self.route(chosen, mesh, source) if self.route else renderers(self, chosen, mesh)
+        return self.routed_rows[source]
+
+    def renderer(self, row):
+        """One renderer row's native read, or None when it cannot be read."""
+        key = zzz_index.identity(row)
+        if key not in self.renderer_reads:
+            check_cancelled(self.cancel)
+            try:
+                value = self.client.read(row)
+            except ExtractionCancelled:
+                raise
+            except (ValueError, KeyError, TypeError):
+                value = None
+            self.renderer_reads[key] = value if isinstance(value, dict) else None
+        return self.renderer_reads[key]
 
     def locate(self, owner, pointer):
         if not isinstance(pointer, dict) or not isinstance(pointer.get("cab"), str) or type(pointer.get("path_id")) is not int:
@@ -126,32 +150,87 @@ def renderers(reader, chosen, mesh):
     return sorted(found, key=zzz_index.identity)
 
 
+def _named_segments(name, rows):
+    """{renderer object name: 2 for the exact name, 1 for a legacy ``..._Model_<name>``} that ``name`` matches."""
+    result = {}
+    for row in rows:
+        segment = row["renderer"]["path"].rsplit("/", 1)[-1]
+        if segment and (name == segment or name.endswith("_Model_" + segment)):
+            result[segment] = max(result.get(segment, 0), 2 if name == segment else 1)
+    return result
+
+
+def alternates(reader, chosen, candidates):
+    """{name: reason} of the candidates to drop as another outfit's meshes.
+
+    ``candidates`` holds proven props as (name, mesh, source identity), one per name. Renderers
+    route by complete bone-path tuples, so candidates compete exactly when they route to the
+    same renderers. A name only breaks that tie: for each renderer object name, the candidates
+    matching it best (see ``_named_segments``: the exact name over a legacy ``..._Model_<name>``
+    copy) stay, and a competitor matching none of its renderers best is dropped; a group whose
+    renderers no candidate names is unchanged. A candidate no verified renderer routes to is
+    never drawn by the captured outfit's prefabs (another outfit's piece with its own bone
+    list), so it is dropped without consulting names.
+    """
+    groups, result = {}, {}
+    for name, mesh, source in candidates:
+        rows = reader.routed(chosen, mesh, source)
+        if not rows:
+            result[name] = "The captured outfit's renderers never draw the mesh."
+            continue
+        groups.setdefault(frozenset(zzz_index.identity(row) for row in rows), []).append((name, rows))
+    for group in groups.values():
+        named = {name: _named_segments(name, rows) for name, rows in group}
+        best = {}
+        for segments in named.values():
+            for segment, strength in segments.items():
+                best[segment] = max(best.get(segment, 0), strength)
+        if len(group) < 2 or not best:
+            continue
+        for name, segments in named.items():
+            if not any(strength == best[segment] for segment, strength in segments.items()):
+                result[name] = ("Another copy of the mesh its renderer is named for is kept." if segments else
+                                "Another outfit's mesh: the renderers it routes to are named for a different mesh.")
+    return result
+
+
+def contexts(reader, chosen, meshes):
+    """{controller key: draws props} for the renderers that route to ``meshes``.
+
+    ``meshes`` holds (mesh, source identity) pairs. At most ``MAX_CONTEXT_READS`` routed renderer
+    rows are read; a read without an ``animator`` whose controller ``path_id`` is non-zero is
+    ignored. The key is (controller CAB casefold, path_id), and a context draws props when any
+    renderer read under it reports ``visible is True``.
+    """
+    rows = {}
+    for mesh, source in meshes:
+        for row in reader.routed(chosen, mesh, source):
+            rows.setdefault(zzz_index.identity(row), row)
+    result = {}
+    for row in list(rows.values())[:MAX_CONTEXT_READS]:
+        value = reader.renderer(row) or {}
+        animator = value.get("animator")
+        controller = animator.get("controller") if isinstance(animator, dict) else None
+        if (not isinstance(controller, dict) or not isinstance(controller.get("cab"), str)
+                or type(controller.get("path_id")) is not int or controller["path_id"] == 0):
+            continue
+        key = (controller["cab"].casefold(), controller["path_id"])
+        result[key] = result.get(key, False) or value.get("visible") is True
+    return result
+
+
 def _materials(reader, chosen, mesh, source):
     """Per routed renderer, the (locator, description) of each of ``mesh``'s section materials."""
     sections = len(mesh.get("sections") or [])
     result = []
-    routed = reader.route(chosen, mesh, source) if reader.route else renderers(reader, chosen, mesh)
-    for row in routed[:MAX_RENDERERS]:
-        check_cancelled(reader.cancel)
-        try:
-            entries = reader.client.read(row).get("materials")
-        except ExtractionCancelled:
-            raise
-        except (ValueError, KeyError, TypeError, AttributeError):
-            continue
+    for row in reader.routed(chosen, mesh, source)[:MAX_RENDERERS]:
+        entries = (reader.renderer(row) or {}).get("materials")
         if not isinstance(entries, list) or len(entries) < sections or not all(isinstance(entry, dict) for entry in entries):
             continue
         described = [reader.material(row, entry) for entry in entries[:sections]]
         if all(value is not None for _locator, value in described):
             result.append(described)
     return result
-
-
-def dds_payload(raw):
-    """A DDS file's image bytes after its (DX10) header, or None."""
-    if raw[:4] != b"DDS " or len(raw) < 148:
-        return None
-    return raw[148:] if raw[84:88] == b"DX10" else raw[128:]
 
 
 def _captured_payloads(asset, part):
@@ -172,7 +251,7 @@ def _captured_payloads(asset, part):
                 raw = (folder / Path(str(item[3])).name).read_bytes()
             except OSError:
                 continue
-            payload = dds_payload(raw)
+            payload = unity_dds.top_mip(raw)
             if payload is not None:
                 result[hashlib.sha256(payload).hexdigest()] = CAPTURED_ROLES[item[0]]
     return result
@@ -235,12 +314,13 @@ def _prop_textures(reader, chosen, mesh, source, slots, library, section):
 
 
 def attach(entries, meshes, client, chosen, index, library, cancel, captured, asset, *, route=None,
-           payloads=_captured_payloads):
+           payloads=_captured_payloads, reader=None):
     """Give each written prop entry its proven ``textures``, or a ``texture_error`` saying why not.
 
-    ``payloads(asset, part)`` maps a captured part's texture digests to viewer roles.
+    ``payloads(asset, part)`` maps a captured part's texture digests to viewer roles; ``reader``
+    may share an extraction's routed renderers and reads.
     """
-    reader = _Reader(client, index, cancel, route)
+    reader = reader or Reader(client, index, cancel, route)
     try:
         slots = _learn_slots(reader, chosen, captured, asset, payloads)
     except ValueError as error:

@@ -294,6 +294,34 @@ def test_prop_track_layouts_are_validated(changes, valid):
     assert bool(animations._props(dict(props=[rigid]))) is ("track_layout" not in changes)
 
 
+_ANIMATED_WINDOW_TRACKS = dict(socket=None, bone_count=2, tracks={"clip01": dict(
+    file="Props/" + "1" * 32 + ".bin", sha256="2" * 64, frame_count=2, duration=1, start=0, end=1)})
+
+
+@pytest.mark.parametrize("visible, changes, valid", [
+    ({"clip01": [[0, 0.5], [0.75, 1]]}, {}, True),
+    ({"clip01": [[0, 0.5], [0.25, 1]]}, {}, False),
+    ({"clip01": [[0.75, 1], [0, 0.5]]}, {}, False),
+    ({"clip01": [[1, 0.5]]}, {}, False),
+    ({"clip01": [[-0.1, 0.5]]}, {}, False),
+    ({"clip01": [[False, 0.5]]}, {}, False),
+    ({"clip01": []}, {}, False),
+    ({}, {}, False),
+    ({"clip01": [0, 1]}, {}, False),
+    ({"clip01": [[i, i + 0.5] for i in range(65)]}, {}, False),
+    ({"clip01": [[0, 0.5]]}, _ANIMATED_WINDOW_TRACKS, False),
+])
+def test_rigid_prop_clip_windows_are_validated_and_round_trip(visible, changes, valid):
+    prop = dict(id="prop-01", name="Prop01", file="Props/" + "0" * 32 + ".bin", layout=animations.PROP_LAYOUT,
+                vertex_count=3, index_count=3, sha256="3" * 64, visible=visible, **changes)
+    props = animations._props(dict(props=[prop]))
+    assert bool(props) is valid
+    if valid:
+        assert props["prop-01"]["visible"] == visible
+    else:
+        assert props == {}
+
+
 def test_animation_library_containment_integrity_and_session_lifecycle(tmp_path, monkeypatch):
     rig, source = sample()
     _, data = converter()(source, rig, 1)

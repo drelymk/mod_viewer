@@ -1405,7 +1405,16 @@ of documentation, comments and tests; use portable fixtures instead.
   and other meshes driven by captured bones never qualify, and static effect meshes
   are ignored. Geometry is converted to asset space through the rig root and that
   placement, with UVs and triangle order following the captured parts' convention.
-  Different native copies under one name are skipped, never guessed. Prop failures
+  Different native copies under one name are skipped, never guessed.
+  Intentional name exception: another outfit's weapon (same bone paths, different mesh)
+  routes to the same null-mesh renderers as the captured outfit's, and the game binds
+  those renderers by name. Renderers route by complete bone-path tuples, so proven
+  candidates compete exactly when they route to the same verified-Avatar renderers. Only
+  then does a name decide: per renderer GameObject name, the best-matching candidates stay
+  (the exact name over a legacy `..._Model_<name>` copy; equal matches all stay) and
+  competitors matching none of their renderers best are skipped; a group no candidate
+  names is unchanged. A candidate no verified-Avatar renderer routes to (another outfit's
+  piece with its own bone list) is skipped without consulting names. Prop failures
   never block clips (`prop_error`, `skipped_props` in the report). Catalogs expose
   `animation_props`. Each prop load publishes fresh single-use geometry URLs
   (releasing the previous ones) after checksum and range checks; prop textures go
@@ -1415,7 +1424,8 @@ of documentation, comments and tests; use portable fixtures instead.
   Which material slot feeds which viewer role (diffuse, light_map, material_map) is
   learned per extraction, never assumed from slot names: a slot takes a role only
   when its top mip is byte-identical to a captured texture of that role on a proven
-  body part, with no competing slot or role. The prop's routed materials must agree
+  body part (the captured DDS's top mip too: some captures keep their whole mip chain),
+  with no competing slot or role. The prop's routed materials must agree
   on each slot's content; its top mip is written unchanged as a single-mip DX10 DDS
   (`Props/<digest>.dds`, sRGB only for diffuse) and listed under the prop's
   `textures`. Normal maps stay unproven (captures do not hold the game's normal
@@ -1428,8 +1438,26 @@ of documentation, comments and tests; use portable fixtures instead.
   shows them only while a clip is applied: never at rest, in manual posing or after
   Stop. They follow the body mesh's model transform; textured props use the body
   mesh's game material profile and the shared texture registry under prop-scoped
-  keys released on disposal. Clips may park a prop under the floor or away from the
-  hands, as the game does.
+  keys released on disposal.
+  ZZZ clips carry no visibility curves: the game parks a hidden weapon's bones under the
+  floor or leaves them at the default pose. Extraction therefore gives each ZZZ prop
+  per-clip windows (manifest `visible`: clip id -> ordered, disjoint `[start, end]`
+  seconds, at most 64 per clip). A clip shows the prop only on frames where it places
+  the prop's own bones (its skin bones and their ancestors outside the captured body
+  chain) away from the rig rest (beyond 1e-3 in translation, rotation angle or scale;
+  a part with no own bones skips this test) and the posed prop's bounding-box centre is
+  not below the Avatar ground the viewer stands clips on; each run of such frames widens
+  by half a frame. A clip without a window hides the prop, and a prop no clip shows is
+  not exported (`skipped_props`). The viewer shows a windowed prop only inside a window
+  of the playing clip (shared-library clips hide it); props without `visible` (older
+  libraries) keep showing whenever a clip is applied. Genshin props are unchanged.
+  The game switches weapons on at runtime, but each prefab's defaults show which contexts
+  ever draw them: the ZZZ renderer read also returns the prefab's default visibility and
+  its Animator's controller. A context (controller) draws props when some renderer routed
+  to an exported prop is drawn by default in a prefab using it. A clip that only
+  contexts drawing no props play (e.g. city prefabs that draw no weapon) hides every
+  prop, even where the clip keys a weapon in place; clips no known context plays keep
+  their windows, and an older reader without this data changes nothing.
 - Genshin Impact (GIMI) extraction runs the same pinned reader in `--gi` mode with the
   database ACL decoder rebuilt from the same unmodified source. Accept only the
   global `GenshinImpact_Data` layout; the effective block set is

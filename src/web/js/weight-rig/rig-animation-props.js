@@ -23,6 +23,9 @@ import {
 // animated prop shows only inside its track's clip window (start..end seconds); its
 // animation plays from the window's start and holds its last frame.
 //
+// A rigid prop with clip windows shows only inside a window of the playing clip; a rigid
+// prop without windows (older libraries) shows whenever a clip is applied.
+//
 // The viewer's Show props toggle (on by default) shows or hides every prop of every game.
 const LAYOUT = 'prop-v1';
 const TRACK_LAYOUT = 'prop-track-v1';
@@ -135,6 +138,25 @@ function propTracks(descriptor, buffer) {
   return tracks.size ? tracks : null;
 }
 
+// A rigid prop's clip windows as Map clip -> [[start, end], ...], or null when invalid.
+function propWindows(descriptor) {
+  const raw = descriptor.visible;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const windows = new Map();
+  for (const [clip, pairs] of Object.entries(raw)) {
+    if (!Array.isArray(pairs) || !pairs.length) return null;
+    const list = [];
+    for (const pair of pairs) {
+      if (!Array.isArray(pair) || pair.length !== 2) return null;
+      const [start, end] = pair;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || !(start >= 0) || !(end >= start)) return null;
+      list.push([start, end]);
+    }
+    windows.set(clip, list);
+  }
+  return windows.size ? windows : null;
+}
+
 const SAMPLE = {
   translation: new Vector3(),
   next: new Vector3(),
@@ -183,6 +205,10 @@ export function createAnimationProps({ loadProps, getScene, requestRender, mater
   let showProps = true;
   function visible(prop) {
     if (!transforms || !showProps) return false;
+    if (prop.windows) {
+      const windows = playback && prop.windows.get(playback.clip);
+      return !!windows && windows.some(([start, end]) => playback.time >= start - 1e-6 && playback.time <= end + 1e-6);
+    }
     if (!prop.animation) return true;
     const track = playback && prop.animation.tracks.get(playback.clip);
     return !!track && playback.time >= track.start - 1e-6 && playback.time <= track.end + 1e-6;
@@ -232,6 +258,9 @@ export function createAnimationProps({ loadProps, getScene, requestRender, mater
     if (current !== generation || !buffer) return null;
     const tracks = animated && trackBuffer ? propTracks(descriptor, trackBuffer) : null;
     if (animated && (!tracks || descriptor.socket >= target.bones.length)) return null;
+    const windowed = !animated && descriptor.visible !== undefined;
+    const windows = windowed ? propWindows(descriptor) : null;
+    if (windowed && !windows) return null;
     const textured = materialFor(descriptor, reference, target.animation_session);
     let prop;
     try {
@@ -242,6 +271,7 @@ export function createAnimationProps({ loadProps, getScene, requestRender, mater
       throw error;
     }
     if (animated) prop.animation = { socket: descriptor.socket, boneCount: descriptor.bone_count, tracks };
+    if (windows) prop.windows = windows;
     // Follow the body's model transform (orientation, placement) every frame.
     prop.mesh.updateMatrixWorld = function updateMatrixWorld() {
       this.matrixWorld.copy(reference?.matrixWorld || IDENTITY);

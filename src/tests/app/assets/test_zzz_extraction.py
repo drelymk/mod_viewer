@@ -18,7 +18,7 @@ from app.assets import index
 from app.assets.animations import AnimationSessions, read_clip
 from app.assets.animation_morphs import read_morphs
 from app.assets.game_extract import (zzz_animation, zzz_index, zzz_morphs, zzz_native, zzz_pipeline,
-                                     zzz_prop_textures, zzz_runtime)
+                                     unity_dds, zzz_prop_textures, zzz_props, zzz_runtime)
 from app.assets.game_extract.pipeline import rest_worlds
 from app.assets.game_extract.runtime import ExtractionCancelled
 from app.assets.loader.hash_asset import load_hash_asset
@@ -396,6 +396,9 @@ def test_zzz_extraction_adds_textured_props_driven_only_by_uncaptured_bones(tmp_
     mesh["bone_hashes"] = [0, joint]
     avatar["bones"].append(dict(path="Root/Prop01", hash=prop_path, parent=0,
         translation=[0, 0, 1], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
+    # The prop renderer's GameObject path is "Prop01"; a bone of that path makes it a verified route.
+    avatar["bones"].append(dict(path="Prop01", hash=zlib.crc32(b"Prop01"), parent=0,
+        translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
     bind = np.eye(4)
     bind[2, 3] = -1
     prop = dict(name="SeparateMesh_Avatar_Type01_Character01_Model_Prop01", vertices=[0, 0, 1, 1, 0, 1, 0, 1, 1],
@@ -408,8 +411,11 @@ def test_zzz_extraction_adds_textured_props_driven_only_by_uncaptured_bones(tmp_
               "bind_poses": [np.diag([1, .5, 1, 1]).ravel().tolist()]}
     static = {**deepcopy(prop), "name": prop["name"] + "_Glow", "weights": None, "bone_indices": None,
               "bind_poses": None, "bone_hashes": []}
+    # Another outfit's copy of the prop: other vertices, the same skin, bone paths and renderers.
+    alternate = {**deepcopy(prop), "name": "SeparateMesh_Avatar_Type01_Character01_Model_Alternate_Prop01",
+                 "vertices": [0, 0, 1, 1, 0, 1, 0, 1.5, 1]}
     extra = {}
-    for number, value in enumerate((prop, driven, static), start=10):
+    for number, value in enumerate((prop, driven, static, alternate), start=10):
         rows.append({**rows[1], "name": value["name"], "path_id": number})
         extra[number] = value
     # The captured body diffuse is a BC1 block; the body material's _MainTex holds the same
@@ -431,7 +437,8 @@ def test_zzz_extraction_adds_textured_props_driven_only_by_uncaptured_bones(tmp_
                     floats=[], colors=[])
     for number, (bones, texture) in enumerate(((["", "Root/Joint01"], 20), (["Root/Prop01"], 21)), start=30):
         rows.append({**rows[0], "type": "SkinnedMeshRenderer", "name": "", "path_id": number, "material": material(texture),
-                     "renderer": dict(path="", bone_paths=bones, avatar=dict(cab="CAB-01", path_id=rows[0]["path_id"]))})
+                     "renderer": dict(path="Prop01" if bones == ["Root/Prop01"] else "", bone_paths=bones,
+                                      avatar=dict(cab="CAB-01", path_id=rows[0]["path_id"]))})
     files = {"cab-textures": [(rows[0]["block"], 4096, 0, "CAB-Textures")]}
     read = client.read
 
@@ -445,6 +452,16 @@ def test_zzz_extraction_adds_textured_props_driven_only_by_uncaptured_bones(tmp_
             return dict(name="Texture", width=4, height=4, format=10, format_name="DXT1", mip_count=1,
                         file="texture-1.bin", size=8)
         value = read(row)
+        if row.get("type") == "AnimationClip":
+            # The clip also keys the prop bone, lifted off its rest translation, before the Animator column.
+            samples = np.frombuffer((client.work / "samples-1.bin").read_bytes(), "<f4").reshape(2, 11)
+            prop_columns = np.tile(np.array([0, 0, 1.5, 0, 0, 0, 1, 1, 1, 1], dtype="<f4"), (2, 1))
+            joined = np.concatenate([samples[:, :10], prop_columns, samples[:, 10:]], axis=1)
+            (client.work / "samples-1.bin").write_bytes(joined.astype("<f4").tobytes())
+            bindings = value["bindings"]
+            value["bindings"] = bindings[:3] + [dict(path=prop_path, attribute=attribute, type="Transform", custom=0,
+                                                     pointer=0) for attribute in (1, 2, 3)] + bindings[3:]
+            value["acl_count"] = 21
         for binding in value.get("bindings", []):
             binding["path"] = joint if binding["path"] == 100 else binding["path"]
         return value
@@ -454,8 +471,15 @@ def test_zzz_extraction_adds_textured_props_driven_only_by_uncaptured_bones(tmp_
                                    zzz_index.IndexRows(rows, files))
     assert report["props"] == [dict(id=report["props"][0]["id"], name=prop["name"],
                                     source=zzz_index.identity(rows[3]), textures=["diffuse"])]
-    assert report["skipped_props"] == []
-    entry = json.loads((output / "Animation/manifest.json").read_text())["props"][0]
+    # The alternate copy routes to the same renderers, which name only the captured outfit's prop.
+    assert report["skipped_props"] == [dict(name=alternate["name"], source=zzz_index.identity(rows[6]),
+                                            reason="Another outfit's mesh: the renderers it routes to are named for a different mesh.")]
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    entry = manifest["props"][0]
+    # The clip places the prop above the floor for its whole length, so one window covers it.
+    [clip] = manifest["clips"]
+    expected_visible = {clip["id"]: [[0.0, clip["duration"]]]}
+    assert entry["visible"] == expected_visible
     data = (output / "Animation" / entry["file"]).read_bytes()
     assert entry["vertex_count"] == 3 and entry["index_count"] == 3 and hashlib.sha256(data).hexdigest() == entry["sha256"]
     diffuse = (output / "Animation" / entry["textures"]["diffuse"]["file"]).read_bytes()
@@ -480,6 +504,7 @@ def test_zzz_extraction_adds_textured_props_driven_only_by_uncaptured_bones(tmp_
     assert catalog["animation_props"] == [dict(id=entry["id"], name=prop["name"])]
     token = catalog["animation_session"]
     first = sessions.load_props(token)["props"][0]
+    assert first["visible"] == expected_visible
     assert first["data"] == {"url": "/geometry/1", "length": len(data)} and set(first["textures"]) == {"diffuse"}
     assert first["textures"]["diffuse"].endswith(".dds")
     # Geometry URLs are single-use, so every load publishes fresh ones and releases the last.
@@ -494,6 +519,163 @@ def test_zzz_extraction_adds_textured_props_driven_only_by_uncaptured_bones(tmp_
     token = sessions.catalog(root, "Character01", rig, lambda: True)["animation_session"]
     assert sessions.load_props(token)["status"] == "error"
     assert sessions.load_props("invented")["status"] == "error"
+
+
+@pytest.mark.parametrize("bone, translations, layout, expected", [
+    # Prop bone 2 lifted off its rest translation, above the floor, in either clip layout.
+    (2, [[0, 0, 1.5]] * 4, "frame-major-tqs-f32le", {"clip01": [[0.0, 0.3]]}),
+    (2, [[0, 0, 1.5]] * 4, "frame-major-tq-f32le", {"clip01": [[0.0, 0.3]]}),
+    # The prop bone rests on every frame, so the clip does not place the prop.
+    (2, [[0, 0, 1]] * 4, "frame-major-tqs-f32le", {}),
+    # Placed above the floor for two frames, then parked far below it.
+    (2, [[0, 0, 1.5]] * 2 + [[0, -5, 1]] * 2, "frame-major-tqs-f32le", {"clip01": [[0.0, 0.15]]}),
+    # A body-only part has no own bones, so the floor alone decides and the clip shows it whole.
+    (1, [[0, 0, 1]] * 4, "frame-major-tqs-f32le", {"clip01": [[0.0, 0.3]]}),
+])
+def test_clip_windows_show_a_rig_prop_only_where_clips_place_it_above_the_floor(bone, translations, layout, expected):
+    rig = dict(bones=[
+        dict(name="mesh-space", parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
+        dict(name="Body", parent=0, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
+        dict(name="Prop", parent=1, translation=[0, 0, 1], rotation=[0, 0, 0, 1], scale=[1, 1, 1])])
+    identity = [0, 0, 0, 0, 0, 0, 1, 1, 1, 1]
+    frames = np.array([[identity, identity, [*translation, 0, 0, 0, 1, 1, 1, 1]] for translation in translations],
+                      dtype="<f4")
+    if layout == "frame-major-tq-f32le":
+        frames = frames[..., :7]
+    metadata = dict(frame_count=len(translations), duration=0.3, bone_count=3, layout=layout)
+    positions = np.array([[0, 2, 1], [1, 2, 1], [0, 2.5, 1]], dtype=float)
+    joints = np.array([[bone, 0, 0, 0]] * 3, dtype=np.int64)
+    weights = np.array([[1, 0, 0, 0]] * 3, dtype=float)
+    windows = zzz_props.clip_windows(rig, [("clip01", metadata, frames.tobytes())], [(positions, joints, weights)], {1})
+    assert windows == [expected]
+
+
+def _legacy_dds(fourcc, width, height, data):
+    header = struct.pack("<7I44x", 124, 0x1007, height, width, 0, 0, 1)
+    pixel_format = struct.pack("<II4s5I", 32, 0x4, fourcc, 0, 0, 0, 0, 0)
+    return b"DDS " + header + pixel_format + bytes(20) + data
+
+
+@pytest.mark.parametrize("raw, expected", [
+    # A single-mip BC7 capture keeps every byte after its header.
+    (unity_dds.wrap(8, 8, 98, bytes(range(64))), bytes(range(64))),
+    # A capture saved with its mip chain yields only the top mip compared with game textures.
+    (unity_dds.wrap(8, 8, 98, bytes(range(64)) + bytes(32)), bytes(range(64))),
+    (_legacy_dds(b"DXT1", 8, 8, bytes(range(32)) + bytes(8)), bytes(range(32))),
+    # A format whose level size is unknown keeps every byte; an incomplete top mip is unusable.
+    (unity_dds.wrap(8, 8, 1, bytes(10)), bytes(10)),
+    (unity_dds.wrap(8, 8, 98, bytes(40)), None),
+])
+def test_captured_dds_payloads_compare_only_their_top_mip(raw, expected):
+    assert unity_dds.top_mip(raw) == expected
+
+
+_RENDERER_REASON = "Another outfit's mesh: the renderers it routes to are named for a different mesh."
+
+
+@pytest.mark.parametrize("paths, routes, expected", [
+    # Two candidates share one renderer; only the first is named for it, so the other is dropped.
+    ({1: "Weapon"}, {"Mesh_Model_Weapon": [1], "Mesh_Model_Princess_Weapon": [1]},
+     {"Mesh_Model_Princess_Weapon": _RENDERER_REASON}),
+    # Neither is named for the shared renderer, so nothing is dropped.
+    ({1: "Weapon"}, {"Mesh_Model_Alpha": [1], "Mesh_Model_Beta": [1]}, {}),
+    # Different renderers do not compete, so each stays.
+    ({1: "Weapon", 2: "Other"}, {"Mesh_Model_Weapon": [1], "Mesh_Model_Beta": [2]}, {}),
+    # One renderer binds one mesh: the legacy exporter copy yields to the exact-name copy.
+    ({1: "Weapon"}, {"Weapon": [1], "Mesh_Model_Weapon": [1]},
+     {"Mesh_Model_Weapon": "Another copy of the mesh its renderer is named for is kept."}),
+    # Two legacy copies match equally, so both stay.
+    ({1: "Weapon"}, {"Alpha_Model_Weapon": [1], "Beta_Model_Weapon": [1]}, {}),
+    # No verified renderer draws a candidate with its own bone list, whatever its name.
+    ({1: "Weapon"}, {"Mesh_Model_Weapon": [1], "Mesh_Model_Princess_Weapon": []},
+     {"Mesh_Model_Princess_Weapon": "The captured outfit's renderers never draw the mesh."}),
+])
+def test_alternates_drop_unnamed_competitors_of_a_shared_renderer(paths, routes, expected):
+    rows = {number: dict(block="B", offset=0, cab="CAB", file_ordinal=0, path_id=number, type="SkinnedMeshRenderer",
+                         renderer=dict(path=path)) for number, path in paths.items()}
+
+    def route(chosen, mesh, source):
+        return [rows[number] for number in routes[mesh["name"]]]
+
+    candidates = [(name, dict(name=name), name) for name in routes]
+    reader = zzz_prop_textures.Reader(None, (), threading.Event(), route)
+    assert zzz_prop_textures.alternates(reader, None, candidates) == expected
+
+
+@pytest.mark.parametrize("drawn, played, windows, expected", [
+    # A clip played only by a context that draws no props is removed; the other clip stays.
+    ({"ctx_a": False, "ctx_b": True}, {"ctx_a": {"clip01"}, "ctx_b": {"clip02"}},
+     {"clip01": [[0, 1]], "clip02": [[0, 1]]}, {"clip02": [[0, 1]]}),
+    # A clip that a drawing context also plays stays.
+    ({"ctx_a": False, "ctx_b": True}, {"ctx_a": {"clip01"}, "ctx_b": {"clip01"}},
+     {"clip01": [[0, 1]]}, {"clip01": [[0, 1]]}),
+    # A clip no known context plays keeps its windows.
+    ({"ctx_a": False}, {"ctx_a": {"clip01"}}, {"clip02": [[0, 1]]}, {"clip02": [[0, 1]]}),
+    # Without known contexts nothing changes.
+    ({}, {}, {"clip01": [[0, 1]]}, {"clip01": [[0, 1]]}),
+])
+def test_filter_contexts_removes_clips_only_non_prop_drawing_contexts_play(drawn, played, windows, expected):
+    assert zzz_props.filter_contexts([windows], drawn, played) == [expected]
+
+
+def _animator(path_id):
+    return dict(animator=dict(name="Animator", controller=dict(cab="CAB-01", path_id=path_id)))
+
+
+class _ReadClient:
+    def __init__(self, reads):
+        self.reads = reads
+
+    def read(self, row):
+        value = self.reads[row["path_id"]]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+@pytest.mark.parametrize("reads, expected", [
+    ({1: dict(visible=True, **_animator(7))}, {("cab-01", 7): True}),
+    # Only renderers that are not drawn by default (False or unknown) leave the context hidden.
+    ({1: dict(visible=False, **_animator(7)), 2: dict(visible=None, **_animator(7))}, {("cab-01", 7): False}),
+    # A null controller (path_id 0) or a missing animator is ignored.
+    ({1: dict(visible=True, animator=dict(controller=dict(cab="CAB-01", path_id=0)))}, {}),
+    ({1: dict(visible=True)}, {}),
+    # A read that raises is skipped; other rows still count.
+    ({1: ValueError("unreadable"), 2: dict(visible=True, **_animator(7))}, {("cab-01", 7): True}),
+    ({1: ValueError("unreadable")}, {}),
+])
+def test_contexts_report_whether_a_controller_draws_props_by_default(reads, expected):
+    rows = {number: dict(block="B", offset=0, cab="CAB", file_ordinal=0, path_id=number,
+                         type="SkinnedMeshRenderer", renderer=dict(path="Weapon")) for number in reads}
+    reader = zzz_prop_textures.Reader(_ReadClient(reads), (), threading.Event(),
+                                      lambda chosen, mesh, source: [rows[number] for number in reads])
+    found = zzz_prop_textures.contexts(reader, None, [(dict(name="Mesh"), "source")])
+    assert found == expected
+
+
+def test_controller_clips_follow_every_leaf_of_one_read_per_indexed_controller():
+    def row(kind, cab, path_id, block="B1"):
+        return dict(name="Item", type=kind, block=block, cab=cab, offset=0, file_ordinal=0, path_id=path_id)
+    clip_rows = [row("AnimationClip", "CAB-Clips", number) for number in (1, 2, 3)]
+    converted = {zzz_index.identity(clip): (f"clip{clip['path_id']}", 1.0) for clip in clip_rows}
+    # Two index copies of one controller, plus one that cannot be read.
+    controllers = [row("AnimatorController", "CAB-Ctrl", 10), row("AnimatorController", "CAB-Ctrl", 10, "B2"),
+                   row("AnimatorController", "CAB-Ctrl", 11)]
+    def leaf(number):
+        return dict(cab="cab-clips", path_id=number)
+    reads = []
+
+    class Client:
+        def read(self, item):
+            reads.append(item["path_id"])
+            if item["path_id"] == 11:
+                raise ValueError("unreadable")
+            # A blend motion's every leaf counts; a pointer to an unconverted clip plays nothing.
+            return dict(states=[dict(motions=[dict(leaves=[leaf(1), leaf(2)])]), dict(motions=[dict(leaves=[leaf(9)])])])
+    keys = [("cab-ctrl", 10), ("cab-ctrl", 11), ("cab-ctrl", 12)]
+    played = zzz_pipeline._controller_clips(Client(), clip_rows + controllers, keys, clip_rows, converted,
+                                            threading.Event())
+    assert played == {("cab-ctrl", 10): {"clip1", "clip2"}} and sorted(reads) == [10, 11]
 
 
 def test_zzz_extraction_rejects_uvless_candidate_and_keeps_verified_rig_and_clips(tmp_path):
