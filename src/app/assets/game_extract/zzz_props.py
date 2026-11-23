@@ -31,6 +31,9 @@ MAX_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_VISIBLE_BYTES = 256 * 1024
 # Clip-window sampling: pose tolerance for "at rest", and bounded frame chunks.
 _REST_TOLERANCE = 1e-3
+# A posed prop whose centre sits within this height of the floor is parked on it: float
+# noise there would otherwise flicker the prop on and off every few frames.
+_GROUND_TOLERANCE = 1e-3
 _CHUNK_VERTEX_FRAMES = 4_000_000
 _FRAME_WIDTHS = {"frame-major-tqs-f32le": 10, "frame-major-tq-f32le": 7}
 
@@ -203,7 +206,7 @@ def clip_windows(rig, clips, parts, captured_bones):
     joints that stop at the body (the captured bones and their ancestors). When every own
     bone and frame sits at its rig rest pose, the clip does not place the prop and shows
     nothing. Otherwise a frame shows the prop while the centre height of its posed vertices
-    is at least 0 (the Avatar's floor in asset space). A clip with more than
+    is at least ``_GROUND_TOLERANCE`` above 0 (the Avatar's floor in asset space). A clip with more than
     ``MAX_PROP_WINDOWS`` windows, or none, is omitted.
     """
     if not parts:
@@ -270,7 +273,7 @@ def clip_windows(rig, clips, parts, captured_bones):
                     heights += weights[:, slot] * (np.einsum("fvd,vd->fv", linear_a[:, index], positions)
                                                    + constant[:, index])
                 centre = (heights.max(axis=1) + heights.min(axis=1)) / 2
-                masks[number][start:stop] = centre >= 0
+                masks[number][start:stop] = centre >= _GROUND_TOLERANCE
         for number, (_positions, _weights, _unique, _index, own, _slots) in enumerate(plans):
             # A clip that leaves the own bones at rest does not place this prop.
             if own and not placed[number]:

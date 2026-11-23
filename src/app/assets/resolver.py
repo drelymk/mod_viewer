@@ -405,12 +405,12 @@ def _indexes_of_type(indexes, asset_type):
             if index.get("type") == asset_type]
 
 
-def _exact_asset_identity(binding):
+def _exact_asset_identity(binding, *, any_range=False):
     if not isinstance(binding, AssetComponentBinding):
         return None
     if not (binding.status == "exact"
             and binding.component_status == "exact"
-            and binding.range_status == "exact"
+            and (any_range or binding.range_status == "exact")
             and binding.asset_type and binding.root and binding.asset):
         return None
     return binding.asset_type, binding.root, binding.asset
@@ -507,7 +507,10 @@ def resolve_groups(groups, game, asset_entries, *, availability=None):
                 geometry_match, asset_type, indexes,
                 require_range=asset_type is None,
                 asset_identity=preferred_identity)
-            if _exact_asset_identity(narrowed) == preferred_identity:
+            # A section without match_first_index applies to every draw of its hash, so its
+            # range stays unknown; the Asset the mod's exact parts prove still names it.
+            wildcard = geometry_match.first_index is None
+            if _exact_asset_identity(narrowed, any_range=wildcard) == preferred_identity:
                 group_bindings[draw_index] = narrowed
     return resolved
 
