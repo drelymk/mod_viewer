@@ -444,34 +444,44 @@ def _release(session):
     server.release_texture_publication(session["prop_textures"])
 
 
+def _blink_source(morphs):
+    """``(morphs, blink)`` when a ``morphs`` document names a usable eye-closing shape, else None."""
+    try:
+        blink = idle_blink(morphs)
+        if blink:
+            morph_names(morphs)
+            return morphs, blink
+    except (ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
 def _idle_face(session):
     """Blink shapes shared by a library, for clips that carry no facial curves.
 
-    The first catalog clip whose sparse targets include an eye-closing shape
-    supplies the shared target data; the clip's own bones and weights are unused.
+    The manifest's ``idle_face`` (a clip ``morphs`` document) wins; otherwise the first catalog
+    clip whose sparse targets include an eye-closing shape supplies the shared target data, and
+    the clip's own bones and weights are unused.
     Any problem leaves the clip without an idle face rather than failing it.
     """
     try:
         source = session.get("idle_source")
         if source is None:
-            source = False
-            for entry in session["entries"].values():
-                if entry.get("shared"):
-                    continue
-                try:
-                    raw = _json(paths.safe_asset_path(session["directory"], entry["file"]))
-                    blink = idle_blink(raw["morphs"])
-                    if blink:
-                        morph_names(raw["morphs"])
-                        source = (entry, blink)
+            source = _blink_source(session.get("idle_face"))
+            if source is None:
+                for entry in session["entries"].values():
+                    if entry.get("shared"):
+                        continue
+                    try:
+                        source = _blink_source(_json(paths.safe_asset_path(session["directory"], entry["file"]))["morphs"])
+                    except (OSError, ValueError, TypeError, KeyError):
+                        continue
+                    if source:
                         break
-                except (OSError, ValueError, TypeError, KeyError):
-                    continue
-            session["idle_source"] = source
+            source = session["idle_source"] = source or False
         if not source:
             return None
-        entry, (names, scales) = source
-        morphs = _json(paths.safe_asset_path(session["directory"], entry["file"]))["morphs"]
+        morphs, (names, scales) = source
         data = read_morphs(session["directory"], morphs, full_validation=False)
         descriptor = dict(names=names, components=morphs["components"])
         if scales is not None:
@@ -561,7 +571,8 @@ class AnimationSessions:
                     _release(self._sessions.pop(next(iter(self._sessions))))
                 self._sessions[token] = dict(directory=animation_dir, entries=entries, rig=rig,
                                               is_current=is_current, urls=set(), runtime=runtime,
-                                              props=props, prop_urls=[], prop_textures=None)
+                                              props=props, prop_urls=[], prop_textures=None,
+                                              idle_face=raw.get("idle_face") if raw else None)
             return {"animation_session": token,
                     "animations": [{"id": e["id"], "name": _listed_name(asset_type, e), "duration": e["duration"],
                                     **({"shared": True} if e.get("shared") else {})}
