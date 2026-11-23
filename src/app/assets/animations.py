@@ -275,6 +275,16 @@ def pack_prop(positions, normals, texcoords, joints, weights, triangles):
     ])
 
 
+def _listed_name(asset_type, entry):
+    """The dropdown name of a catalog entry; the stored name, clip id and files are unchanged.
+
+    A ZZZ clip is stored as ``<Avatar family>_Ani_<label>`` and listed as its label."""
+    name = entry["name"]
+    if asset_type != "ZZMI" or entry.get("shared"):
+        return name
+    return name.partition("_Ani_")[2] or name
+
+
 def _props(raw):
     """The catalog's game props (shown during clip playback); invalid data yields none."""
     try:
@@ -513,8 +523,10 @@ class AnimationSessions:
             entries[key] = dict(entry)
         return animation_dir, entries, raw
 
-    def catalog(self, root, asset, rig, is_current):
-        """Issue opaque clip IDs only after the caller proved its loaded rig."""
+    def catalog(self, root, asset, rig, is_current, asset_type=None):
+        """Issue opaque clip IDs only after the caller proved its loaded rig.
+
+        ``asset_type`` only affects the names listed for the Asset's own clips (see ``_listed_name``)."""
         empty = {"animations": [], "animation_session": None, "animation_sequences": []}
         try:
             animation_dir, entries, raw = self._asset_catalog(root, asset, rig)
@@ -551,7 +563,7 @@ class AnimationSessions:
                                               is_current=is_current, urls=set(), runtime=runtime,
                                               props=props, prop_urls=[], prop_textures=None)
             return {"animation_session": token,
-                    "animations": [{"id": e["id"], "name": e["name"], "duration": e["duration"],
+                    "animations": [{"id": e["id"], "name": _listed_name(asset_type, e), "duration": e["duration"],
                                     **({"shared": True} if e.get("shared") else {})}
                                    for e in entries.values()],
                     "animation_sequences": sequences,

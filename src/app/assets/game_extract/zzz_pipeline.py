@@ -46,6 +46,35 @@ def _mesh_family_hint(family, name):
     return family + "_Model_" in name or name.casefold().startswith(_hint_prefixes(family))
 
 
+def renderer_mesh_names(rows):
+    """Mesh names drawn by renderers on each family's Avatars, as ``{family: {name}}``.
+
+    A character's meshes may carry another stem than its Avatar (an internal or earlier name),
+    so the Avatar's own renderers are the evidence for names the Avatar-name hint cannot reach.
+    Like the hint, this only discovers candidates; native proof still binds them.
+    """
+    families = {(row["cab"].casefold(), row["path_id"]): _family(row["name"])
+                for row in rows if row["type"] == "Avatar" and _family(row["name"])}
+    names = {}
+    for row in rows:
+        renderer = row.get("renderer") if row["type"] == "SkinnedMeshRenderer" else None
+        if not isinstance(renderer, dict):
+            continue
+        pointer, path = renderer.get("avatar"), renderer.get("path")
+        family = (families.get((pointer["cab"].casefold(), pointer.get("path_id")))
+                  if isinstance(pointer, dict) and isinstance(pointer.get("cab"), str) else None)
+        name = path.rsplit("/", 1)[-1] if isinstance(path, str) else ""
+        if family and name:
+            names.setdefault(family, set()).add(name)
+    return names
+
+
+def mesh_name_hint(rows):
+    """A ``(family, mesh name)`` predicate: the family's name hint, or a mesh its renderers draw."""
+    drawn = renderer_mesh_names(rows)
+    return lambda family, name: _mesh_family_hint(family, name) or name in drawn.get(family, ())
+
+
 def family_hints(families):
     """A mesh name predicate equal to any of ``families``' :func:`_mesh_family_hint`, in one pass per name."""
     markers = tuple(family + "_Model_" for family in families)
@@ -165,8 +194,13 @@ def _newest_block_version(root, candidates, avatar_rows):
 
 
 def verify_candidates(client, captured, rows, query, cancel, *,
-                      mesh_hint=lambda avatar_row, family, mesh_row: _mesh_family_hint(family, mesh_row["name"]), label="ZZZ",
+                      mesh_hint=None, label="ZZZ",
                       placement_tolerance=2e-4, shape_key=exact_shape, weight_drift=0.0, attachment_offset=0.0):
+    if mesh_hint is None:
+        by_name = mesh_name_hint(rows)
+
+        def mesh_hint(_avatar_row, family, mesh_row):
+            return by_name(family, mesh_row["name"])
     skinned = [part for part in captured if not part.get("weightless")]
     weightless_counts = [part["index_count"] for part in captured if part.get("weightless")]
     # Shapes only narrow candidates; every adopted part still needs proof.
@@ -511,7 +545,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                    for key, entry in entries.items())
         props, skipped_props = zzz_props.extract(
             client, chosen, rig, index, library, cancel,
-            lambda family, row: _mesh_family_hint(family, row["name"]),
+            lambda family, row, named=mesh_name_hint(index): named(family, row["name"]),
             captured, asset, clips=written, alternates=True,
             controller_clips=lambda keys: _controller_clips(client, index, keys, clips, converted, cancel))
     except ExtractionCancelled:

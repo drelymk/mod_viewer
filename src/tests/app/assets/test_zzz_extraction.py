@@ -770,6 +770,57 @@ def test_zzz_discovery_skips_unrelated_variants_before_native_avatar_reads(tmp_p
         zzz_pipeline.verify_candidates(client, captured, candidates, "Character01", threading.Event())
 
 
+@pytest.mark.parametrize("change, same", [
+    ("none", True), ("noise", True), ("position", False), ("weight", False),
+    ("joint", False), ("triangle", False), ("count", False), ("sections", False)])
+def test_zzz_prop_copies_in_different_blocks_match_only_up_to_float_noise(change, same):
+    from app.assets.animations import pack_prop
+
+    def encode(positions=(0, 0, 0, 1, 0, 0, 0, 1, 0), joints=1, triangle=(0, 1, 2), weight=1.0, extra=0):
+        positions = np.array(positions, dtype=float).reshape(-1, 3)
+        count = len(positions)
+        payload = pack_prop(positions, np.tile([0, 0, 1], (count, 1)), np.zeros((count, 2)),
+                            np.full((count, 4), joints), np.tile([weight, 0, 0, 0], (count, 1)), [triangle])
+        return payload, count, 3
+
+    first = [encode()]
+    other = {"none": [encode()], "noise": [encode((1e-7, 0, 0, 1, 0, 0, 0, 1, 0), weight=1 - 1e-7)],
+             "position": [encode((1e-3, 0, 0, 1, 0, 0, 0, 1, 0))], "weight": [encode(weight=.9)],
+             "joint": [encode(joints=2)], "triangle": [encode(triangle=(0, 2, 1))],
+             "count": [encode((0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0))], "sections": [encode(), encode()]}[change]
+    assert zzz_props.equivalent_copies(first, other) is same
+
+
+def test_zzz_meshes_named_for_another_stem_are_found_through_the_avatar_renderers(tmp_path):
+    root, _asset, record, _avatar, mesh, rows, client = fixture(tmp_path)
+    # The Avatar is named for the game's public name while its meshes keep an internal stem.
+    mesh["name"] = rows[1]["name"] = "Other_Body"
+    rows[1]["shape"] = [[3, 3]]
+    captured, _files = zzz_native.capture(root, record)
+    def pointer(row):
+        return {key: row[key] for key in ("cab", "path_id", "offset", "file_ordinal")}
+    renderer = {**rows[0], "type": "SkinnedMeshRenderer", "path_id": 99, "name": "",
+                "renderer": dict(path="Model/Other_Body", mesh=pointer(rows[1]), avatar=pointer(rows[0]))}
+    unrelated = {**rows[1], "name": "Other_Unrelated", "path_id": 60}
+
+    def search(candidates, query):
+        return zzz_pipeline.verify_candidates(client, captured, candidates, query, threading.Event())
+
+    # Without a renderer the stem is unknown: neither a name query nor the shape fallback finds the mesh.
+    for query in ("Character01", "UnmatchedQuery"):
+        with pytest.raises(ValueError):
+            search(rows, query)
+    assert [row["name"] for row in zzz_index.limit(zzz_index.IndexRows(rows))] == [
+        "Avatar_Type01_Character01_ModelAvatar", "Avatar_Type01_Character01_Ani_Clip01"]
+    # The renderer names the mesh for the index filter and for both ways of choosing the Avatar.
+    candidates = [*rows, renderer, unrelated]
+    kept = {row["name"] for row in zzz_index.limit(zzz_index.IndexRows(candidates))}
+    assert "Other_Body" in kept and "Other_Unrelated" not in kept
+    for query in ("Character01", "UnmatchedQuery"):
+        chosen = search(candidates, query)
+        assert chosen["family"] == "Avatar_Type01_Character01" and len(chosen["matched"]) == 1
+
+
 def test_zzz_shape_fallback_keeps_body_avatar_when_a_prop_has_an_extra_legacy_mesh_hint(tmp_path):
     root, _asset, record, avatar, mesh, rows, client = fixture(tmp_path)
     mesh["name"] = rows[1]["name"] = "Character01_Body"
@@ -1061,9 +1112,20 @@ def test_zzz_clip_rejects_unknown_transform_and_uncontained_native_samples(tmp_p
     _root, _asset, _record, avatar, _mesh, rows, client = fixture(tmp_path)
     metadata = client.read(rows[-1])
     rig = dict(bones=[dict(translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])] * 3)
+    baseline = zzz_animation.convert(metadata, client.work, rig, avatar)
+    baseline_path = metadata["bindings"][1]["path"]
     metadata["bindings"][0]["path"] = 999
     with pytest.raises(ValueError, match="unsupported transform"):
         zzz_animation.convert(metadata, client.work, rig, avatar)
+    # A few tracks for bones the model lacks are omitted (and counted); a clip for another
+    # skeleton, mostly unresolved, still fails.
+    with patch.object(zzz_animation, "MAX_UNRESOLVED_TRACKS", .5):
+        tolerant = zzz_animation.convert(metadata, client.work, rig, avatar)
+        assert tolerant[3] == baseline[3] + 1
+        metadata["bindings"][1]["path"] = 998
+        with pytest.raises(ValueError, match="unsupported transform"):
+            zzz_animation.convert(metadata, client.work, rig, avatar)
+        metadata["bindings"][1]["path"] = baseline_path
     metadata["file"] = "../samples.bin"
     with pytest.raises(ValueError, match="incomplete"):
         zzz_animation.convert(metadata, client.work, rig, avatar)

@@ -263,6 +263,33 @@ def test_invalid_animation_sequences_drop_all_sequences_and_keep_clips(tmp_path,
     assert catalog["animation_sequences"] == []
 
 
+@pytest.mark.parametrize("asset_type, stored, listed", [
+    ("ZZMI", "Avatar_Type01_Name01_Ani_Idle_Loop", "Idle_Loop"),
+    ("ZZMI", "Idle_Loop", "Idle_Loop"),
+    ("ZZMI", "Avatar_Type01_Name01_Ani_", "Avatar_Type01_Name01_Ani_"),
+    ("GIMI", "Avatar_Type01_Name01_Ani_Idle_Loop", "Avatar_Type01_Name01_Ani_Idle_Loop"),
+    (None, "Avatar_Type01_Name01_Ani_Idle_Loop", "Avatar_Type01_Name01_Ani_Idle_Loop"),
+])
+def test_zzz_clips_are_listed_by_their_label_without_changing_the_stored_name(tmp_path, asset_type, stored, listed):
+    rig = dict(id="rig01", bones=[dict(name="Root", parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])] * 2)
+    directory = tmp_path / "Asset01" / "Animation"
+    directory.mkdir(parents=True)
+    data = struct.pack("<28f", *([0, 0, 0, 0, 0, 0, 1] * 4))
+    metadata = dict(format="mod-viewer-animation", version=1, coordinate_space="asset",
+                    layout="frame-major-tq-f32le", skeleton_id=rig["id"], frame_count=2,
+                    bone_count=2, duration=1, data_file="Clip01.bin", sha256=hashlib.sha256(data).hexdigest())
+    (directory / "Clip01.bin").write_bytes(data)
+    (directory / "Clip01.json").write_text(json.dumps(metadata))
+    (directory / "manifest.json").write_text(json.dumps(dict(
+        format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
+        clips=[dict(id="clip01", name=stored, file="Clip01.json", duration=1)])))
+    sessions = AnimationSessions()
+    catalog = sessions.catalog(str(tmp_path), "Asset01", rig, lambda: True, asset_type)
+    assert [(item["id"], item["name"]) for item in catalog["animations"]] == [("clip01", listed)]
+    # The stored name, which identifies the clip for reuse, is untouched.
+    assert json.loads((directory / "manifest.json").read_text())["clips"][0]["name"] == stored
+
+
 @pytest.mark.parametrize("changes, expected", [
     (dict(by_name=True), dict(name="Sequence 01", by_name=True)),
     # Libraries extracted before the flag named their previews; the viewer marks them the same way.

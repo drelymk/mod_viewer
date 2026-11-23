@@ -8,6 +8,8 @@ import numpy as np
 
 # Unity's Animator root-motion muscles: MotionT.xyz then MotionQ.xyzw, in the Animator's space.
 ROOT_MOTION_ATTRIBUTES = tuple(range(7))
+# Largest share of a clip's transform tracks that may name bones the Avatar does not have.
+MAX_UNRESOLVED_TRACKS = .1
 
 
 def dimension(binding):
@@ -139,6 +141,13 @@ def convert(metadata, work, rig, avatar, morphs=None):
     output = np.broadcast_to(poses, (frames, *poses.shape)).copy()
     hash_to_bone = {bone["hash"]: index + 1 for index, bone in enumerate(avatar["bones"])}
     cursor, written, unsupported = 0, set(), 0
+    # A clip shared across outfits may animate bones this model lacks (for example earrings).
+    # Bone hashes cover full paths, so an absent bone has no descendants in the rig and its
+    # track drives nothing; a clip for another skeleton leaves most tracks unresolved and fails.
+    transforms = [binding["path"] for binding in metadata["bindings"] if binding["type"] == "Transform"]
+    unresolved = sum(path not in hash_to_bone for path in transforms)
+    if unresolved > len(transforms) * MAX_UNRESOLVED_TRACKS:
+        raise ValueError("The native clip has unsupported transform bindings.")
     morph_columns, motion_columns = {}, {}
     for binding in metadata["bindings"]:
         width = dimension(binding)
@@ -164,8 +173,11 @@ def convert(metadata, work, rig, avatar, morphs=None):
                 unsupported += 1
             continue
         bone = hash_to_bone.get(binding["path"])
+        if bone is None:
+            unsupported += 1
+            continue
         attribute = binding["attribute"]
-        if bone is None or attribute not in (1, 2, 3) or binding["pointer"]:
+        if attribute not in (1, 2, 3) or binding["pointer"]:
             raise ValueError("The native clip has unsupported transform bindings.")
         identity = bone, attribute
         if identity in written:

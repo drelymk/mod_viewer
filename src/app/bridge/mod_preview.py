@@ -442,7 +442,8 @@ class ModPreview:
                                 "humanoid_controls": game_rig["humanoid_controls"],
                                 **self._animations.catalog(
                                     selected.asset_binding.root, selected.asset_binding.asset, game_rig,
-                                    lambda: self._model_generation == request_generation),
+                                    lambda: self._model_generation == request_generation,
+                                    selected.asset_binding.asset_type),
                             }
                         entry["game_rig_id"] = rig_id
                         entry["game_bone_map"] = game_rig["bone_map"]
