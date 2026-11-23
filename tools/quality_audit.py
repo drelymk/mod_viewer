@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,46 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = "src/web/lib/"
+CONTEXT_INDEX = "context.md"
+CONTEXT_DIR = "context"
+CONTEXT_INDEX_MAX_BYTES = 6_000
+CONTEXT_AREA_MAX_BYTES = 16_000
+
+
+def context_size(path):
+    """Count bytes with LF line endings so checkouts measure alike."""
+    return len(path.read_bytes().replace(b"\r\n", b"\n"))
+
+
+def check_context_budget(output):
+    """Keep agent-read context files small and every area file indexed."""
+    findings = []
+    index = ROOT / CONTEXT_INDEX
+    index_text = index.read_text(encoding="utf-8") if index.is_file() else ""
+    index_size = context_size(index) if index_text else 0
+    if not index_text:
+        findings.append(f"{CONTEXT_INDEX}: missing or empty")
+    elif index_size > CONTEXT_INDEX_MAX_BYTES:
+        findings.append(
+            f"{CONTEXT_INDEX}: {index_size} bytes exceeds {CONTEXT_INDEX_MAX_BYTES}"
+        )
+    areas = sorted((ROOT / CONTEXT_DIR).glob("*.md"))
+    for area in areas:
+        name = f"{CONTEXT_DIR}/{area.name}"
+        size = context_size(area)
+        if size > CONTEXT_AREA_MAX_BYTES:
+            findings.append(f"{name}: {size} bytes exceeds {CONTEXT_AREA_MAX_BYTES}")
+        if f"({name})" not in index_text:
+            findings.append(f"{name}: not linked from {CONTEXT_INDEX}")
+    for link in sorted(set(re.findall(r"\((context/[^)]+\.md)\)", index_text))):
+        if not (ROOT / link).is_file():
+            findings.append(f"{CONTEXT_INDEX}: links missing {link}")
+    (output / "context-budget.txt").write_text(
+        "".join(f"{finding}\n" for finding in findings),
+        encoding="utf-8",
+    )
+    print(f"context-budget: {'findings' if findings else 'clean'}")
+    return int(bool(findings))
 
 
 def run_audit(output, name, command, *, cwd=ROOT):
@@ -118,6 +159,7 @@ def main():
         "python-format": int(audits["ruff-format"] != 0),
         "web-format": int(audits["prettier"] != 0),
         "javascript-lint": int(audits["eslint"] != 0),
+        "context-budget": check_context_budget(output),
     }
     text_files = []
     for name in files:

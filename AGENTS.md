@@ -1,6 +1,6 @@
 # AGENTS.md
 
-The durable project invariants live in `context.md`. Read that file before substantial implementation or review work, and treat those invariants as authoritative unless the change intentionally updates them.
+The durable project invariants live in `context.md` (an index) and the area files under `context/`. Before substantial implementation or review work, read the index and every area file the change touches; do not read area files unrelated to the change. Treat those invariants as authoritative unless the change intentionally updates them, and record new invariants in the matching area file within its size budget.
 
 Run deterministic formatting, lint, and other mechanical checks locally before committing, and keep them enforced in CI. Code review should focus on consequential regressions and repository-specific behavior.
 
