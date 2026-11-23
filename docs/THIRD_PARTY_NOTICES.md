@@ -78,3 +78,24 @@ Portable distributions retain these native dependencies and their license files 
 The selected helper and its licenses are materialized in a private temporary
 directory when extraction is requested. Source publish directories retain the
 paths listed above. Debug symbols are omitted from the portable distribution.
+
+## Frame-dump extraction engine
+
+- The dependency-free engine in `src/app/assets/extractor` derives from XXMI
+  Extract 0.3.1 (GPL-3.0-or-later). Its standalone GUI, CLI, packaging and
+  Windows drop handling are omitted; the viewer integration adapts destination
+  handling, generic capture acceptance and compact package identification.
+- Upstream research attribution retained from XXMI Extract:
+  - Petrascyll/gui_collect (GPL-3.0), revision
+    `9faf229835a98f30f516c34bc92472fcbf843b24`, informed stream assembly,
+    compatibility output and morph reversal.
+  - leotorrez/ZZMI-Package (GPL-3.0), revision
+    `1ecd24dbc85f96239eaadeb7c4e0788aef7fae4f`, informed the conservative
+    material signatures in `profiles/zzz.py`.
+- Neither project is a runtime dependency. The repository's GPL license applies.
+- GIMI diffuse signature research uses the public
+  [ORFix material layouts](https://github.com/SilentNightSound/GIMI-Package/blob/main/GIMI/Core/GIMI/Libraries/ORFix.ini);
+  their varying layouts are why slot numbers alone cannot establish map roles.
+  The GIMI packed-channel fallback also references the independent
+  [HoyoToon Genshin shader](https://github.com/Hoyotoon/HoyoToon/blob/main/Shaders/Genshin%20Impact/Includes/HoyoToonGenshin-program.hlsl),
+  which separates normal XY from B detail and reads material regions from LightMap.
