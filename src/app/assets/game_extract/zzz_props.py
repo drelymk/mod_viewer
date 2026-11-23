@@ -326,7 +326,7 @@ def _part_windows(reader, chosen, rig, clips, pending, captured_bones, controlle
 
 def extract(client, chosen, rig, index, library, cancel, mesh_hint, captured_parts, asset, *,
             placement_tolerance=2e-4, admit=None, textures=None, clips=None, alternates=False,
-            controller_clips=None):
+            controller_clips=None, timed=None):
     """Write verified props under ``library/Props``; returns (entries, skipped).
 
     Each entry may carry ``textures`` (viewer role -> DDS file) whose material slots
@@ -340,6 +340,8 @@ def extract(client, chosen, rig, index, library, cancel, mesh_hint, captured_par
     (see ``zzz_prop_textures.alternates``). ``controller_clips(keys)`` gives the clip ids each
     renderer context's controller plays; clips played only under contexts that draw no props
     lose their windows (see ``zzz_prop_textures.contexts`` and :func:`filter_contexts`).
+    ``timed(row)`` limits the clip windows to the props it accepts (default: every prop);
+    the others are written without ``visible`` and shown in every clip.
     """
     family, avatar = chosen["family"], chosen["avatar"]
     captured = set(chosen["meshes"])
@@ -404,15 +406,17 @@ def extract(client, chosen, rig, index, library, cancel, mesh_hint, captured_par
             continue
         for number, (payload, vertices, indices) in enumerate(parts):
             pending.append((name, row, parts, mesh, number, payload, vertices, indices, hashlib.sha256(payload).hexdigest()))
-    windows = _part_windows(shared, chosen, rig, clips, pending, captured_bones, controller_clips) if clips is not None else {}
+    clocked = [clips is not None and (timed is None or timed(item[1])) for item in pending]
+    windows = _part_windows(shared, chosen, rig, clips, [item for item, on in zip(pending, clocked) if on],
+                            captured_bones, controller_clips) if any(clocked) else {}
     entries, meshes, total, visible_total, exhausted = [], [], 0, 0, None
-    for name, row, parts, mesh, number, payload, vertices, indices, digest in pending:
+    for (name, row, parts, mesh, number, payload, vertices, indices, digest), clock in zip(pending, clocked):
         if name == exhausted or any(entry["sha256"] == digest for entry in entries):
             continue
         # A multi-material mesh is one prop per material section, each textured from its own.
         label = name if len(parts) == 1 else f"{name} {number + 1}"
-        visible = windows.get(digest) if clips is not None else None
-        if clips is not None and not visible:
+        visible = windows.get(digest) if clock else None
+        if clock and not visible:
             skipped.append(dict(name=label, source=zzz_index.identity(row), reason="No clip shows the prop."))
             continue
         if len(entries) == MAX_PROPS or total + len(payload) > MAX_TOTAL_BYTES:

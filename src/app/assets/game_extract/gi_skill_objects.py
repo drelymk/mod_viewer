@@ -14,7 +14,8 @@ the game data the viewer reads ties them to the character, so they are paired by
 - An object's own controller plays runs: from each plain state, the states it reaches without
   gameplay input (each state's only exit-time transition without conditions). A run is named
   by its first state, by the controller's name after the object's plus that state, by its
-  first clip's name after the object's and, from the controller's entry state, by the
+  first clip's name after the object's, by the label of each effect prefab whose Animator plays
+  the controller (``Eff_<family>_Show02``) and, from the controller's entry state, by the
   controller's name alone (``…_Chess_Show_01`` plays ``Take 001``). It pairs with the one
   character clip whose length it fills (ending up to one 60 Hz frame early and holding its
   last pose) and whose words a name has exactly, or else whose action word a name starts
@@ -75,6 +76,9 @@ RUN_FRAME = 1 / 60
 MOTION_ATTRIBUTES = range(7)
 # Character points outside the Avatar live under this child of the character's root.
 POINT_ROOT = "Root"
+# Show points no character prefab or clip defines (Keqing's ``ShowR``) are mounted on the hand
+# point beside them, an assumption: the game's own fallback is not readable.
+POINT_ALIASES = {"ShowR": "CatalystR", "ShowL": "CatalystL"}
 # The mount keeps the point's rotation; a point scaled this close to nothing has none.
 MIN_POINT_SCALE = 1e-6
 # A ``Bone`` marker (with its number) in clip and prefab names distinguishes nothing.
@@ -157,11 +161,24 @@ def _object_clips(index, token, things):
     return result
 
 
+def _token(family):
+    """The character's last name token, which also names its skill objects."""
+    return family.rsplit("_", 1)[-1]
+
+
+def _point(row):
+    """The character point a Follow row mounts on (see ``POINT_ALIASES``)."""
+    return POINT_ALIASES.get(row["follow"], row["follow"])
+
+
 def _label(name, family, thing):
     """The clip part of an effect prefab's name, ``Eff_<family>_<label>[_<thing>][_SkillObj]``
-    ("" for the generic ``Eff_<family>_<thing>``), or None for prefabs named otherwise."""
-    prefix = f"Eff_{family}_"
-    if not name.startswith(prefix):
+    (``Eff_Avatar_<token>_…`` also names the family; "" for the generic ``Eff_<family>_<thing>``),
+    or None for prefabs named otherwise."""
+    for prefix in (f"Eff_{family}_", f"Eff_Avatar_{_token(family)}_"):
+        if name.startswith(prefix):
+            break
+    else:
         return None
     rest = name[len(prefix):]
     if rest.casefold().endswith("_skillobj"):
@@ -181,11 +198,12 @@ def _held(cabs, item):
 
 
 def _prefabs(follows, cabs, family, thing, avatar_row, controllers):
-    """[(label, placement, controller)] of the effect prefabs holding the object's Animator, by
-    its Avatar or, without one, by playing a controller of ``controllers`` (row identities). A
+    """([(label, placement, controller)], files) of the effect prefabs holding the object's Animator,
+    by its Avatar or, without one, by playing a controller of ``controllers`` (row identities). A
     placement is (point, transform chain from the prefab root's child down to the Animator),
-    or None when the prefab does not prove one; ``controller`` is the one its Animator plays."""
-    found = []
+    or None when the prefab does not prove one; ``controller`` is the one its Animator plays;
+    ``files`` are the (block, offset) files of the prefabs playing one of ``controllers``."""
+    found, files = [], set()
     for row in follows:
         held = []
         for item in row["animators"]:
@@ -195,13 +213,15 @@ def _prefabs(follows, cabs, family, thing, avatar_row, controllers):
                 held.append((item, controller if controller in controllers else None))
         if not held:
             continue
+        if any(controller is not None for _item, controller in held):
+            files.add((row["block"], row["offset"]))
         placement = None
         if len(held) == 1 and row["enabled"] and row["follow"] is not None:
             chain = tuple((tuple(node["translation"]), tuple(node["rotation"]), tuple(node["scale"]))
                           for node in held[0][0]["chain"])
-            placement = (row["follow"], chain)
+            placement = (_point(row), chain)
         found.append((_label(row["name"], family, thing), placement, held[0][1] if len(held) == 1 else None))
-    return found
+    return found, frozenset(files)
 
 
 def _placement(prefabs, *names, controller=None):
@@ -231,13 +251,13 @@ def _placement(prefabs, *names, controller=None):
 def point_hashes(index, chosen):
     """Path hashes of the character points the family's skill objects may follow outside the
     Avatar (``Root/<point>`` and ``Root``), kept while the character's clips convert."""
-    token = chosen["family"].rsplit("_", 1)[-1]
+    token = _token(chosen["family"])
     # The family's skill-object Avatars and controllers (generic-rig Animators have only the latter).
     owned = {zzz_index.identity(row) for _thing, rows in _objects(index, token) for row in rows}
     owned |= {zzz_index.identity(row) for row in index if row["type"] == "AnimatorController"
               and row["name"].startswith(f"Ani_SkillObj_{token}_")}
     cabs = gi_index.by_cab(index)
-    names = {row["follow"] for row in index if row["type"] == "Follow" and row["follow"] and any(
+    names = {_point(row) for row in index if row["type"] == "Follow" and row["follow"] and any(
         target is not None and zzz_index.identity(target) in owned
         for item in row["animators"] for target in _held(cabs, item))}
     return frozenset({_hash(f"{POINT_ROOT}/{name}") for name in names} | ({_hash(POINT_ROOT)} if names else set()))
@@ -276,8 +296,9 @@ def _mounts(placement, keys, library, rig, avatar, anchor, partner, cancel, worl
     """{converted clip key: (frame-major asset-space mount worlds, None) or (None, reason)} of
     ``keys``; ``worlds_of`` caches converted bone worlds by (clip key, bone)."""
     point = placement[0] if placement is not None else ""
+    at_origin = np.broadcast_to(anchor, (partner["frames"], 4, 4)), None
     if not point:
-        return {key: (np.broadcast_to(anchor, (partner["frames"], 4, 4)), None) for key in keys}
+        return {key: at_origin for key in keys}
     named = [number for number, bone in enumerate(avatar["bones"]) if number and bone["path"].rsplit("/", 1)[-1] == point]
     if len(named) > 1:
         return {key: (None, "Several character bones share the point the effect prefab follows.") for key in keys}
@@ -296,7 +317,8 @@ def _mounts(placement, keys, library, rig, avatar, anchor, partner, cancel, worl
             tracks = partner["points"].get(key, {})
             track = tracks.get(_hash(f"{POINT_ROOT}/{point}"))
             if track is None:
-                result[key] = None, "The paired character clip does not animate the point the effect prefab follows."
+                # An undefined point (``PRIVATE_…`` nodes the game makes at run time) leaves the object at the origin.
+                result[key] = at_origin
                 continue
             local = _local(track)
             if (root := tracks.get(_hash(POINT_ROOT))) is not None:
@@ -671,7 +693,7 @@ def extract(client, chosen, rig, index, library, body_clips, cancel, tolerance, 
     for; ``existing`` are props already written there, ``routed`` the character's own
     renderer routes, which teach the texture slots, and ``sequences`` the character's.
     """
-    token = chosen["family"].rsplit("_", 1)[-1]
+    token = _token(chosen["family"])
     objects = _objects(index, token)[:MAX_OBJECTS]
     if not objects:
         return [], []
@@ -702,8 +724,15 @@ def extract(client, chosen, rig, index, library, body_clips, cancel, tolerance, 
             skip(thing, "The object skeleton exceeds the prop bone limit.")
             continue
         rest = np.asarray(rest_worlds(bones, affine=True))
-        prefabs = _prefabs(follows, cabs, chosen["family"], thing, rows[0], {controller for *_run, controller in runs[thing]})
-        tracks = _tracks(client, thing, clips[thing], runs[thing], suffixes, sequences, bones, rest, anchor, cancel, skip,
+        controllers = {controller for *_run, controller in runs[thing]}
+        prefabs, files = _prefabs(follows, cabs, chosen["family"], thing, rows[0], controllers)
+        # An effect prefab whose Animator plays a run's controller also names the run (``Show02``).
+        labels = {}
+        for label, _placement, own in prefabs:
+            if label and own is not None:
+                labels.setdefault(own, []).append(label)
+        named = [([*names, *labels.get(controller, ())], chain, controller) for names, chain, controller in runs[thing]]
+        tracks = _tracks(client, thing, clips[thing], named, suffixes, sequences, bones, rest, anchor, cancel, skip,
                          prefabs, mounting)
         geometry = _geometry(client, index, thing, rows[0], avatar, anchor, reference, tolerance, cancel, skip) if tracks else []
         if not geometry:
@@ -725,7 +754,7 @@ def extract(client, chosen, rig, index, library, body_clips, cancel, tolerance, 
                     entry["section"] = section
                 entries.append(entry)
                 meshes.append(mesh)
-        routes.update(gi_props.routes(index, {zzz_index.identity(rows[0])}, avatar))
+        routes.update(gi_props.routes(index, {zzz_index.identity(rows[0])}, avatar, files))
     if entries:
         zzz_prop_textures.attach(entries, meshes, client, chosen, index, library, cancel, captured, None,
                                  route=lambda _chosen, _mesh, source: sorted(routes.get(source, ()), key=zzz_index.identity),

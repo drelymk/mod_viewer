@@ -90,12 +90,13 @@ proof is in [weight-rig.md](weight-rig.md).
 - `gi_props.py` reuses ZZZ's attachment proof and `prop-v1` layout over meshes in
   the verified Avatar's bundle (GI tolerance). Timing comes from prefabs: renderers
   route only through explicit mesh pointer, a verified Avatar and a path under it,
-  and every routed prefab must draw the prop by default (renderer enabled, chain to
-  the Animator active). Props any prefab hides wait for gameplay code and are
-  skipped, as are unrouted or unproven ones. Weapons live outside the bundle and are
+  and every routed prefab must prove the prop's default visibility. A prop every prefab
+  draws shows in every clip; one any prefab hides (spirits, burst forms) is timed by the
+  ZZZ clip windows, shown only while a clip moves its own bones, and skipped when none does.
+  Unproven visibility is skipped. Weapons live outside the bundle and are
   not exported. Names never decide. Textures follow ZZZ's byte-exact slot learning
   against the Asset's resolved role textures (a payload two roles share proves
-  neither); off-bundle pointers resolve through the limited file table.
+  neither); a routed renderer whose material lacks a learned slot decides nothing, the others must agree; off-bundle pointers resolve through the limited file table.
 
 ## Skill objects (`gi_skill_objects.py`, preview-only name exception)
 
@@ -104,7 +105,8 @@ proof is in [weight-rig.md](weight-rig.md).
   skipped. Geometry keeps its own skin (at most 256 bones, LODs skipped); tracks are
   `prop-track-v2` (per frame and bone, f32 3x4 asset-space affine delta for the whole
   clip) with `socket` null and `track_layout`. Textures use the character's learned
-  slots through the object's renderers. Report `skipped_props` (`kind`
+  slots through the object's renderers (a generic-rig object's null-Avatar renderers count only inside a
+  prefab whose Animator plays its controller). Report `skipped_props` (`kind`
   `skill_object`) and `skill_object_error`.
 - Clip pairing: `Ani_SkillObj_<token>_<object>_<suffix>` pairs with the only body
   clip named `…_<token>_<suffix>` of the same length (within 1 ms); never choose
@@ -116,8 +118,8 @@ proof is in [weight-rig.md](weight-rig.md).
   speed-1 state, each state's only unconditioned
   exit-time transition leads on until none remains. A run is named by its first
   state, controller-name-after-object plus that state, its first clip's name after
-  the object's, and (from the entry state) the controller name after the object's
-  alone. It pairs only with the one character clip whose length it fills and whose
+  the object's, the label of each effect prefab whose Animator plays the controller, and
+  (from the entry state) the controller name after the object's alone. It pairs only with the one character clip whose length it fills and whose
   words a name has exactly (ignoring case, separators, `Bone` marker) or, failing
   that, whose first word a name starts with and whose other words it keeps in order;
   its clips then pair only through it. Length alone never pairs. A run no single
@@ -135,9 +137,10 @@ proof is in [weight-rig.md](weight-rig.md).
   decide first and must agree; else agreeing prefabs; else the most specific
   `Eff_<family>_<label>[_<object>][_SkillObj]` named for the clip (label letter/number
   runs begin the clip suffix's), else generic `Eff_<family>_<object>`. Disagreement or
-  an unproven point, flag or Animator skips the clip with a reason. A point is the
+  an unproven flag or Animator skips the clip with a reason. A point no bone or clip defines stays at the character origin (assumption). A point is the
   only character Avatar bone with that last name, or outside the Avatar the paired
   body/streamer clip's own `Root/<point>` track (streamer only inside its mask);
-  the mount follows position and rotation only (collapsed scale skips). Tracks are
+  the mount follows position and rotation only (collapsed scale skips). The undefined
+  `ShowR`/`ShowL` points use `CatalystR`/`CatalystL` (an assumption). Tracks are
   baked per converted clip. Objects no Follow prefab holds sit at the character
   origin facing the same way, placed and timed by their own curves (scale included).

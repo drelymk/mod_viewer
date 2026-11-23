@@ -3,10 +3,10 @@
 A prop takes the ZZZ attachment proof (a mesh in the verified Avatar's bundle that no
 captured component came from, whose inverse binds prove a placement against that Avatar
 and whose positive skin weight lies only on bones no captured palette uses). Genshin
-clips carry no visibility curves, so the timing evidence is the game's own prefabs:
-every renderer that draws the prop under a verified Avatar copy must be enabled with its
-GameObject chain active. A prop any such prefab hides waits for gameplay code (skill
-objects, burst forms) and is skipped rather than shown in every clip. Names never decide.
+clips carry no visibility curves, so the timing evidence is the game's own prefabs and clips:
+a prop every renderer under a verified Avatar copy draws (enabled, GameObject chain active)
+is shown in every clip. A prop any such prefab hides (skill objects, burst forms) is shown only
+while a clip moves its own bones (the ZZZ clip windows). Names never decide.
 Textures follow ZZZ's byte-exact slot learning; renderers route through these explicit
 pointers, and captured roles come from the GIMI Asset's own resolved texture files.
 """
@@ -24,9 +24,15 @@ MAX_RENDERERS = 64
 MAX_TEXTURE_BYTES = 512 * 1024 * 1024
 
 
-def routes(index, sources, avatar):
+def _null_avatar(row, renderer, prefabs):
+    """Whether a renderer with a null Avatar pointer sits in one of the ``prefabs`` (block, offset) files."""
+    return (row["block"], row["offset"]) in prefabs and (renderer.get("avatar") or {}).get("path_id") == 0
+
+
+def routes(index, sources, avatar, prefabs=frozenset()):
     """Mesh identity -> renderer rows that draw exactly that mesh under an Avatar of ``sources``
-    (row identities), on a path under ``avatar``."""
+    (row identities), on a path under ``avatar``. A generic-rig object has no Avatar to point at:
+    its renderers with a null Avatar pointer inside one of ``prefabs`` ((block, offset) files) route too."""
     lookup = {}
     for row in index:
         if row["type"] in ("Mesh", "Avatar"):
@@ -41,13 +47,15 @@ def routes(index, sources, avatar):
             continue
         avatars = _references(lookup, row, renderer.get("avatar"), "Avatar")
         meshes = _references(lookup, row, renderer.get("mesh"), "Mesh")
-        if avatars and avatars <= sources and len(meshes) == 1:
+        if len(meshes) == 1 and (avatars and avatars <= sources or _null_avatar(row, renderer, prefabs)):
             found.setdefault(next(iter(meshes)), []).append(row)
     return found
 
 
-def admission(client, routed, cancel):
-    """``admit`` callback: a prop needs every routed prefab to draw it by default."""
+def admission(client, routed, cancel, hidden):
+    """``admit`` callback: every routed prefab must prove the prop's default visibility.
+
+    A prop some prefab hides is admitted, and its identity added to ``hidden``, for clip windows."""
 
     def admit(row, _mesh):
         renderers = sorted(routed.get(zzz_index.identity(row), ()), key=zzz_index.identity)
@@ -55,6 +63,7 @@ def admission(client, routed, cancel):
             return "No prefab under the verified Avatar draws the prop."
         if len(renderers) > MAX_RENDERERS:
             return "Too many prefabs draw the prop to verify its visibility."
+        hides = False
         for renderer in renderers:
             check_cancelled(cancel)
             try:
@@ -64,9 +73,11 @@ def admission(client, routed, cancel):
             except (ValueError, KeyError, TypeError, AttributeError):
                 visible = None
             if visible is False:
-                return "A prefab under the verified Avatar hides the prop until gameplay code shows it."
-            if visible is not True:
+                hides = True
+            elif visible is not True:
                 return "The prop's prefab visibility could not be proven."
+        if hides:
+            hidden.add(zzz_index.identity(row))
         return None
 
     return admit
@@ -103,13 +114,16 @@ def captured_payloads(root, record):
     return payloads
 
 
-def extract(client, chosen, rig, index, library, cancel, mesh_hint, placement_tolerance, captured, routed, payloads):
-    """Write verified, default-visible props under ``library/Props``; returns (entries, skipped).
+def extract(client, chosen, rig, index, library, cancel, mesh_hint, placement_tolerance, captured, routed, payloads, clips):
+    """Write verified props under ``library/Props``; returns (entries, skipped).
 
-    ``routed`` is :func:`routes` for the verified Avatar copies and ``payloads`` :func:`captured_payloads`.
+    ``routed`` is :func:`routes` for the verified Avatar copies, ``payloads`` :func:`captured_payloads`
+    and ``clips`` yields (clip_id, metadata, data) for the windows of props a prefab hides.
     """
     textures = dict(route=lambda _chosen, _mesh, source: sorted(routed.get(source, ()), key=zzz_index.identity),
                     payloads=payloads)
+    hidden = set()
     return zzz_props.extract(client, chosen, rig, index, library, cancel, mesh_hint, captured, None,
                              placement_tolerance=placement_tolerance,
-                             admit=admission(client, routed, cancel), textures=textures)
+                             admit=admission(client, routed, cancel, hidden), textures=textures, clips=clips,
+                             timed=lambda row: zzz_index.identity(row) in hidden)

@@ -365,7 +365,7 @@ export default {
   'toggle.delete': 'Удалить переключатель',
   'toggle.record': 'Записать отображаемые меши для каждой позиции',
   'toggle.recordAria': 'Записать видимость мешей переключателя',
-  'toggle.cycle': 'Сменить значение',
+  'toggle.cycle': 'Следующее значение',
   'toggle.previous': 'Предыдущее значение',
   'toggle.actions': 'Действия переключателя',
   'toggle.noToggles': 'Переключателей пока нет. Нажмите «Добавить», чтобы создать его.',
@@ -600,7 +600,7 @@ export default {
   'record.noAutomaticVariable':
     'У этого переключателя нет переменной, которую приложение может записать автоматически.',
   'record.nextPosition': 'Следующая позиция',
-  'record.cycleValue': 'Сменить значение',
+  'record.cycleValue': 'Следующее значение',
   'record.position': 'Позиция {current} из {positions} — {values}',
   'record.saveError': 'Не удалось сохранить запись:\n\n{detail}',
   'record.review': 'Записано, но проверьте эти строки вручную:\n\n{detail}',

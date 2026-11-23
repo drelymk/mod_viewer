@@ -91,7 +91,7 @@ def _idle_face(facial, library):
     return {**morphs, "rest_weights": _rest_weights(facial, names)}
 
 
-def _props(client, chosen, rig, index, library, cancel, captured, root, record, body_clips, sequences):
+def _props(client, chosen, rig, index, library, cancel, captured, root, record, body_clips, sequences, entries):
     """Props the capture never drew: default-visible attached props, then name-paired skill
     objects; returns (props, skipped, prop_error, object_error). Failures leave the clips,
     and object failures the props, unaffected."""
@@ -102,9 +102,11 @@ def _props(client, chosen, rig, index, library, cancel, captured, root, record, 
     payloads = gi_props.captured_payloads(root, record)
     props, skipped, prop_error, object_error = [], [], None, None
     try:
+        # A prop a prefab hides is timed by the clips already written and validated.
+        written = ((key, *read_clip(str(library), entry, rig, full_validation=False)) for key, entry in entries.items())
         props, skipped = gi_props.extract(client, chosen, rig, index, library, cancel,
                                           lambda family, row: colocated(avatar_row, family, row), PLACEMENT_TOLERANCE,
-                                          captured, routed, payloads)
+                                          captured, routed, payloads, written)
     except ExtractionCancelled:
         raise
     except (ValueError, KeyError, TypeError, OSError) as error:
@@ -203,7 +205,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
         raise ValueError("No compatible Genshin Impact animation clips could be converted. Existing Asset files were preserved.")
     sequences = animator_sequences.derive(controller, state_clips, animator_sequences.NORMALIZED_TIME)
     props, skipped_props, prop_error, object_error = _props(client, chosen, rig, index, library, cancel, captured,
-                                                            root, record, body_clips, sequences)
+                                                            root, record, body_clips, sequences, entries)
     manifest = dict(format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=list(entries.values()),
                     sequences=sequences, runtime_bones=animation_keys.runtime_bones(rig, existing.values()))
     if props:

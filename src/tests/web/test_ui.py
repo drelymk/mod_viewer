@@ -773,8 +773,19 @@ def test_toggle_row_steps_both_ways_and_actions_menu_yields_to_recording(viewer)
     two_row = two.locator('.toggle-row')
     for row in (three_row, two_row):
         assert row.bounding_box()['height'] <= 34
-    assert three_row.locator('.toggle-step-btn').count() == 1
-    assert two_row.locator('.toggle-step-btn').count() == 0
+    for row in (three_row, two_row):
+        assert row.locator('.toggle-step-btn').count() == 1
+        children = row.evaluate('r => Array.from(r.children).map(c => c.className.split(" ")[0])')
+        assert children[:3] == ['toggle-step-btn', 'toggle-cycle-btn', 'toggle-hdr-left']
+        assert row.locator('.toggle-step-btn').get_attribute('aria-label') == 'Previous value'
+        assert row.locator('.toggle-cycle-btn').get_attribute('aria-label') == 'Next value'
+        assert row.locator('.toggle-step-btn').bounding_box()['width'] >= 28
+        for button in (row.locator('.toggle-step-btn'), row.locator('.toggle-cycle-btn')):
+            background = 'el => getComputedStyle(el).backgroundColor'
+            idle = button.evaluate(background)
+            button.hover()
+            assert button.evaluate(background) != idle
+            page.mouse.move(0, 0)
 
     value = three_row.locator('.toggle-value')
 
