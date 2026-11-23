@@ -15,12 +15,15 @@ parameter names.
 """
 
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
 import shutil
+import struct
 
 import numpy as np
+from PIL import Image
 
 from app.assets import paths
 from app.assets.animations import (MAX_PROP_INDICES, MAX_PROP_TRACK_BYTES, MAX_PROP_VERTICES, MAX_PROPS, PROP_LAYOUT,
@@ -45,6 +48,10 @@ MAX_TEXTURE_READS = 96
 MAX_TEXTURE_BYTES = 96 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
 _SUFFIX = re.compile(r"_\d+_[0-9A-F]{32}$")
+# A captured texture and a game texture of the same size whose decoded pixels differ by at
+# most this many levels per channel are the same image re-encoded (game updates re-encode
+# textures by a few levels; different textures of one set differ by far more).
+NEAR_LEVELS = 8
 
 
 def model_rows(client):
@@ -205,7 +212,7 @@ def _parameters(client, package, cache):
 
 
 def _captured_payloads(root, record, part):
-    """Top-mip bytes digest -> viewer role for one captured WWMI component's DDS textures."""
+    """Top-mip bytes digest -> (viewer role, DDS file bytes) for one captured WWMI component's DDS textures."""
     for relative in _metadata_paths(record):
         file = paths.safe_asset_path(str(root), relative)
         if not file:
@@ -227,26 +234,79 @@ def _captured_payloads(root, record, part):
                     raw = read_limited(Path(file).parent / Path(item[3]).name, MAX_TEXTURE_BYTES + 148, "Captured texture")
                 except (OSError, ValueError):
                     continue
-                if raw[:4] == b"DDS " and len(raw) >= 148:
-                    payload = raw[148:] if raw[84:88] == b"DX10" else raw[128:]
-                    result[hashlib.sha256(payload).hexdigest()] = CAPTURED_ROLES[item[0]]
+                payload = unity_dds.top_mip(raw)
+                if payload is not None:
+                    result[hashlib.sha256(payload).hexdigest()] = (CAPTURED_ROLES[item[0]], raw)
         return result
     return {}
 
 
+def _pixels(data):
+    """Decoded RGBA pixels of one DDS file, or None when it cannot be decoded."""
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            return np.asarray(image.convert("RGBA"), dtype=np.int16)
+    except (OSError, ValueError, NotImplementedError, SyntaxError):
+        return None
+
+
 def _learn(reader, tier, parts):
-    """Material parameter -> viewer role, proven byte-exactly on captured body parts."""
-    votes = {}
+    """Material parameter -> viewer role, proven on captured body parts: byte-identical top mips,
+    or, for a role no parameter of that part matches byte-exactly, a texture of the same size
+    decoding within ``NEAR_LEVELS`` of it."""
+    votes, decoded = {}, {}
     for payloads, parameters in parts:
+        exact, textures = {}, {}
         for name, package in sorted(parameters.items()):
             texture = reader.read(tier, package)
-            role = payloads.get(hashlib.sha256(texture["data"]).hexdigest()) if texture else None
-            if role:
-                votes.setdefault(name, set()).add(role)
-    slots = {name: next(iter(roles)) for name, roles in votes.items() if len(roles) == 1}
-    # A role fed by two different parameters stays unproven.
-    claimed = list(slots.values())
-    return {name: role for name, role in slots.items() if claimed.count(role) == 1}
+            if not texture:
+                continue
+            textures[name] = texture
+            hit = payloads.get(hashlib.sha256(texture["data"]).hexdigest())
+            if hit:
+                exact[name] = hit[0]
+        found, taken = dict(exact), set(exact.values())
+        for name, texture in sorted(textures.items()):
+            if name in exact:
+                continue
+            # Only captures of the same size are decoded and compared.
+            candidates = [(digest, role, raw) for digest, (role, raw) in payloads.items()
+                          if role not in taken and struct.unpack_from("<II", raw, 12) == (texture["height"], texture["width"])]
+            if not candidates:
+                continue
+            try:
+                game = _pixels(_dds(texture, srgb=False))
+            except ValueError:
+                continue
+            if game is None:
+                continue
+            roles = set()
+            for digest, role, raw in candidates:
+                if digest not in decoded:
+                    decoded[digest] = _pixels(raw)
+                pixels = decoded[digest]
+                if pixels is not None and pixels.shape == game.shape and \
+                        np.abs(pixels - game).max() <= NEAR_LEVELS:
+                    roles.add(role)
+            if len(roles) == 1:
+                found[name] = roles.pop()
+        for name, role in found.items():
+            votes.setdefault(name, set()).add(role)
+    # A parameter proven for two roles stays unproven; several parameters may prove one
+    # role (sections of one body can name their diffuse differently).
+    return {name: next(iter(roles)) for name, roles in votes.items() if len(roles) == 1}
+
+
+def _role_textures(slots, parameters):
+    """Viewer role -> texture package of one prop material from its proven parameters.
+
+    A role whose proven parameters name different textures is never guessed between.
+    """
+    found = {}
+    for name, role in slots.items():
+        if name in parameters:
+            found.setdefault(role, set()).add(parameters[name])
+    return {role: next(iter(packages)) for role, packages in found.items() if len(packages) == 1}
 
 
 def _dds(texture, srgb):
@@ -287,8 +347,8 @@ def _attach_textures(client, root, record, captured, palettes, body_exports, pro
                 raise ValueError("The prop material is unavailable.")
             parameters = _parameters(client, material, cache)
             textures = {}
-            for name, role in sorted(slots.items()):
-                texture = reader.read(tier, parameters[name]) if name in parameters else None
+            for role, package in sorted(_role_textures(slots, parameters).items()):
+                texture = reader.read(tier, package)
                 if texture is None:
                     continue
                 try:

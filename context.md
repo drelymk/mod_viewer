@@ -1203,15 +1203,19 @@ of documentation, comments and tests; use portable fixtures instead.
   tables or deterministic picks. Prop textures try the HD tier, then UHD; material
   parameters are learned per extraction as for ZZZ (a parameter takes a role only when
   its top mip is byte-identical to a captured texture of that role on a proven body
-  section, with no competing parameter or role) and read from each prop section's own
-  material; the top mip is written unchanged as a single-mip DX10 DDS, and V flips like
+  section, or, for a role no parameter of that section matches byte-exactly, the same-sized
+  texture decodes within 8 levels per channel of it, since game updates re-encode textures
+  slightly; a parameter proven for two roles stays unproven, while several parameters
+  may prove one role, since body sections can name their diffuse differently) and read
+  from each prop section's own material, where a role whose proven parameters name
+  different textures is left out; the top mip is written unchanged as a single-mip DX10 DDS, and V flips like
   every mesh the viewer draws. Prop failures never block clips (`prop_error`,
   `skipped_props`, per-prop `texture_error`). A prop's id covers its geometry and its
   animation fields, so equal geometry moving differently stays two props.
 - WuWa blueprint props are animated: a character blueprint's construction-script
   component (`SCS_Node` under `CharacterMesh0` with an `AttachToName` socket, its mesh
   from the most derived component template; weapon cases excluded, since they hold the
-  regular weapon; no relative offset)
+  regular weapon; no relative offset beyond float noise of 1e-3 cm, degrees or scale)
   that the character's notifies show while the game plays the prop's own animation
   (such as a character's scissors). Its geometry keeps its own skin (joints index its
   own skeleton, ≤ 256 bones) placed at the socket's rest world. The prop's animation
@@ -1242,7 +1246,8 @@ of documentation, comments and tests; use portable fixtures instead.
   `AnimNotifyStateEffect_C` notify states are kept by `pipeline.sequence` as facts
   (effect asset, `SocketName`, `Attached`, `FasterStop`, link time, duration, other
   settings). An effect group (`EffectModelGroup_C`) lists effect models with play
-  delays (`Value`); each `EffectModelSkeletalMesh_C` names its mesh
+  delays (`Value`); a notify may also name one `EffectModelSkeletalMesh_C` directly, which
+  plays at spawn with only its own lifetime; each `EffectModelSkeletalMesh_C` names its mesh
   (`SkeletalMeshRef`) and the animation it plays once (`AnimationRef`), which may live
   in another folder on a skeleton with the same bones (such as a book). The mesh,
   animation, placement and timing all come from the game data; nothing pairs by name,
