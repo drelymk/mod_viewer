@@ -48,6 +48,12 @@ Clip playback is in [animation-playback.md](animation-playback.md).
   proof; a stock ZZMI binding proven against captured native position/Blend hashes;
   or a native WWMI per-component palette (below). Unproven pipelines, unsupported
   namespaces, stale reference geometry and invalid sidecars keep inference.
+- A ZZMI/GIMI section without `match_first_index` matches every draw of its hash, so it
+  has no range: it is never exact evidence for an Asset, but when the mod's exact parts
+  prove one Asset it binds to it with an unknown range. Its rig binds only through the
+  one native stream every captured component of that hash shares (no attachment, no
+  conflicting stream) and carries no morph reference. A first index matching no captured
+  range stays ambiguous.
 - Retain every proof in the loaded manifest/skinning source; never reread INIs on
   Weight access. Admission never depends on character/mod names or numeric ID
   ranges, and generic admission verifies every referenced captured VB/IB.

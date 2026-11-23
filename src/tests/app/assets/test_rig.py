@@ -477,7 +477,8 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
     def resolve(geometry_hash, ordinal, ids, hashes=(native,), merged_layout=(), count=3, positions=(),
                 layout=("gimi_f32_u32_4", 32)):
         binding = SimpleNamespace(asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
-                                  geometry_hash=geometry_hash, first_index=ordinal * 3, index_count=count,
+                                  geometry_hash=geometry_hash, first_index=None if ordinal is None else ordinal * 3,
+                                  index_count=count,
                                   component_ordinal=ordinal, metadata_entry=None)
         source = SkinningSource("blend.buf", layout[1], 4, layout[0], native_palette_hashes=hashes,
                                 native_position_hashes=positions)
@@ -519,6 +520,37 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
         assert resolve("aaaaaaaa", 1, (0, 1, 2), merged_layout=(("44444444", 0, 4),))["bone_map"] == own["bone_map"]
     model["components"].append(component("aaaaaaaa", 2, 0, {"0": 9}))
     assert resolve("aaaaaaaa", 1, (0,)) is None
+    # A section without match_first_index names every component of its hash. Their one shared stream
+    # binds the palette, but no single component's morph reference describes its geometry.
+    model["components"].pop()
+    wildcard = resolve("aaaaaaaa", None, (0, 1, 2), count=None)
+    assert wildcard["bone_map"] == own["bone_map"] and wildcard["morph_binding"] is None
+    # Components spread over several streams are not proven.
+    model["components"].append(component("aaaaaaaa", 3, 1, {"0": 8}))
+    assert resolve("aaaaaaaa", None, (0, 1, 2), count=None) is None
+
+
+@pytest.mark.parametrize("status, range_status, first_index, asset_type, admitted", [
+    ("exact", "exact", 3, "ZZMI", True),
+    # A hash-Asset section without match_first_index has no range to prove.
+    ("exact", "unknown", None, "ZZMI", True),
+    ("exact", "unknown", None, "GIMI", True),
+    ("exact", "unknown", 3, "ZZMI", False),
+    ("exact", "unknown", None, "WWMI", False),
+    ("exact", "ambiguous", None, "ZZMI", False),
+    ("ambiguous", "unknown", None, "ZZMI", False),
+])
+def test_rig_admission_accepts_an_unknown_range_only_for_a_hash_asset_without_first_index(
+        tmp_path, monkeypatch, status, range_status, first_index, asset_type, admitted):
+    from app.assets import rig
+
+    (tmp_path / "Asset").mkdir()
+    (tmp_path / "Asset" / rig.RIG_FILENAME).write_text("{}")
+    monkeypatch.setattr(rig, "validate_rig", lambda _raw: "rig")
+    binding = SimpleNamespace(status=status, range_status=range_status, first_index=first_index,
+                              asset_type=asset_type, root=str(tmp_path), asset="Asset")
+    found = rig._admitted_rig(binding, {os.path.normcase(str(tmp_path))}, {})
+    assert (found is not None) is admitted
 
 
 ATTACHMENT = dict(weights=[.75, .25, 0, 0, 1, 0, 0, 0], slots=[1, 0, 0, 0, 0, 0, 0, 0], expression={"7": 1.0})

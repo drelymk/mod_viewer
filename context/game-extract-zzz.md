@@ -118,7 +118,8 @@ Shared rules: [game-extract.md](game-extract.md). ZZMI mod palette proof is in
   id to ordered disjoint `[start, end]` seconds (at most 64 per clip). A frame shows
   the prop only when the clip moves the prop's own bones (skin bones and ancestors
   outside the captured body chain) beyond 1e-3 from rest (skipped for parts without
-  own bones) and the posed bounding-box centre is not below the Avatar ground; runs
+  own bones) and the posed bounding-box centre is at least 1 mm above the Avatar ground (a
+  centre within 1 mm of it is parked there, so float noise cannot flicker the prop); runs
   widen by half a frame. No window hides the prop; a prop no clip shows is not
   exported. Shared-library clips hide windowed props.
 - Prefab context: the renderer read returns each prefab's default visibility and

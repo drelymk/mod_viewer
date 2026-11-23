@@ -403,8 +403,11 @@ def _mod_morph_vertices(directory, reference_dir, palette, positions, cache, sig
 
 def _admitted_rig(binding, enabled_roots, cache):
     """Return ``(Asset directory, validated rig)`` for an exact, enabled binding."""
-    if (binding is None or binding.status != "exact" or binding.range_status != "exact"
-            or os.path.normcase(binding.root or "") not in enabled_roots):
+    if binding is None or binding.status != "exact" or os.path.normcase(binding.root or "") not in enabled_roots:
+        return None
+    # A hash-Asset section without match_first_index has no range; its stream proof follows.
+    if binding.range_status != "exact" and not (
+            binding.range_status == "unknown" and binding.first_index is None and binding.asset_type in ("ZZMI", "GIMI")):
         return None
     directory = paths.safe_asset_dir(binding.root, binding.asset)
     filename = paths.safe_asset_path(directory, RIG_FILENAME) if directory else None
@@ -661,12 +664,17 @@ def _hash_asset_palette(binding, enabled_roots, cache):
         return None
     # Hash Assets may identify an exact range by its first index alone (GIMI
     # metadata has no counts); the captured component still has to be unique.
+    # A binding without a first index (a section lacking match_first_index) names every
+    # component of its hash; only native streams skinned once for all of them can be proven.
+    wildcard = binding.first_index is None
     matches = [p for p in rig["components"]
-               if (p["geometry_hash"], p["first_index"]) == (binding.geometry_hash, binding.first_index)
+               if p["geometry_hash"] == binding.geometry_hash
+               and ("attachment" not in p if wildcard else p["first_index"] == binding.first_index)
                and (binding.index_count is None or p["index_count"] == binding.index_count)
                and (binding.component_ordinal is None or p["component_ordinal"] == binding.component_ordinal)
                and (binding.metadata_entry is None or p.get("metadata_entry") == binding.metadata_entry)]
-    if len(matches) != 1:
+    if len(matches) != 1 and not (
+            wildcard and matches and len({(p["metadata_file"], p["metadata_entry"]) for p in matches}) == 1):
         return None
     palette = matches[0]
     metadata = paths.safe_asset_path(binding.root, binding.metadata)
@@ -725,6 +733,8 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
                 if mapping is None:
                     return None
                 own_geometry = any(p is palette for p in stream)
+        # No single captured component's morph reference describes a wildcard section's geometry.
+        own_geometry = own_geometry and binding.first_index is not None
         mapping, unmapped = _game_bone_mapping(mapping, bone_ids)
         if not own_geometry:
             # The bound component's morph reference describes different geometry.

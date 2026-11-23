@@ -521,18 +521,22 @@ def test_zzz_extraction_adds_textured_props_driven_only_by_uncaptured_bones(tmp_
     assert sessions.load_props("invented")["status"] == "error"
 
 
-@pytest.mark.parametrize("bone, translations, layout, expected", [
+@pytest.mark.parametrize("bone, translations, layout, expected, lift", [
     # Prop bone 2 lifted off its rest translation, above the floor, in either clip layout.
-    (2, [[0, 0, 1.5]] * 4, "frame-major-tqs-f32le", {"clip01": [[0.0, 0.3]]}),
-    (2, [[0, 0, 1.5]] * 4, "frame-major-tq-f32le", {"clip01": [[0.0, 0.3]]}),
+    (2, [[0, 0, 1.5]] * 4, "frame-major-tqs-f32le", {"clip01": [[0.0, 0.3]]}, 0.0),
+    (2, [[0, 0, 1.5]] * 4, "frame-major-tq-f32le", {"clip01": [[0.0, 0.3]]}, 0.0),
     # The prop bone rests on every frame, so the clip does not place the prop.
-    (2, [[0, 0, 1]] * 4, "frame-major-tqs-f32le", {}),
+    (2, [[0, 0, 1]] * 4, "frame-major-tqs-f32le", {}, 0.0),
     # Placed above the floor for two frames, then parked far below it.
-    (2, [[0, 0, 1.5]] * 2 + [[0, -5, 1]] * 2, "frame-major-tqs-f32le", {"clip01": [[0.0, 0.15]]}),
+    (2, [[0, 0, 1.5]] * 2 + [[0, -5, 1]] * 2, "frame-major-tqs-f32le", {"clip01": [[0.0, 0.15]]}, 0.0),
     # A body-only part has no own bones, so the floor alone decides and the clip shows it whole.
-    (1, [[0, 0, 1]] * 4, "frame-major-tqs-f32le", {"clip01": [[0.0, 0.3]]}),
+    (1, [[0, 0, 1]] * 4, "frame-major-tqs-f32le", {"clip01": [[0.0, 0.3]]}, 0.0),
+    # A part parked on the floor is hidden, including at its float noise; clearly above it shows.
+    (1, [[0, 0, 1]] * 4, "frame-major-tqs-f32le", {}, 2.25),
+    (1, [[0, 0, 1]] * 4, "frame-major-tqs-f32le", {}, 2.2495),
+    (1, [[0, 0, 1]] * 4, "frame-major-tqs-f32le", {"clip01": [[0.0, 0.3]]}, 2.248),
 ])
-def test_clip_windows_show_a_rig_prop_only_where_clips_place_it_above_the_floor(bone, translations, layout, expected):
+def test_clip_windows_show_a_rig_prop_only_where_clips_place_it_above_the_floor(bone, translations, layout, expected, lift):
     rig = dict(bones=[
         dict(name="mesh-space", parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
         dict(name="Body", parent=0, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
@@ -543,7 +547,7 @@ def test_clip_windows_show_a_rig_prop_only_where_clips_place_it_above_the_floor(
     if layout == "frame-major-tq-f32le":
         frames = frames[..., :7]
     metadata = dict(frame_count=len(translations), duration=0.3, bone_count=3, layout=layout)
-    positions = np.array([[0, 2, 1], [1, 2, 1], [0, 2.5, 1]], dtype=float)
+    positions = np.array([[0, 2, 1], [1, 2, 1], [0, 2.5, 1]], dtype=float) - [0, lift, 0]
     joints = np.array([[bone, 0, 0, 0]] * 3, dtype=np.int64)
     weights = np.array([[1, 0, 0, 0]] * 3, dtype=float)
     windows = zzz_props.clip_windows(rig, [("clip01", metadata, frames.tobytes())], [(positions, joints, weights)], {1})

@@ -269,6 +269,34 @@ def test_resolve_groups_scopes_narrowing_to_shared_ini_provenance(
     assert bindings[3][0].asset == "AssetB"
 
 
+def test_resolve_groups_binds_a_section_without_first_index_to_the_assets_the_mod_proves(
+        tmp_path, monkeypatch):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
+    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
+    index = _index(root, asset_type="ZZMI", asset="AssetA", first_index=0)
+    index["assets"].append({"path": "AssetB", "geometry": [{
+        "hash": "bbbbcccc", "ranges": [{"firstIndex": 50, "indexCount": 8}],
+        "metadata": "AssetB/hash.json", "componentName": "Component03"}]})
+    index["byGeometryHash"]["bbbbcccc"] = [{"asset": 1, "geometry": 0}]
+    for asset_number, asset_name in enumerate(("AssetA", "AssetB")):
+        index["assets"][asset_number]["geometry"].append({
+            "hash": "aabbccdd", "ranges": [{"firstIndex": 0, "indexCount": 12}, {"firstIndex": 12, "indexCount": 6}],
+            "metadata": f"{asset_name}/hash.json", "componentName": "Hair"})
+        index["byGeometryHash"].setdefault("aabbccdd", []).append({"asset": asset_number, "geometry": 1})
+    monkeypatch.setattr(asset_index, "load_index", lambda asset_type, path: index)
+
+    bindings = resolve_groups([{"draws": [
+        DrawCall(geometry_match=GeometryMatch("bbbbcccc", 50, 8)),
+        # No match_first_index: the draw names every range of the hash the proven Asset holds.
+        DrawCall(geometry_match=GeometryMatch("aabbccdd")),
+        # A first index no range holds is not a wildcard and stays ambiguous.
+        DrawCall(geometry_match=GeometryMatch("aabbccdd", 99)),
+    ]}], "zzz", entries)[0]
+
+    assert (bindings[1].status, bindings[1].asset, bindings[1].range_status) == ("exact", "AssetB", "unknown")
+    assert bindings[1].first_index is None and bindings[2].status == "ambiguous"
+
+
 def test_resolve_groups_keeps_conflicting_exact_assets_ambiguous(
         tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
