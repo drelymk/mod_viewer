@@ -30,18 +30,27 @@ def _family(name):
     return ""
 
 
-def _mesh_family_hint(family, name):
-    """Discover both exported Unity mesh naming forms; this is never binding proof."""
-    if family + "_Model_" in name:
-        return True
+def _hint_prefixes(family):
+    """Case-folded mesh name prefixes a family's name hint accepts (empty for a family without a character stem)."""
     character = re.sub(r"^Avatar_(?:(?:Female|Male)_)?(?:Size\d+|Type\d+)_", "", family)
     if character == family:
-        return False
+        return ()
     stem = character.split("_", 1)[0]
-    legacy = "SeparateMesh_" + family + "_"
     # A body Avatar may also own meshes named for its child prop/variant family.
     # Name hints must not exclude those meshes before native ownership proof.
-    return name.casefold().startswith((stem.casefold() + "_", legacy.casefold()))
+    return (stem + "_").casefold(), ("SeparateMesh_" + family + "_").casefold()
+
+
+def _mesh_family_hint(family, name):
+    """Discover both exported Unity mesh naming forms; this is never binding proof."""
+    return family + "_Model_" in name or name.casefold().startswith(_hint_prefixes(family))
+
+
+def family_hints(families):
+    """A mesh name predicate equal to any of ``families``' :func:`_mesh_family_hint`, in one pass per name."""
+    markers = tuple(family + "_Model_" for family in families)
+    prefixes = tuple(prefix for family in families for prefix in _hint_prefixes(family))
+    return lambda name: name.casefold().startswith(prefixes) or any(marker in name for marker in markers)
 
 
 def _root_transform(matrix):

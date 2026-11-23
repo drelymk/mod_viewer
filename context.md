@@ -1297,7 +1297,13 @@ of documentation, comments and tests; use portable fixtures instead.
   Material or Texture2D, by block, bundle offset and ordinal; only ZZZ scans request
   it) so prop material and texture pointers into bundles without indexed objects can
   be read; a CAB in several bundles is read from each copy and must agree. Indexes
-  from before that table are stale and need one rescan.
+  from before that table are stale and need one rescan. The scan covers every block
+  (any invalid row still fails the build), but the index keeps only what character
+  extraction reads (`zzz_index.limit`, format 6): Avatars of `Avatar_…` families,
+  meshes some family's name hint discovers, the families' `<family>_Ani_` clips,
+  renderers whose Avatar pointer (case-insensitive CAB plus PathID) names a kept
+  Avatar, and every AnimatorController; the file table stays complete. Kept rows
+  retain every copy, so ambiguity is unchanged.
   Index compatibility has its own reader version; clip-only runtime changes
   do not invalidate unchanged discovery metadata.
   An index schema/runtime change requires one successful rebuild. ZZZ index

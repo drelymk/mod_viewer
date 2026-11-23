@@ -995,15 +995,35 @@ def test_zzz_index_composite_identity_staleness_and_failed_build_preserve_cache(
     blocks.mkdir(parents=True)
     (blocks / "1.blk").write_bytes(b"block")
     monkeypatch.setattr(paths, "asset_index_dir", lambda: str(tmp_path / "index"))
-    row = dict(name="Mesh01", type="Mesh", block="", cab="CAB-01", offset=0, file_ordinal=0, path_id=1, shape=[[3, 3]])
+    def synthetic(kind, name, path_id, **extra):
+        return dict(name=name, type=kind, block="", cab="CAB-01", offset=0, file_ordinal=0, path_id=path_id, **extra)
+    scanned = [
+        synthetic("Avatar", "Avatar_Type01_Name01_ModelAvatar", 1),
+        synthetic("Avatar", "Monster01_ModelAvatar", 2),
+        synthetic("Mesh", "Avatar_Type01_Name01_Model_Body", 3, shape=[[3, 3]]),
+        synthetic("Mesh", "Name01_Weapon01", 4, shape=[[3, 3]]),
+        synthetic("Mesh", "Mesh01", 5, shape=[[3, 3]]),
+        synthetic("AnimationClip", "Avatar_Type01_Name01_Ani_Idle01", 6),
+        synthetic("AnimationClip", "Monster01_Ani_Idle01", 7),
+        synthetic("AnimatorController", "Monster01_Controller", 8),
+        synthetic("SkinnedMeshRenderer", "", 9, renderer=dict(path="Root/Part01", mesh=dict(cab="cab-01", path_id=0),
+                  avatar=dict(cab="cab-01", path_id=1), blend_shape_count=0)),
+        synthetic("SkinnedMeshRenderer", "", 10, renderer=dict(path="Root/Part02", mesh=dict(cab="cab-01", path_id=0),
+                  avatar=dict(cab="cab-01", path_id=2), blend_shape_count=0)),
+    ]
     class Client:
         def scan_many(self, files):
-            return [{**row, "block": file.relative_to(folder).as_posix()} for file in files]
+            return [{**deepcopy(item), "block": file.relative_to(folder).as_posix()} for file in files for item in scanned]
     cancel = threading.Event()
     client = Client()
     assert zzz_index.status(folder)["state"] == "missing"
     rows, count = zzz_index.build(client, folder, lambda *_: None, cancel)
-    assert count == 1 and zzz_index.status(folder)["state"] == "ready"
+    # Only rows character extraction reads stay: family Avatars, hinted meshes, family clips, controllers and renderers of a kept Avatar.
+    assert count == 2 and zzz_index.status(folder)["state"] == "ready"
+    assert sorted((row["type"], row["name"], row["path_id"]) for row in rows) == sorted([
+        ("Avatar", "Avatar_Type01_Name01_ModelAvatar", 1), ("Mesh", "Avatar_Type01_Name01_Model_Body", 3),
+        ("Mesh", "Name01_Weapon01", 4), ("AnimationClip", "Avatar_Type01_Name01_Ani_Idle01", 6),
+        ("AnimatorController", "Monster01_Controller", 8), ("SkinnedMeshRenderer", "", 9)])
     with patch.object(client, "scan_many", side_effect=AssertionError("A ready index must be reused.")):
         assert zzz_index.ensure(client, folder, lambda *_: None, cancel) == rows
         monkeypatch.setattr(zzz_runtime, "VERSION", "synthetic-clip-runtime-update")
@@ -1022,7 +1042,8 @@ def test_zzz_index_composite_identity_staleness_and_failed_build_preserve_cache(
     assert zzz_index.identity(rows[0]) != zzz_index.identity({**rows[0], "offset": 4})
     assert zzz_index.identity(rows[0]) != zzz_index.identity({**rows[0], "file_ordinal": 1})
     before = zzz_index.index_path(folder).read_bytes()
-    row["offset"] = -1
+    # A malformed row fails the build even when the limit would drop it.
+    scanned[4]["offset"] = -1
     with pytest.raises(ValueError, match="incomplete"):
         zzz_index.build(Client(), folder, lambda *_: None, cancel)
     assert zzz_index.index_path(folder).read_bytes() == before
@@ -1055,6 +1076,9 @@ def test_zzz_index_pools_exact_renderer_paths_and_reuses_complete_cache(tmp_path
                  offset=0, file_ordinal=0, path_id=i, renderer=dict(path=f"Root/Part{i:03d}", bone_paths=list(bones),
                     mesh=dict(cab="CAB-01", path_id=0), avatar=dict(cab="CAB-01", path_id=500), blend_shape_count=0))
             for i in range(128)]
+    # The renderers' Avatar pointer (CAB-01, PathID 500) must name a kept family Avatar.
+    rows.append(dict(name="Avatar_Type01_Name01_ModelAvatar", type="Avatar", block=f"{zzz_runtime.BLOCK_DIRS[0]}/1.blk",
+                     cab="CAB-01", offset=0, file_ordinal=0, path_id=500))
     expected = deepcopy(rows)
     cancel = threading.Event()
     client = type("Client", (), {"scan_many": lambda self, files: deepcopy(rows)})()
@@ -1065,11 +1089,11 @@ def test_zzz_index_pools_exact_renderer_paths_and_reuses_complete_cache(tmp_path
     file = zzz_index.index_path(folder)
     saved = json.loads(file.read_bytes())
     assert file.stat().st_size < zzz_index.MAX_BYTES and saved["bone_paths"] == bones
-    assert all("bone_paths" not in row["renderer"] for row in saved["rows"])
+    assert all("bone_paths" not in row["renderer"] for row in saved["rows"] if "renderer" in row)
     with patch.object(client, "scan_many", side_effect=AssertionError("A complete cache must be reused.")):
         loaded = zzz_index.ensure(client, folder, lambda *_: None, cancel)
     assert loaded == expected
-    assert loaded[0]["renderer"]["bone_paths"][0] is loaded[-1]["renderer"]["bone_paths"][0]
+    assert loaded[0]["renderer"]["bone_paths"][0] is loaded[127]["renderer"]["bone_paths"][0]
     before = file.read_bytes()
     monkeypatch.setattr(zzz_index, "MAX_BYTES", 16)
     with pytest.raises(ValueError, match="size limit"):

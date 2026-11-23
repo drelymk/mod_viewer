@@ -21,6 +21,7 @@ from app.assets.extractor.profiles.gimi_placement import apply_placement
 from tests.support.gimi_capture import make_face_capture
 from tests.support.extraction_data import header
 from app.assets.extractor.capture import Inventory
+from app.settings import paths
 from tests.support.memory_capture_data import capture_data
 
 
@@ -410,6 +411,7 @@ def test_all_faces_export_update_and_manual_hash_folder_removal(tmp_path, monkey
     root.mkdir()
     monkeypatch.setattr(folders, "load_registry", lambda: [
         {"type": "GIMI", "path": folders.normalize_path(root)}])
+    monkeypatch.setattr(paths, "asset_index_dir", lambda: str(tmp_path / "indexes"))
     monkeypatch.setattr(hash_asset, "_solve_face_alignment", _no_fit)
     before = {p.name: p.read_bytes() for p in dump.iterdir()}
     saved = extraction.extract_asset(str(root), "Asset_001", str(dump))

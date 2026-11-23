@@ -1,4 +1,12 @@
-"""Complete, versioned ZZZ metadata index; native reads still prove each binding."""
+"""Versioned ZZZ metadata index; native reads still prove each binding.
+
+The scan covers every block, but the index keeps only what character extraction
+reads: Avatars of ``Avatar_…`` character families, meshes a family's name hint
+discovers (see ``zzz_pipeline._mesh_family_hint``), the families' ``<family>_Ani_``
+clips, renderers whose Avatar pointer names a kept Avatar, and every
+AnimatorController (renderer contexts may play any controller). The file table
+still lists every serialized file holding a material or texture.
+"""
 
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -8,9 +16,11 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import threading
 
 from app.settings import config, paths
+from . import zzz_pipeline
 from .runtime import check_cancelled
 from .zzz_runtime import INDEX_VERSION, archives, validate_folder
 
@@ -18,7 +28,7 @@ MAX_BYTES = 256 * 1024 * 1024
 MAX_BONE_REFERENCES = 16 * 1024 * 1024
 MAX_BONE_PATHS = 1000000
 MAX_BONE_PATH_LENGTH = 128 * 1024
-FORMAT = 5
+FORMAT = 6
 MAX_FILES = 2000000
 LOCATOR_KEYS = ("block", "offset", "cab", "file_ordinal", "path_id")
 SCAN_BATCH = 16
@@ -108,6 +118,33 @@ def valid_rows(rows):
             return False
         seen.add(key)
     return True
+
+
+def limit(rows):
+    """Keep only the rows character extraction reads (see the module docstring), in scan order."""
+    families = {zzz_pipeline._family(row["name"]) for row in rows if row["type"] == "Avatar"} - {""}
+    hinted = zzz_pipeline.family_hints(sorted(families))
+    avatars = {(row["cab"].casefold(), row["path_id"]) for row in rows
+               if row["type"] == "Avatar" and zzz_pipeline._family(row["name"])}
+
+    def wanted(row):
+        kind = row["type"]
+        if kind == "Avatar":
+            return bool(zzz_pipeline._family(row["name"]))
+        if kind == "Mesh":
+            return hinted(row["name"])
+        if kind == "AnimationClip":
+            # Extraction reads the clips named ``<family>_Ani_…``.
+            return any(row["name"][:match.start()] in families for match in re.finditer("_Ani_", row["name"]))
+        if kind == "SkinnedMeshRenderer":
+            # Facial routes and prop textures both need the renderer's Avatar to be a verified family copy.
+            renderer = row.get("renderer")
+            pointer = renderer.get("avatar") if isinstance(renderer, dict) else None
+            return (isinstance(pointer, dict) and isinstance(pointer.get("cab"), str)
+                    and (pointer["cab"].casefold(), pointer.get("path_id")) in avatars)
+        return True
+
+    return IndexRows([row for row in rows if wanted(row)], rows.files)
 
 
 def _bone_lists(rows):
@@ -303,7 +340,7 @@ def scan(client, folder, progress, cancel):
     progress("index", len(files), len(files))
     if not valid_rows(rows):
         raise ValueError("The ZZZ metadata index is incomplete or ambiguous.")
-    return IndexRows(rows, _file_table(entries))
+    return limit(IndexRows(rows, _file_table(entries)))
 
 
 def build(client, folder, progress, cancel):
