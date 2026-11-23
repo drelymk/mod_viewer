@@ -17,6 +17,7 @@ from .draw_resources import (
     _hash_wide_overrides, _select_draw_sections,
 )
 from .animation_resources import _read_resource_bytes, _resource_size, _shader_path
+from .dnf import DNF_FALSE, DNF_TRUE, dnf_and, dnf_or
 from .draw_scan import _buffer_resource_at_draw, _scan_sections_for_draws
 from .sections import ResourceTable, first_source
 from .wwmi_skeleton import native_wwmi_component_palettes, stock_wwmi_merged_layouts
@@ -66,6 +67,40 @@ def _lookup_component_value(mapping, component):
         (key for key in mapping if component_low.startswith(key)),
         key=len, default=None)
     return mapping.get(prefix) if prefix else None
+
+
+def _assignment_guard(history, resource):
+    """Return the guards that bound ``resource`` in one slot, or None if unproven."""
+    if not resource:
+        return None
+    matches = [item for item in history
+               if str(item["resource"]).casefold() == str(resource).casefold()]
+    if len({item.get("slot") for item in matches}) != 1:
+        return None
+    guard = DNF_FALSE
+    for item in matches:
+        if not item["conditions"]:
+            return None
+        guard = dnf_or(guard, item["conditions"])
+    return guard
+
+
+def _paired_binding_conditions(conditions, *guards):
+    """Narrow a draw's guard to the state that selected its rendered buffers.
+
+    A draw whose own guard cannot choose between conditional variants still
+    renders one Position/IB alternative. Its Blend must be the alternative bound
+    under that same state, not the last one listed in the section.
+    """
+    paired = conditions or DNF_TRUE
+    for guard in guards:
+        if not guard:
+            continue
+        narrowed = [group for group in dnf_and(paired, guard)
+                    if _condition_group_is_consistent(group)]
+        if narrowed:
+            paired = narrowed
+    return paired
 
 
 def _resolved_texture_assignments(assignments, resolve_file, draw_conditions=None):
@@ -580,10 +615,15 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 skinning_resolution["resolution_source"] = "direct"
             if skinning_source is None and skinning_error is None:
                 occupied_slots = set(vertex_resources)
+                blend_conditions = _paired_binding_conditions(
+                    authored.binding_conditions,
+                    _assignment_guard(histories.get("position") or histories.get("blend", []),
+                                      effective_position_resource),
+                    _assignment_guard(info["index_binding_history"], effective_ib))
                 blend_fallback = {
                     slot: _buffer_resource_at_draw(
                         [item for item in histories.get("blend", []) if item["slot"] == slot],
-                        authored.binding_conditions, resource)
+                        blend_conditions, resource)
                     for slot, resource in lookup_component_blend_vertex_resources(
                         _ib_res_to_component(effective_ib), effective_ib).items()
                     if slot not in occupied_slots
