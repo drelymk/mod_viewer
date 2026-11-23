@@ -474,11 +474,12 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
     monkeypatch.setattr(rig, "_zzz_morph_reference", lambda *_: object())
     monkeypatch.setattr(rig, "_mod_morph_vertices", lambda *_args, **_kwargs: [0])
 
-    def resolve(geometry_hash, ordinal, ids, hashes=(native,), merged_layout=(), count=3, positions=()):
+    def resolve(geometry_hash, ordinal, ids, hashes=(native,), merged_layout=(), count=3, positions=(),
+                layout=("gimi_f32_u32_4", 32)):
         binding = SimpleNamespace(asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
                                   geometry_hash=geometry_hash, first_index=ordinal * 3, index_count=count,
                                   component_ordinal=ordinal, metadata_entry=None)
-        source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4", native_palette_hashes=hashes,
+        source = SkinningSource("blend.buf", layout[1], 4, layout[0], native_palette_hashes=hashes,
                                 native_position_hashes=positions)
         return resolve_game_rig(binding, source, ids, set(), {}, merged_layout=merged_layout)
 
@@ -497,7 +498,7 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
     beyond = resolve("aaaaaaaa", 1, (0, 3))
     assert beyond["bone_map"] == own["bone_map"] and beyond["unmapped_bone_ids"] == [3]
     assert resolve("aaaaaaaa", 1, (0,), (native, "22222222")) is None
-    # A Blend hash the Asset never captured is corroborated only by the stream's own position hash.
+    # Hashes the Asset never captured (a patch-changed Blend hash) are no evidence; a captured position hash may name the stream.
     assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",)) is None
     # That position hash names stream 1, whose palette then binds; IDs it lacks stay at rest.
     other_stream = resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",), positions=("22222222",))
@@ -506,6 +507,13 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
     assert resolve("aaaaaaaa", 1, (0, 1, 2), ("99999999",), positions=("11111111",))["bone_map"] == own["bone_map"]
     # A Blend hash the Asset knows for another stream is a conflict, not a patch change.
     assert resolve("aaaaaaaa", 1, (0, 1, 2), ("44444444", "99999999"), positions=("11111111",)) is None
+    # A Blend also fed to streams the Asset never captured (level-of-detail copies) keeps the captured stream's
+    # palette; every captured hash, position hashes included, must still name that stream.
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), (native, "99999999"))["bone_map"] == own["bone_map"]
+    assert resolve("aaaaaaaa", 1, (0, 1, 2), (native, "99999999"), positions=("22222222",)) is None
+    # Packed and rigid Blend layouts carry raw palette IDs of the same stream.
+    for layout in (("wwmi_u8_4", 8), ("rigid_u32_1", 4)):
+        assert resolve("aaaaaaaa", 1, (0, 1, 2), layout=layout)["bone_map"] == own["bone_map"]
     if asset_type == "GIMI":
         # Merged skeleton layouts are a ZZZ program; GIMI keeps the native stream palette.
         assert resolve("aaaaaaaa", 1, (0, 1, 2), merged_layout=(("44444444", 0, 4),))["bone_map"] == own["bone_map"]

@@ -1295,7 +1295,13 @@ of documentation, comments and tests; use portable fixtures instead.
   Material or Texture2D, by block, bundle offset and ordinal; only ZZZ scans request
   it) so prop material and texture pointers into bundles without indexed objects can
   be read; a CAB in several bundles is read from each copy and must agree. Indexes
-  from before that table are stale and need one rescan.
+  from before that table are stale and need one rescan. The scan covers every block
+  (any invalid row still fails the build), but the index keeps only what character
+  extraction reads (`zzz_index.limit`, format 6): Avatars of `Avatar_…` families,
+  meshes some family's name hint discovers, the families' `<family>_Ani_` clips,
+  renderers whose Avatar pointer (case-insensitive CAB plus PathID) names a kept
+  Avatar, and every AnimatorController; the file table stays complete. Kept rows
+  retain every copy, so ambiguity is unchanged.
   Index compatibility has its own reader version; clip-only runtime changes
   do not invalidate unchanged discovery metadata.
   An index schema/runtime change requires one successful rebuild. ZZZ index
@@ -1343,7 +1349,11 @@ of documentation, comments and tests; use portable fixtures instead.
   Version 2 rigs retain nonuniform scale and sparse palettes. Captured references
   require exact metadata/VB/IB fingerprints. Mods additionally require an exact
   Blend-content fingerprint or a same-INI file-backed vb2 binding program whose
-  native position/Blend hashes all match captured components' metadata.
+  captured native position/Blend hashes all name one captured stream; hashes no
+  captured stream carries (level-of-detail copies, patch-changed hashes) are not
+  evidence. Any Blend layout read as raw palette IDs (32-byte, packed 8/16-byte or
+  rigid 4-byte; no remap, VG table or offset) qualifies; only 32-byte ones are
+  inferred from Position files.
   ZZZ skins a stream once with one palette, so its mapping is the union of every
   captured component of that stream, rejected on conflicting joints; it applies
   even when another component's override draws that stream, which then carries
@@ -1351,8 +1361,10 @@ of documentation, comments and tests; use portable fixtures instead.
   the canonical binding history, including local helpers and conditional resources;
   source names and exact exporter statement order are not palette evidence. Retain this proof
   in the loaded skinning source; never reread INIs during Weight access. Reject
-  conflicting Blend writers/aliases, custom matrix/vertex programs in the model
-  draw closure and unknown draw helper calls. Unrelated menu shaders and position-only
+  conflicting Blend writers/aliases and custom matrix/vertex programs or unknown
+  helper calls in the Blend pass closure. Overrides drawing the skinned stream run
+  after that pass, so their commands and helpers never gate the palette (ZZZ and
+  GIMI alike). Unrelated menu shaders and position-only
   shape compute do not change palette identity. Resolve absent hash-Asset ordinals only through a unique
   geometry-hash/range match, never names or bone-ID ranges. Other layouts retain inferred rigs. Decode ACL,
   dense, streamed Hermite and constant tracks into endpoint-inclusive TQS samples;
@@ -1544,8 +1556,8 @@ of documentation, comments and tests; use portable fixtures instead.
   GIMI mods prove a palette only through a stock skinning pass: a safe
   `TextureOverride` closure binding a file-backed, unaliased stride-32 Blend at vb1
   with `handling = skip` and `draw = <count>, 0` (literal or variable). Allowed
-  external helpers are the stock texture/ORFix/NNFix ones; any other helper keeps
-  inferred rigging. Hash Assets that identify an exact range by first index only
+  external helpers in that pass are the stock texture/ORFix/NNFix ones; any other
+  keeps inferred rigging. Hash Assets that identify an exact range by first index only
   match a unique captured component by geometry hash and first index.
   Genshin extraction also exports props (`gi_props.py`, ZZZ's `prop-v1` layout and
   manifest `props`): the ZZZ attachment proof over meshes in the verified Avatar's
