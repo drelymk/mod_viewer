@@ -51,6 +51,10 @@ proof is in [weight-rig.md](weight-rig.md).
   attachment targets. Clamp per clip policy, then subtract the captured expression
   from animated channels only; unanimated channels keep the captured weight.
   Failures leave body motion unaffected (`facial_error`).
+- A character whose clips carry no facial curve (many have none) gets the manifest's
+  `idle_face` instead: the one renderer's `Eye_WinkB` pair plus its captured-shown
+  channels, with `rest_weights`; omitted when any clip has facial curves or no unique
+  pair has sparse rows. The report records `idle_face`.
 
 ## Body motion
 

@@ -697,8 +697,8 @@ def test_gi_sequences_follow_authored_continuations(controller, clips, expected)
     assert all(item["id"].startswith("seq-") for item in result) and len({item["id"] for item in result}) == len(result)
 
 
-def add_facial_route(rows, client, values, clamp=True):
-    """Route the attachment's native mesh through a renderer and key its shape in the body clip."""
+def add_facial_renderer(rows, client):
+    """Route the attachment's native mesh through a renderer; returns the shape's path hash."""
     import zlib
 
     path = zlib.crc32(b"Part02")
@@ -707,6 +707,12 @@ def add_facial_route(rows, client, values, clamp=True):
     # External pointers may spell the CAB in lower case.
     rows.append({**gi_row("", "SkinnedMeshRenderer", 40, block=GI_OTHER_BLOCK), "renderer": dict(
         path="Part02", mesh=dict(cab="cab-01", path_id=9), avatar=dict(cab="cab-01", path_id=1), blend_shape_count=1)})
+    return path
+
+
+def add_facial_route(rows, client, values, clamp=True):
+    """Route the attachment's native mesh through a renderer and key its shape in the body clip."""
+    path = add_facial_renderer(rows, client)
     body = client.documents[20]
     body["bindings"].append(dict(path=path, attribute=SHAPE_HASH, type="SkinnedMeshRenderer", custom=20, pointer=0))
     body["values"] = [frame + [value] for frame, value in zip(body["values"], values)]
@@ -741,6 +747,53 @@ def test_gi_facial_curves_play_relative_to_the_captured_expression(tmp_path):
     (component,) = metadata["morphs"]["components"]
     assert (output / "Animation" / metadata["morphs"]["file"]).is_file()
     assert component["vertex_sha256"] == next(c for c in rig["components"] if "attachment" in c)["vertex_sha256"]
+
+
+def name_closing_pair(client):
+    """Rename the attachment mesh's captured shape to the game's eye-closing pair, adding the unshown right eye."""
+    shapes = client.documents[9]["blend_shapes"]
+    shapes["channels"] = [dict(name="Eye_WinkB_L", hash=SHAPE_HASH, first=0, count=1),
+                          dict(name="Eye_WinkB_R", hash=SHAPE_HASH + 1, first=1, count=1)]
+    shapes["weights"] = [100.0, 100.0]
+    shapes["frames"].append(dict(first=2, count=2, normals=False))
+    shapes["vertices"] += [dict(index=0, position=[0, 0, .03], normal=[0, 0, 0]),
+                           dict(index=2, position=[0, .02, 0], normal=[0, 0, 0])]
+
+
+def build_blink_library(tmp_path, *, pair, keyed):
+    """Build an attachment library whose shapes are (or are not) the closing pair and whose clip is (or is not) keyed."""
+    root, asset, record, rows, client = animated_fixture(tmp_path)
+    record = add_attachment_component(root, asset, rows, client)
+    if pair:
+        name_closing_pair(client)
+    if keyed:
+        add_facial_route(rows, client, [150, 50])
+    else:
+        add_facial_renderer(rows, client)
+    output = tmp_path / "output"
+    report, _ = gi_pipeline.build(client, root, record, output, None, lambda *_: None, threading.Event(), rows)
+    return report, output / "Animation", json.loads((output / "Animation/manifest.json").read_text())
+
+
+def test_gi_library_without_facial_curves_records_one_shared_blink_face(tmp_path):
+    from app.assets.animation_morphs import idle_blink, read_morphs
+
+    report, library, manifest = build_blink_library(tmp_path, pair=True, keyed=False)
+    face = manifest["idle_face"]
+    assert report["idle_face"] is True and (library / face["file"]).is_file()
+    # The pair closes fully; the left eye was captured shut, so its crossfade starts there.
+    names, scales = idle_blink(face)
+    assert [name.split(":")[-1] for name in names] == ["Eye_WinkB_L", "Eye_WinkB_R"]
+    assert scales == pytest.approx([0, 1], abs=1e-3)
+    assert read_morphs(str(library), face)
+
+
+@pytest.mark.parametrize("pair, keyed", [(False, False), (True, True)])
+def test_gi_blink_face_needs_a_unique_closing_pair_and_unkeyed_clips(tmp_path, pair, keyed):
+    # Only a unique closing pair is a blink, and a library with facial curves needs no shared face.
+    report, library, manifest = build_blink_library(tmp_path, pair=pair, keyed=keyed)
+    assert "idle_face" not in manifest and report["idle_face"] is False
+    assert len(list(library.glob("facial-*.glb"))) == (1 if keyed else 0)
 
 
 @pytest.mark.parametrize("policies, expected", [

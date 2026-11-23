@@ -68,7 +68,8 @@ and props as the viewer plays them. How each game produces them is in the
   ordinary mod playback controls.
 - Clips without facial curves may borrow the library's eye-closing shape for a
   deterministic idle blink: the backend alone names it (whole-face, else a
-  left/right pair, never one eye) from the first catalog clip that has one;
+  left/right pair, never one eye) from the manifest's optional `idle_face` (a clip
+  `morphs` document), else the first catalog clip that has one;
   playback time drives it; paused playback and clips with facial curves are never
   altered; failure leaves the clip playable. Genshin clips record captured
   `rest_weights`; the blink uses one renderer's `Eye_WinkB` pair and crossfades its

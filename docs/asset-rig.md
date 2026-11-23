@@ -343,8 +343,9 @@ remain unmapped; shared UV corners inherit an established, unique source.
 Morphs apply before skinning on the GPU and Stop restores the baseline.
 Clips without facial curves play a procedural idle blink while running, using the
 library's eye-closing native shape (a whole-face shape such as `E_Close`, else a
-matched left/right pair, where weight 1 is full closure). The first catalog clip
-whose targets include one supplies the shared sparse targets; libraries without
+matched left/right pair, where weight 1 is full closure). The manifest's
+`idle_face` (written when no clip has facial curves), else the first catalog clip
+whose targets include one, supplies the shared sparse targets. Libraries without
 such a shape, or whose target data cannot be read, leave the face unchanged.
 Paused playback keeps the eyes open and clips with their own facial curves are
 never altered.

@@ -757,27 +757,33 @@ def test_idle_blink_crossfades_genshin_eyes_from_their_captured_pose(names, rest
         idle_blink({**morphs, "rest_weights": {"name": float("nan")}})
 
 
-def test_clips_without_facial_curves_share_the_library_blink_targets(tmp_path, monkeypatch):
+def blink_library(tmp_path, names):
+    """A library directory holding sparse blink targets ``names`` (Morph01.bin) and a plain clip's bone data."""
     rig, source = sample()
     frames, bone_data = converter()(source, rig, 1)
     directory = tmp_path / "Asset01/Animation"
     directory.mkdir(parents=True)
     target_data = struct.pack("<I6f", 1, 0, 0, 2, 0, 1, 0) * 2
-    targets = [dict(name="Smile", offset=0, count=1), dict(name="E_Close", offset=28, count=1)]
+    (directory / "Morph01.bin").write_bytes(target_data)
+    targets = [dict(name=name, offset=28 * number, count=1) for number, name in enumerate(names)]
     components = [dict(vertex_sha256="b" * 64, index_sha256="c" * 64, vertex_count=3, targets=targets)]
+    return rig, frames, bone_data, directory, target_data, targets, components
+
+
+def write_blink_clip(directory, rig, frames, name, data, morphs=None):
+    base = dict(format="mod-viewer-animation", version=1, coordinate_space="asset", layout="frame-major-tq-f32le",
+                skeleton_id=rig["id"], frame_count=frames, bone_count=2, duration=1, data_file=name + ".bin",
+                sha256=hashlib.sha256(data).hexdigest())
+    (directory / (name + ".bin")).write_bytes(data)
+    (directory / (name + ".json")).write_text(json.dumps({**base, **({"morphs": morphs} if morphs else {})}))
+
+
+def test_clips_without_facial_curves_share_the_library_blink_targets(tmp_path, monkeypatch):
+    rig, frames, bone_data, directory, target_data, targets, components = blink_library(tmp_path, ["Smile", "E_Close"])
     morphs = dict(names=["Smile"], file="Morph01.bin", sha256=hashlib.sha256(target_data).hexdigest(),
                   components=components)
-
-    def write(name, data, morphs=None):
-        base = dict(format="mod-viewer-animation", version=1, coordinate_space="asset", layout="frame-major-tq-f32le",
-                    skeleton_id=rig["id"], frame_count=frames, bone_count=2, duration=1, data_file=name + ".bin",
-                    sha256=hashlib.sha256(data).hexdigest())
-        (directory / (name + ".bin")).write_bytes(data)
-        (directory / (name + ".json")).write_text(json.dumps({**base, **({"morphs": morphs} if morphs else {})}))
-
-    write("Plain", bone_data)
-    write("Facial", bone_data + struct.pack("<2f", 0, 1), morphs)
-    (directory / "Morph01.bin").write_bytes(target_data)
+    write_blink_clip(directory, rig, frames, "Plain", bone_data)
+    write_blink_clip(directory, rig, frames, "Facial", bone_data + struct.pack("<2f", 0, 1), morphs)
     clips = [dict(id=name.lower(), name=name, file=name + ".json", duration=1) for name in ("Plain", "Facial")]
     (directory / "manifest.json").write_text(json.dumps(dict(
         format="mod-viewer-animations", version=1, skeleton_id=rig["id"], clips=clips)))
@@ -814,3 +820,37 @@ def test_clips_without_facial_curves_share_the_library_blink_targets(tmp_path, m
     token = genshin.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animation_session"]
     idle = genshin.load(token, "plain")["clip"]["idle_morphs"]
     assert idle["names"] == [targets[0]["name"], targets[1]["name"]] and idle["scales"] == [1, 1]
+
+
+def test_manifest_idle_face_blinks_clips_when_no_clip_has_facial_curves(tmp_path, monkeypatch):
+    names = [EYE + "00000002:Eye_WinkB_L", EYE + "00000003:Eye_WinkB_R"]
+    rig, frames, bone_data, directory, target_data, targets, components = blink_library(tmp_path, names)
+    face = dict(names=names, file="Morph01.bin", sha256=hashlib.sha256(target_data).hexdigest(),
+                components=components, rest_weights={})
+    write_blink_clip(directory, rig, frames, "Plain", bone_data)
+
+    def manifest(**extra):
+        (directory / "manifest.json").write_text(json.dumps(dict(
+            format="mod-viewer-animations", version=1, skeleton_id=rig["id"],
+            clips=[dict(id="plain", name="Plain", file="Plain.json", duration=1)], **extra)))
+
+    published = []
+    monkeypatch.setattr("app.assets.animations.server.publish_geometry",
+                        lambda data, **_: published.append(data) or f"/geometry/{len(published)}")
+    monkeypatch.setattr("app.assets.animations.server.release_geometry", lambda _: None)
+
+    def load():
+        sessions = AnimationSessions()
+        token = sessions.catalog(str(tmp_path), "Asset01", rig, lambda: True)["animation_session"]
+        return sessions.load(token, "plain")["clip"]
+
+    manifest(idle_face=face)
+    idle = load()["idle_morphs"]
+    assert idle["names"] == names and idle["scales"] == [1, 1] and idle["components"] == components
+    assert idle["data"]["length"] == len(target_data)
+    # A face without a usable closing pair, or with altered target data, leaves the clip plain.
+    manifest(idle_face={**face, "components": [{**components[0], "targets": [dict(targets[0], name="Smile"), targets[1]]}]})
+    assert "idle_morphs" not in load()
+    (directory / "Morph01.bin").write_bytes(target_data[:-4])
+    manifest(idle_face=face)
+    assert "idle_morphs" not in load()

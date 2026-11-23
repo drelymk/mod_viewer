@@ -3,7 +3,10 @@
 import hashlib
 from pathlib import Path
 
+import numpy as np
+
 from app.assets import animation_keys
+from app.assets.animation_morphs import idle_blink
 from app.assets.animations import read_clip
 from . import animator_sequences, gi_animation, gi_index, gi_props, gi_skill_objects, zzz_index, zzz_morphs, zzz_native, zzz_pipeline
 from .mecanim import HumanSolver
@@ -62,6 +65,30 @@ def _facial(chosen, captured, index):
     except ValueError as error:
         return None, str(error)
     return (facial, None) if facial["bindings"] and facial["components"] else (None, None)
+
+
+def _rest_weights(facial, names):
+    """The weight the capture already shows for each named target, so a procedural blink can crossfade from it."""
+    return {name: round(facial["offsets"][name], 6) for name in names if abs(facial["offsets"].get(name, 0.0)) > 1e-3}
+
+
+def _idle_face(facial, library):
+    """The library's one shared blink face (a clip ``morphs`` document), or None without a unique closing pair.
+
+    Only the face's sparse targets are used; the zero-weight animation inside the GLB is not."""
+    if not facial:
+        return None
+    shown = [name for component in facial["components"] for name in component["targets"]]
+    probe = dict(components=[dict(targets=[dict(name=name) for name in shown])], rest_weights=_rest_weights(facial, shown))
+    blink = idle_blink(probe)
+    if not blink:
+        return None
+    names = blink[0]
+    try:
+        morphs = zzz_morphs.export_glb(facial, dict(names=names, weights=np.zeros((2, len(names)), "<f4")), 2, 1 / 60, library)
+    except ValueError:
+        return None
+    return {**morphs, "rest_weights": _rest_weights(facial, names)}
 
 
 def _props(client, chosen, rig, index, library, cancel, captured, root, record, body_clips, sequences):
@@ -156,10 +183,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                         keyed_bones=keyed)
         if morph:
             metadata["morphs"] = zzz_morphs.export_glb(facial, morph, frames, duration, library)
-            # The captured weight of each target, so a procedural blink can crossfade from it.
-            metadata["morphs"]["rest_weights"] = {
-                name: round(facial["offsets"][name], 6) for name in morph["names"]
-                if abs(facial["offsets"].get(name, 0.0)) > 1e-3}
+            metadata["morphs"]["rest_weights"] = _rest_weights(facial, morph["names"])
             metadata["blend_shape_clamp"] = morph["clamp"]
         (library / (key + ".bin")).write_bytes(binary)
         write_document(library / (key + ".json"), metadata, 1024 * 1024)
@@ -184,6 +208,10 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                     sequences=sequences, runtime_bones=animation_keys.runtime_bones(rig, existing.values()))
     if props:
         manifest["props"] = manifest_props(props)
+    # Clips without facial curves borrow one shared blink face; none is needed when any clip carries one.
+    idle_face = None if any(metadata.get("morphs") for metadata in existing.values()) else _idle_face(facial, library)
+    if idle_face:
+        manifest["idle_face"] = idle_face
     write_document(library / "manifest.json", manifest, 1024 * 1024)
     write_document(output / "Rig.json", {key: value for key, value in rig.items() if key != "id"}, 2 * 1024 * 1024)
     report = dict(format="mod-viewer-rig-extraction", version=1, game="gi", skeleton_id=rig["id"], skeleton=chosen["source"],
@@ -197,6 +225,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
                   clips=len(entries), imported=imported, secondary=0, sequences=len(sequences),
                   skipped=len(skipped), skipped_details=skipped,
                   facial_targets=len(facial["bindings"]) if facial else 0, facial_error=facial_error,
+                  idle_face=bool(idle_face),
                   animations=provenance,
                   props=report_props(props),
                   skipped_props=skipped_props, **({"prop_error": prop_error} if prop_error else {}),
