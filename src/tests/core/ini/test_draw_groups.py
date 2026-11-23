@@ -933,3 +933,58 @@ def test_run_targets_require_the_complete_section_name(command, expected):
     lookup = {name.lower(): name for name in (
         "CommandListPart", "CommandListPart Block 01", "ResourceIgnored Block")}
     assert _run_target_name(command, lookup) == expected
+
+
+def _variant_branches(lines_for):
+    """Return an if/else-if chain binding one resource set per variant."""
+    text = ""
+    for variant in ("Base", "Alt", "Extra"):
+        keyword = "if" if variant == "Base" else "else if"
+        text += f"{keyword} $variant == {('Base', 'Alt', 'Extra').index(variant)}\n"
+        text += "".join(f"{line.format(variant=variant)}\n" for line in lines_for)
+    return text + "endif\n"
+
+
+@pytest.mark.parametrize("layout", ["zzz_blend_binds_position", "gimi_command_lists"])
+def test_shared_auto_draw_pairs_blend_with_its_rendered_variant(layout):
+    resources = "".join(
+        f"\n[ResourceComponent01{role}{variant}]\nfilename = {role.lower()}-{variant.lower()}.buf\n"
+        f"stride = {stride}\n"
+        for variant in ("Base", "Alt", "Extra")
+        for role, stride in (("Position", 40), ("Texcoord", 20), ("Blend", 32))
+    ) + "".join(
+        f"\n[ResourceComponent01AIB{variant}]\nfilename = part-{variant.lower()}.ib\n"
+        "format = DXGI_FORMAT_R32_UINT\n"
+        for variant in ("Base", "Alt", "Extra"))
+    blend_slot = 2 if layout == "zzz_blend_binds_position" else 1
+    if layout == "zzz_blend_binds_position":
+        # The Blend override binds every alternative, then its vb0 partner.
+        binders = ("[TextureOverrideComponent01Blend]\nhash = 33333333\nhandling = skip\n"
+                   + _variant_branches([f"vb{blend_slot} = ResourceComponent01Blend{{variant}}"])
+                   + "if DRAW_TYPE == 1\n"
+                   + _variant_branches(["vb0 = ResourceComponent01Position{variant}", "draw = 4, 0"])
+                   + "endif\n")
+    else:
+        binders = "".join(
+            f"[TextureOverrideComponent01{role}]\nhash = {hash_value}\nrun = CommandListComponent01{role}\n"
+            f"[CommandListComponent01{role}]\n" + _variant_branches([line])
+            for role, hash_value, line in (
+                ("Position", "44444444", "vb0 = ResourceComponent01Position{variant}"),
+                ("Blend", "33333333", f"vb{blend_slot} = ResourceComponent01Blend{{variant}}")))
+    sections = parse_sections("source-01.ini", text=(
+        "[Constants]\nglobal persist $variant = 0\n" + binders
+        + "[TextureOverrideComponent01Texcoord]\nhash = 55555555\n"
+        + _variant_branches(["vb1 = ResourceComponent01Texcoord{variant}"])
+        + "[TextureOverrideComponent01IB]\nhash = 22222222\nhandling = skip\ndrawindexed = auto\n"
+        + "[TextureOverrideComponent01A]\nhash = 22222222\nmatch_first_index = 0\n"
+        + _variant_branches(["ib = ResourceComponent01AIB{variant}"])
+        + resources))
+
+    draw = build_draw_groups(sections, extract_resources(sections))[0]["draws"][0]
+
+    # The draw's own guard cannot choose a variant, so it renders the first
+    # IB/Position pair. Its weights must come from that pair's Blend, not the
+    # Blend listed last in the binder.
+    assert (draw.ib_file, draw.position_file) == ("part-base.ib", "position-base.buf")
+    assert draw.skinning_source.file == "blend-base.buf"
+    assert draw.skinning_resolution["resolution_source"] == "legacy_component"

@@ -279,7 +279,9 @@ of documentation, comments and tests; use portable fixtures instead.
   untouched fallback, direct/null bindings and baked-animation behavior. Runtime
   guards are matching evidence, not additional visibility controls. IB branches
   carry matching direct VB snapshots; an unproven IB stays unresolved rather than
-  inheriting a scanned conditional replacement.
+  inheriting a scanned conditional replacement. A component Blend the draw guard
+  cannot prove follows the guards that bound the draw's rendered Position, then
+  IB, never the binder's last-listed alternative.
 - Candidate discovery supplies viewer choices without inferring semantic
   bindings. Keep texture processing independent of game/material interpretation.
   Mod loading and semantic refresh never decode texture pixels to infer roles;
