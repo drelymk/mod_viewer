@@ -15,8 +15,12 @@ from tests.support.provenance import visible
     ("local_binder", True), ("conditional_position", True), ("input_aliases", True),
     ("wrong_phase", False), ("different_blend", True), ("alias", False), ("outgoing_alias", False),
     ("writable_buffer", False),
-    ("second_writer", True), ("matrix", False), ("compute_blend", False),
-    ("unknown_helper", False), ("local_shadow", False), ("sibling", False),
+    ("second_writer", True), ("compute_blend", False), ("sibling", False),
+    # The drawing override runs after the Blend pass skinned the stream, so its
+    # helpers and shader state never change the palette.
+    ("matrix", True), ("unknown_helper", True), ("local_shadow", True),
+    # A packed 8-byte Blend bound to the stream indexes the same native palette.
+    ("packed_blend", True),
 ])
 def test_stock_zzz_palette_proof_retains_native_hash_only_for_supported_programs(change, accepted):
     from core.ini.zzz_skeleton import stock_zzz_palette_sources
@@ -61,6 +65,8 @@ filename = blend.buf
         text += "\n[CommandListOther]\nResourceComponent01Blend = copy ResourceOther\n"
     elif change == "outgoing_alias":
         text += "\n[CommandListOther]\nResourceOther = ref ResourceComponent01Blend\n"
+    elif change == "packed_blend":
+        text = text.replace("stride = 32\nfilename = blend.buf", "stride = 8\nfilename = blend.buf")
     elif change == "writable_buffer":
         text = text.replace("type = Buffer", "type = RWStructuredBuffer")
     elif change == "multiple":
@@ -99,13 +105,13 @@ filename = blend.buf
     resources = extract_resources(sections)
     scanned = _scan_sections_for_draws(sections, resources=resources)
     buffers = _resolve_component_buffers(scanned, resources, {}, sections=sections)
-    hashes, _positions, safe = stock_zzz_palette_sources(sections, resources, scanned, buffers["resolve_vertex_info"])
-    assert bool(hashes and "textureoverridecomponent01a" in safe) is accepted
+    hashes, _positions = stock_zzz_palette_sources(sections, resources, scanned, buffers["resolve_vertex_info"])
     if change == "multiple":
         assert len(hashes) == 2
-    if accepted:
-        draw = build_draw_groups(sections, extract_resources(sections))[0]["draws"][0]
-        assert draw.skinning_source.native_palette_hashes == (("11111111", "33333333") if change == "input_aliases" else ("33333333",))
+    source = build_draw_groups(sections, extract_resources(sections))[0]["draws"][0].skinning_source
+    proven = source.native_palette_hashes if source is not None else ()
+    expected = ("11111111", "33333333") if change == "input_aliases" else ("33333333",)
+    assert (proven == expected) is accepted, (change, hashes, proven)
 
 
 @pytest.mark.parametrize("guard", ["$mode == 1", "$Ready == 1"])

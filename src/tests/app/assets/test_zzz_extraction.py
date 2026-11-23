@@ -205,7 +205,7 @@ filename = blend.buf
     assert originals.get_animation(captured_rig["animation_session"], captured_rig["animations"][0]["id"])["status"] == "error"
     manifest = preview._skinning_manifests[str(mod)]
     key = next(iter(manifest))
-    manifest[key] = replace(retained, skinning_source=replace(retained.skinning_source, native_palette_hashes=("33333333", "44444444")))
+    manifest[key] = replace(retained, skinning_source=replace(retained.skinning_source, native_palette_hashes=("44444444",)))
     assert preview.get_model_skinning_preview(str(mod))["game_rigs"] == {}
     manifest[key] = retained
     # Missing ordinals may resolve only when the captured hash/range is unique.
