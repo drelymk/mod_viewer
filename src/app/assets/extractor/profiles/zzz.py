@@ -2,7 +2,7 @@
 
 No shader or character hashes are hardcoded. Color target + shader + texture format,
 dimensions and complete neighboring bindings are required. Other roles stay unknown.
-Reference: leotorrez/ZZMI-Package, SlotFix.ini and Matches.ini (see docs/asset-extraction.md).
+Reference: leotorrez/ZZMI-Package, SlotFix.ini and Matches.ini (see docs/THIRD_PARTY_NOTICES.md).
 """
 
 

@@ -453,9 +453,12 @@ See [game extraction details](docs/asset-rig.md#game-folder-extraction).
 To extract from a frame dump, right-click an Asset Folder and choose `Add asset`.
 Enter a name, browse to the dump folder, and click OK. Use `Update asset` on an
 indexed asset to replace all of its files with a new extraction. Both actions
-refresh the index automatically. See [Asset extraction](docs/asset-extraction.md)
-for supported behavior and recovery. A partial extraction shows a warning;
-review it before relying on the Asset to restore every missing component.
+refresh the index automatically; a failed update restores the previous asset and
+index. A partial extraction shows a warning; review it before relying on the Asset
+to restore every missing component. Each installed Asset keeps
+`extraction_report.json` with its source provenance, skipped resources and
+unresolved candidates. After adding, removing or renaming Asset folders outside
+the viewer, rebuild the Asset Folder index.
 
 ### 10. Check the INIs and export your edits
 
