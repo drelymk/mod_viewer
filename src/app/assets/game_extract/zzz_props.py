@@ -34,6 +34,9 @@ _REST_TOLERANCE = 1e-3
 # A posed prop whose centre sits within this height of the floor is parked on it: float
 # noise there would otherwise flicker the prop on and off every few frames.
 _GROUND_TOLERANCE = 1e-3
+# Native copies of one mesh in different blocks can differ by float serialization noise
+# (about 1e-7 in bind poses); copies within this tolerance are the same prop.
+_COPY_TOLERANCE = 1e-5
 _CHUNK_VERTEX_FRAMES = 4_000_000
 _FRAME_WIDTHS = {"frame-major-tqs-f32le": 10, "frame-major-tq-f32le": 7}
 
@@ -122,6 +125,27 @@ def encode_parts(mesh, joint_map, conversion, reference, excluded=frozenset()):
             return None, reason
         parts.append(part)
     return parts, None
+
+
+def equivalent_copies(first, second):
+    """Whether two encoded part lists hold the same geometry up to float serialization noise.
+
+    Counts, joints and triangles must match exactly; positions, normals, UVs and weights may
+    differ by ``_COPY_TOLERANCE``."""
+    if len(first) != len(second):
+        return False
+    for (payload, count, indices), (other, other_count, other_indices) in zip(first, second):
+        if (count, indices, len(payload)) != (other_count, other_indices, len(other)):
+            return False
+        # Layout: f32 records, u16 joints, f32 weights, then u32 triangles (see ``pack_prop``).
+        records, joints, weights = count * 32, count * 40, count * 56
+        if payload[records:joints] != other[records:joints] or payload[weights:] != other[weights:]:
+            return False
+        for block in (slice(0, records), slice(joints, weights)):
+            if not np.allclose(np.frombuffer(payload[block], "<f4"), np.frombuffer(other[block], "<f4"),
+                               rtol=0, atol=_COPY_TOLERANCE):
+                return False
+    return True
 
 
 def filter_contexts(windows_by_prop, drawn, played):
@@ -358,10 +382,12 @@ def extract(client, chosen, rig, index, library, cancel, mesh_hint, captured_par
         if reason:
             skipped.append(dict(source=zzz_index.identity(row), name=row["name"], reason=reason))
             continue
-        digest = hashlib.sha256(b"".join(payload for payload, _vertices, _indices in encoded)).hexdigest()
-        found.setdefault(row["name"], {})[digest] = (row, encoded, mesh)
+        copies = found.setdefault(row["name"], [])
+        # Copies are read in identity order, so the first of equivalent copies is the one kept.
+        if not any(equivalent_copies(known[1], encoded) for known in copies):
+            copies.append((row, encoded, mesh))
     shared = zzz_prop_textures.Reader(client, index, cancel, (textures or {}).get("route"))
-    single = {name: next(iter(copies.values())) for name, copies in found.items() if len(copies) == 1}
+    single = {name: copies[0] for name, copies in found.items() if len(copies) == 1}
     dropped = zzz_prop_textures.alternates(
         shared, chosen, [(name, mesh, zzz_index.identity(row)) for name, (row, _parts, mesh) in sorted(single.items())]
     ) if alternates else {}

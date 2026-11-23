@@ -229,7 +229,8 @@ class AssetPreview:
                         rigs[rig["id"]] = {"id": rig["id"], "version": rig["version"], "bones": rig["bones"],
                             "humanoid_controls": rig["humanoid_controls"],
                             "animation_source": "asset",
-                            **session["animations"].catalog(session["root"], session["asset"], rig, is_current)}
+                            **session["animations"].catalog(
+                                session["root"], session["asset"], rig, is_current, part.asset_type)}
                     entry.update(game_rig_id=rig["id"], game_bone_map=rig["bone_map"])
                     if rig["unmapped_bone_ids"]:
                         entry["game_unmapped_bone_ids"] = rig["unmapped_bone_ids"]
