@@ -96,6 +96,45 @@ function buildToggleItem(info, ctx) {
   const row = document.createElement('div');
   row.className = 'toggle-row';
 
+  // Step controls lead the row so they sit at a fixed x position regardless
+  // of name/value length; both are always present.
+  const prevBtn = document.createElement('button');
+  prevBtn.type = 'button';
+  prevBtn.className = 'toggle-step-btn';
+  prevBtn.appendChild(createIcon('chevron-left'));
+  prevBtn.title = t('toggle.previous');
+  prevBtn.setAttribute('aria-label', t('toggle.previous'));
+  prevBtn.addEventListener('click', () => {
+    cyclePosition = findCyclePosition(cycleVars, positions, cyclePosition);
+    const previous = cyclePosition < 0 ? positions - 1 : (cyclePosition - 1 + positions) % positions;
+    for (const v of cycleVars) {
+      setToggleValue(v.var, cycleValueAt(v, previous));
+    }
+    cyclePosition = previous;
+    refreshAll();
+  });
+  row.appendChild(prevBtn);
+
+  const btn = document.createElement('button');
+  btn.className = 'toggle-cycle-btn';
+  btn.appendChild(createIcon('chevron-right'));
+  btn.title = t('toggle.cycle');
+  btn.setAttribute('aria-label', t('toggle.cycle'));
+
+  // A plain assignable slot (not addEventListener) so a recording session can
+  // swap this button's behaviour to "advance position" and restore it again
+  // afterwards without both handlers firing at once.
+  btn.onclick = () => {
+    cyclePosition = findCyclePosition(cycleVars, positions, cyclePosition);
+    const next = (cyclePosition + 1) % positions;
+    for (const v of cycleVars) {
+      setToggleValue(v.var, cycleValueAt(v, next));
+    }
+    cyclePosition = next;
+    refreshAll();
+  };
+  row.appendChild(btn);
+
   const left = document.createElement('span');
   left.className = 'toggle-hdr-left';
   const nameSpan = document.createElement('span');
@@ -128,52 +167,6 @@ function buildToggleItem(info, ctx) {
   valSpan.textContent = describe();
   valSpan.title = valSpan.textContent;
   row.appendChild(valSpan);
-
-  let prevBtn = null;
-  if (positions > 2) {
-    prevBtn = document.createElement('button');
-    prevBtn.type = 'button';
-    prevBtn.className = 'toggle-step-btn';
-    prevBtn.appendChild(createIcon('chevron-left'));
-    prevBtn.title = t('toggle.previous');
-    prevBtn.setAttribute('aria-label', t('toggle.previous'));
-    prevBtn.addEventListener('click', () => {
-      cyclePosition = findCyclePosition(cycleVars, positions, cyclePosition);
-      const previous = cyclePosition < 0 ? positions - 1 : (cyclePosition - 1 + positions) % positions;
-      for (const v of cycleVars) {
-        setToggleValue(v.var, cycleValueAt(v, previous));
-      }
-      cyclePosition = previous;
-      refreshAll();
-    });
-    row.appendChild(prevBtn);
-  } else {
-    // Keeps cycle buttons aligned when sibling toggles have a previous-value button.
-    const spacer = document.createElement('span');
-    spacer.className = 'toggle-step-spacer';
-    spacer.setAttribute('aria-hidden', 'true');
-    row.appendChild(spacer);
-  }
-
-  const btn = document.createElement('button');
-  btn.className = 'toggle-cycle-btn';
-  btn.appendChild(createIcon('cycle'));
-  btn.title = t('toggle.cycle');
-  btn.setAttribute('aria-label', t('toggle.cycle'));
-
-  // A plain assignable slot (not addEventListener) so a recording session can
-  // swap this button's behaviour to "advance position" and restore it again
-  // afterwards without both handlers firing at once.
-  btn.onclick = () => {
-    cyclePosition = findCyclePosition(cycleVars, positions, cyclePosition);
-    const next = (cyclePosition + 1) % positions;
-    for (const v of cycleVars) {
-      setToggleValue(v.var, cycleValueAt(v, next));
-    }
-    cyclePosition = next;
-    refreshAll();
-  };
-  row.appendChild(btn);
 
   valueSyncers.push(() => {
     cyclePosition = findCyclePosition(cycleVars, positions, cyclePosition);
@@ -255,10 +248,8 @@ function buildToggleItem(info, ctx) {
   const syncLabels = () => {
     moreBtn.title = t('toggle.actions');
     moreBtn.setAttribute('aria-label', t('toggle.actions'));
-    if (prevBtn) {
-      prevBtn.title = t('toggle.previous');
-      prevBtn.setAttribute('aria-label', t('toggle.previous'));
-    }
+    prevBtn.title = t('toggle.previous');
+    prevBtn.setAttribute('aria-label', t('toggle.previous'));
     if (!item.classList.contains('recording')) {
       btn.title = t('toggle.cycle');
       btn.setAttribute('aria-label', t('toggle.cycle'));

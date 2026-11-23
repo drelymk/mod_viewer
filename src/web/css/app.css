@@ -695,19 +695,16 @@ body.focus-mode #view-gizmo { top: 12px; right: 12px; }
   width: 28px; height: 28px; min-height: 28px; display: inline-flex; align-items: center;
   justify-content: center; cursor: pointer; flex-shrink: 0;
 }
-#toggle-list .toggle-cycle-btn { width: 26px; height: 26px; min-height: 26px; }
 .toggle-cycle-btn .ui-icon { width: 16px; height: 16px; }
 .toggle-cycle-btn:hover { background: var(--panel-fill-accent); }
 .toggle-step-btn {
   background: var(--panel-fill-control); border: 1px solid #30363d; color: #e6edf3; border-radius: 4px;
-  width: 22px; height: 26px; min-height: 26px; display: inline-flex; align-items: center;
-  justify-content: center; cursor: pointer; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;
 }
-.toggle-step-btn .ui-icon { width: 14px; height: 14px; }
-.toggle-step-btn:hover { background: var(--panel-fill-accent); }
-.toggle-step-spacer { display: none; flex: 0 0 22px; }
-#toggle-list:has(.toggle-step-btn) .toggle-step-spacer { display: block; }
-.toggle-value { font-size: 12px; color: var(--accent-soft); font-weight: 600; flex: 1; min-width: 0; overflow-wrap: break-word; }
+/* Size only: colours stay on the base rules so :hover/:disabled still win. */
+.toggle-step-btn, #toggle-list .toggle-cycle-btn { width: 30px; height: 30px; min-height: 30px; }
+.toggle-step-btn .ui-icon, #toggle-list .toggle-cycle-btn .ui-icon { width: 20px; height: 20px; }
+.toggle-step-btn:hover { background: var(--panel-fill-accent); }.toggle-value { font-size: 12px; color: var(--accent-soft); font-weight: 600; flex: 1; min-width: 0; overflow-wrap: break-word; }
 #toggle-list .toggle-value {
   flex: 1 1 auto; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
