@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import threading
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -912,7 +913,7 @@ def test_gi_build_exports_only_attached_props_every_verified_prefab_draws(tmp_pa
              "uv": [0, 0, 1, 0, 0, 1, 1, 1], "indices": [0, 1, 2, 1, 3, 2], "weights": [[1, 0, 0, 0]] * 4,
              "bone_indices": [[0, 0, 0, 0]] * 4, "sections": [dict(first=0, count=3, vertex_first=0, vertex_count=3),
                                                              dict(first=3, count=3, vertex_first=1, vertex_count=3)]}
-    meshes = {50: prop, 51: {**deepcopy(prop), "name": "SkillObj01"}, 52: {**deepcopy(prop), "name": "Unrouted01"},
+    meshes = {50: prop, 51: {**deepcopy(prop), "name": "SkillObj01", "vertices": [0, 0, 3, 1, 0, 3, 0, 1, 3]}, 52: {**deepcopy(prop), "name": "Unrouted01"},
               53: {**deepcopy(prop), "name": "Unknown01"}, 54: {**deepcopy(prop), "name": "Driven01", "bone_hashes": [HAIR]},
               55: split}
     other_avatar = gi_row("Avatar_Other01", "Avatar", 60, block=GI_OTHER_BLOCK)
@@ -972,7 +973,8 @@ def test_gi_build_exports_only_attached_props_every_verified_prefab_draws(tmp_pa
     assert "prop_error" not in report
     reasons = {item["name"]: item["reason"] for item in report["skipped_props"]}
     assert set(reasons) == {"SkillObj01", "Unrouted01", "Unknown01"}
-    assert "hides the prop" in reasons["SkillObj01"] and "No prefab" in reasons["Unrouted01"]
+    # A prop a prefab hides is admitted and timed by the clips; none of these moves its bone.
+    assert reasons["SkillObj01"] == "No clip shows the prop." and "No prefab" in reasons["Unrouted01"]
     assert "could not be proven" in reasons["Unknown01"]
     entry, first, second = json.loads((output / "Animation/manifest.json").read_text())["props"]
     assert entry["name"] == "Prop01" and "texture_error" not in entry
@@ -990,6 +992,22 @@ def test_gi_build_exports_only_attached_props_every_verified_prefab_draws(tmp_pa
         np.testing.assert_allclose(np.frombuffer(data[:96], dtype="<f4").reshape(3, 8)[:, :3], positions, atol=1e-6)
         assert np.frombuffer(data[168:], dtype="<u4").tolist() == triangles
         assert (output / "Animation" / part["textures"]["diffuse"]["file"]).read_bytes()[-8:] == block
+
+
+def test_gi_props_a_prefab_hides_are_admitted_for_clip_windows():
+    meshes = {name: gi_row(name, "Mesh", number) for number, name in enumerate(("shown", "hidden", "unproven", "mixed"), 1)}
+    renderers = {number: gi_row("", "SkinnedMeshRenderer", number) for number in (1, 2, 3)}
+    visible = {1: True, 2: False, 3: None}
+    routed = {zzz_index.identity(meshes[name]): [renderers[number] for number in numbers]
+              for name, numbers in (("shown", (1,)), ("hidden", (1, 2)), ("unproven", (3,)), ("mixed", (2, 3)))}
+    client = SimpleNamespace(read=lambda row: dict(visible=visible[row["path_id"]]))
+    hidden = set()
+    admit = gi_props.admission(client, routed, threading.Event(), hidden)
+    reasons = {name: admit(row, None) for name, row in meshes.items()}
+    assert reasons["shown"] is None and reasons["hidden"] is None
+    assert "could not be proven" in reasons["unproven"] and "could not be proven" in reasons["mixed"]
+    # Only the prop a prefab hides needs clip windows; a default-visible one stays always shown.
+    assert hidden == {zzz_index.identity(meshes["hidden"])}
 
 
 def test_gi_prop_failures_leave_clips_unaffected(tmp_path):
@@ -1130,8 +1148,8 @@ def test_gi_skill_objects_mount_on_the_point_their_effect_prefab_follows(tmp_pat
 
     root, _asset, record, rows, client = animated_fixture(tmp_path)
     next(row for row in rows if row["path_id"] == 20)["name"] = "Ani_Avatar_Type01_Name01_Idle01"
-    # The body clip also animates a character point outside the Avatar (Root/Point01), rising 3 units.
-    point = zlib.crc32(b"Root/Point01")
+    # The body clip also animates a character point outside the Avatar (Root/CatalystR), rising 3 units.
+    point = zlib.crc32(b"Root/CatalystR")
     body = client.documents[20]
     body["bindings"] += [dict(path=point, attribute=attribute, type="Transform", custom=0, pointer=0) for attribute in (1, 2)]
     body["acl_count"] += 7
@@ -1151,27 +1169,26 @@ def test_gi_skill_objects_mount_on_the_point_their_effect_prefab_follows(tmp_pat
         # which the streamer layer moves 2 units along x (its rest scale is not followed).
         follow_row("Eff_Avatar_Type01_Name01_Plate01", "", avatars["Plate01"], 901),
         follow_row("Eff_Avatar_Type01_Name01_Idle_01", "Joint01", avatars["Plate01"], 902, translation=(0, 0, 1)),
-        # A point outside the Avatar follows the clip's own Root/<point> track.
-        follow_row("Eff_Avatar_Type01_Name01_Cup01", "Point01", avatars["Cup01"], 903),
+        # A point outside the Avatar follows the clip's own Root/<point> track; ShowR follows CatalystR's.
+        follow_row("Eff_Avatar_Type01_Name01_Cup01", "ShowR", avatars["Cup01"], 903),
         # Disagreeing prefabs named for other clips decide nothing.
         follow_row("Eff_Avatar_Type01_Name01_Attack01_Bot01", "", avatars["Bot01"], 904),
         follow_row("Eff_Avatar_Type01_Name01_Skill01_Bot01_SkillObj", "Joint01", avatars["Bot01"], 905),
-        # A point the paired clip never animates places nothing.
+        # A point nothing defines or animates leaves the object at the character's origin.
         follow_row("Eff_Avatar_Type01_Name01_Lamp01", "Point02", avatars["Lamp01"], 906)]
     output = tmp_path / "output"
     report, _ = gi_pipeline.build(client, root, record, output, None, lambda *_: None, threading.Event(), rows)
     assert "skill_object_error" not in report and "prop_error" not in report
-    assert sorted(item["name"] for item in report["props"]) == ["Cup01_Model", "Plate01_Model"]
+    assert sorted(item["name"] for item in report["props"]) == ["Cup01_Model", "Lamp01_Model", "Plate01_Model"]
     assert {(item["name"], item["source"]): item["reason"] for item in report["skipped_props"]} == {
         ("Bot01", "Ani_SkillObj_Name01_Bot01_Idle01"):
-            "The object's effect prefabs place it differently and none is named for this clip.",
-        ("Lamp01", "Ani_SkillObj_Name01_Lamp01_Idle01"):
-            "The paired character clip does not animate the point the effect prefab follows."}
+            "The object's effect prefabs place it differently and none is named for this clip."}
     manifest = json.loads((output / "Animation/manifest.json").read_text())
     rig = json.loads((output / "Rig.json").read_text())
     anchor = rest_worlds(rig["bones"], affine=True)[0]
     [idle] = [entry["id"] for entry in manifest["clips"] if entry["name"] == "Idle"]
-    for name, first, last in (("Plate01_Model", (0, 0, 1), (2, 0, 1)), ("Cup01_Model", (0, 0, 0), (0, 3, 0))):
+    for name, first, last in (("Plate01_Model", (0, 0, 1), (2, 0, 1)), ("Cup01_Model", (0, 0, 0), (0, 3, 0)),
+                              ("Lamp01_Model", (0, 0, 0), (0, 0, 0))):
         [entry] = [prop for prop in manifest["props"] if prop["name"] == name]
         assert set(entry["tracks"]) == {idle}
         track = entry["tracks"][idle]
@@ -1182,6 +1199,49 @@ def test_gi_skill_objects_mount_on_the_point_their_effect_prefab_follows(tmp_pat
             expected = anchor @ moved @ np.linalg.inv(anchor)
             # Both object bones move rigidly with the mount: no scale from the point's rest.
             np.testing.assert_allclose(deltas[frame].reshape(2, 3, 4), np.broadcast_to(expected[:3], (2, 3, 4)), atol=1e-5)
+
+
+def test_prop_textures_ignore_renderers_whose_material_lacks_the_slot(tmp_path, monkeypatch):
+    same = dict(format=10, width=4, height=4, data=bytes(range(8)))
+    other = dict(format=10, width=4, height=4, data=bytes(8))
+    textures = {"a": same, "b": other}
+    reader = SimpleNamespace(texture=lambda _locator, pointer: textures.get(pointer))
+    (tmp_path / "Props").mkdir()
+
+    def described(*materials):
+        monkeypatch.setattr(zzz_prop_textures, "_materials", lambda *_: [[("locator", dict(textures=item))] for item in materials])
+        return zzz_prop_textures._prop_textures(reader, None, dict(sections=[1]), "source", {"_MainTex": "diffuse"}, tmp_path, None)
+
+    shown = [dict(name="_MainTex", texture="a")]
+    effect = [dict(name="_BaseTex", texture="b")]
+    # A renderer with other shader inputs decides nothing; those that have the slot must agree.
+    assert set(described(shown, effect, shown)[0]) == {"diffuse"}
+    assert described(shown, [dict(name="_MainTex", texture="b")]) == ({}, "The prop materials have no proven textures.")
+    assert described(effect) == ({}, "The prop materials have no proven textures.")
+
+
+def test_gi_generic_rig_renderers_route_only_inside_the_objects_own_prefabs():
+    import zlib
+
+    mesh = dict(type="Mesh", block="b", offset=0, cab="CAB-m", file_ordinal=0, path_id=5, name="Model01")
+    renderer = dict(type="SkinnedMeshRenderer", block="b", offset=7, cab="CAB-p", file_ordinal=0, path_id=9, name="",
+                    renderer=dict(path="Model01", mesh=dict(cab="cab-m", path_id=5),
+                                  avatar=dict(cab="CAB-p", path_id=0, file_ordinal=0, offset=7)))
+    avatar = dict(bones=[dict(hash=zlib.crc32(b"Model01"))])
+    rows = [mesh, renderer]
+    # A null Avatar pointer proves nothing alone; inside a prefab that plays the object's controller it routes.
+    assert gi_props.routes(rows, set(), avatar) == {}
+    assert gi_props.routes(rows, set(), avatar, {("b", 8)}) == {}
+    assert gi_props.routes(rows, set(), avatar, {("b", 7)}) == {zzz_index.identity(mesh): [renderer]}
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("Eff_Avatar_Type01_Name01_Show02_Cup01", "Show02"), ("Eff_Avatar_Name01_Show02", "Show02"),
+    ("Eff_Avatar_Name01_Cup01_SkillObj", ""), ("Eff_Avatar_Name02_Show02", None)])
+def test_gi_effect_prefab_labels_accept_the_family_or_its_character_token(name, expected):
+    from app.assets.game_extract import gi_skill_objects
+
+    assert gi_skill_objects._label(name, "Avatar_Type01_Name01", "Cup01") == expected
 
 
 def test_gi_skill_object_runs_chain_their_own_controller_states_with_crossfades(tmp_path):

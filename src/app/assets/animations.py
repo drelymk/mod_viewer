@@ -169,9 +169,10 @@ def _read_clip(directory, entry, rig, *, validated_morphs=None, full_validation=
     return raw, data, morph_data
 
 
-def read_clip(directory, entry, rig, *, validated_morphs=None):
-    """Validate one contained clip without publishing it."""
-    raw, data, _morph_data = _read_clip(directory, entry, rig, validated_morphs=validated_morphs)
+def read_clip(directory, entry, rig, *, validated_morphs=None, full_validation=True):
+    """Validate one contained clip without publishing it; ``full_validation=False`` for clips just validated."""
+    raw, data, _morph_data = _read_clip(directory, entry, rig, validated_morphs=validated_morphs,
+                                        full_validation=full_validation)
     return raw, data
 
 

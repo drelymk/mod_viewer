@@ -293,10 +293,13 @@ def _prop_textures(reader, chosen, mesh, source, slots, library, section):
         return {}, "No renderer material could be proven for the prop."
     result = {}
     for slot, role in sorted(slots.items()):
+        # A renderer whose material has no such slot (an effect variant with other shader inputs) decides
+        # nothing; every renderer that has it must give one readable texture.
         textures = []
         for locator, material in materials:
             entry = next((item for item in material["textures"] if isinstance(item, dict) and item.get("name") == slot), None)
-            textures.append(reader.texture(locator, entry.get("texture")) if entry else None)
+            if entry:
+                textures.append(reader.texture(locator, entry.get("texture")))
         if any(texture is None for texture in textures) or len({
                 (texture["format"], texture["width"], texture["height"], texture["data"]) for texture in textures}) != 1:
             continue
