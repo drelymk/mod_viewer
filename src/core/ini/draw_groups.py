@@ -244,7 +244,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         resource_source=resource_source)
     resource_source = resource_source or DirectoryModSource(".")
     resolve_vertex_info = resolved_buffers["resolve_vertex_info"]
-    zzz_hashes, zzz_position_blends, zzz_sections = stock_zzz_palette_sources(
+    zzz_hashes, zzz_position_blends = stock_zzz_palette_sources(
         sections, resources, section_info, resolve_vertex_info)
     gimi_hashes, gimi_sections = stock_gimi_palette_sources(sections, resources, section_info)
     gimi_positions = stock_gimi_position_hashes(section_info, gimi_sections, resolved_buffers["resolve_vertex_info"])
@@ -648,20 +648,20 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 skinning_source, skinning_error = SkinningSource(merged_zzz.blend_file, 32, 4, "gimi_f32_u32_4"), None
                 skinning_resolution["resolution_source"] = "verified_zzz_merged"
                 draw.skinning_merged_layout = merged_zzz.layout
-            elif (skinning_source is None and skinning_error is None and 2 not in vertex_resources
-                    and section_name.casefold() in zzz_sections):
+            elif skinning_source is None and skinning_error is None and 2 not in vertex_resources:
                 blends = zzz_position_blends.get(normalize_skinning_source_file(draw.position_file), ())
                 if len(blends) == 1:
                     skinning_source = SkinningSource(next(iter(blends)), 32, 4, "gimi_f32_u32_4")
                     skinning_resolution["resolution_source"] = "verified_zzz"
             draw.skinning_source = skinning_source
             if (skinning_source is not None and not merged_zzz
-                    and skinning_source.encoding == "gimi_f32_u32_4"
                     and not skinning_source.bone_id_offset and not skinning_source.blend_remap
                     and not skinning_source.vertex_vg_file):
+                # The skinning pass proves the palette. The drawing override runs only
+                # after it, so its commands and helpers never change which palette skinned.
                 blend_file = normalize_skinning_source_file(skinning_source.file)
-                zzz_palette = zzz_hashes.get(blend_file) if section_name.casefold() in zzz_sections else None
-                gimi_palette = gimi_hashes.get(blend_file) if section_name.casefold() in gimi_sections else None
+                zzz_palette = zzz_hashes.get(blend_file)
+                gimi_palette = gimi_hashes.get(blend_file)
                 palette_hash = zzz_palette or gimi_palette
                 if palette_hash:
                     positions = () if zzz_palette else gimi_positions.get(

@@ -53,16 +53,17 @@ def safe_call_sections(commands, helpers):
 
 
 def stock_zzz_palette_sources(sections, resources, section_info, resolve_vertex_info):
-    """Retain native input hashes for file-backed, unremapped vb2 streams.
+    """Retain native input hashes for file-backed, unaliased vb2 streams.
 
-    Returns ``(blend_hashes, position_blends, safe_sections)``: native hashes
-    per Blend file, proven Blend files per Position file, and the lowercase
-    sections whose call closure cannot rebind vertex state.
+    Returns ``(blend_hashes, position_blends)``: native hashes per Blend file
+    and proven Blend files per Position file. ZZZ skins a stream once, in the
+    Blend pass, so only that override's call closure must not rebind vertex or
+    shader state; the overrides drawing the skinned stream run after it.
     """
     candidates = list(_candidate_sections(section_info))
     commands = _commands(sections) if candidates else {}
     if not commands:
-        return {}, {}, set()
+        return {}, {}
 
     # Any assignment to, or non-vb2 use of, a Blend resource can write through
     # the immutable file binding.
@@ -89,13 +90,16 @@ def stock_zzz_palette_sources(sections, resources, section_info, resolve_vertex_
             blend_file = normalize_skinning_source_file(resource.get("filename"))
             types = [text for _, text in commands.get(blend.casefold(), ()) if text.startswith("type = ")]
             key = blend.casefold()
-            if (not blend_file or resource.get("stride") != 32 or types not in ([], ["type = buffer"])
-                    or key in written or key in referenced):
+            # Any Blend layout the stream's shader reads (32-byte float/u32, 8/16-byte
+            # packed or 4-byte rigid) indexes the same native palette.
+            if not blend_file or types not in ([], ["type = buffer"]) or key in written or key in referenced:
                 continue
             hashes.setdefault(blend_file, set()).add(native_hash)
+            if resource.get("stride") != 32:
+                continue  # Only stock 32-byte Blends may be inferred from a Position file alone.
             for position in positions:
                 vertex = resolve_vertex_info(position)
                 position_file = normalize_skinning_source_file(vertex.get("filename"))
                 if position_file and vertex.get("stride") == 40:
                     position_blends.setdefault(position_file, set()).add(blend_file)
-    return {file: tuple(sorted(values)) for file, values in hashes.items()}, position_blends, safe_sections
+    return {file: tuple(sorted(values)) for file, values in hashes.items()}, position_blends

@@ -46,7 +46,9 @@ filename = blend.buf
     ("stock", True), ("variable_count", True), ("namespaced_count", True), ("texture_helper", True),
     ("texfx_transparency", True), ("texfx_short_entry", True), ("texfx_library_entry", True),
     ("no_skip", False), ("indexed_only", False), ("written", False), ("referenced", False),
-    ("stride", False), ("vertex_shader", False), ("unknown_helper", False), ("unfiled", False),
+    ("stride", False), ("unfiled", False),
+    # The drawing override runs after the skinning pass, so its state never changes the palette.
+    ("vertex_shader", True), ("unknown_helper", True),
 ])
 def test_stock_gimi_palette_proof_requires_an_unchanged_skinning_pass(change, accepted):
     text = STOCK + standard_component_resources(position_stride=40)
@@ -82,7 +84,7 @@ def test_stock_gimi_palette_proof_requires_an_unchanged_skinning_pass(change, ac
         assert source is not None and source.encoding == "gimi_f32_u32_4"
     assert (proven == ("33333333",)) is accepted, (change, hashes, proven)
     if accepted:
-        assert hashes == {"blend.buf": ("33333333",)} and "textureoverridecomponent01a" in safe
+        assert hashes == {"blend.buf": ("33333333",)} and "textureoverridecomponent01blend" in safe
 
 
 HASH_NAMED = r"""[TextureOverride_VB_aaaaaaaa_body_Position]

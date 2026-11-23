@@ -629,11 +629,11 @@ def _zzz_captured_streams(rig, directory, cache):
         yield palette, _zzz_metadata(directory, palette, cache) or {}
 
 
-def _zzz_unknown_hashes(rig, directory, hashes, cache):
-    """True when no captured stream of the Asset carries any of ``hashes``."""
-    wanted = set(hashes)
-    return not any(wanted & {stream.get("blend_vb"), stream.get("position_vb")}
-                   for _palette, stream in _zzz_captured_streams(rig, directory, cache))
+def _zzz_captured_hashes(rig, directory, hashes, cache):
+    """The ``hashes`` some captured stream of the Asset carries, in order."""
+    known = {item for _palette, stream in _zzz_captured_streams(rig, directory, cache)
+             for item in (stream.get("blend_vb"), stream.get("position_vb"))}
+    return [item for item in hashes if item in known]
 
 
 def _zzz_stream_bone_map(palettes, offset=0, count=None):
@@ -692,7 +692,8 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
                      positions, signature, topology):
     # Attachment weights exist only for an Asset's own weightless GIMI capture.
     attachment = source.bone_id_namespace == ATTACHMENT_NAMESPACE
-    if (source.encoding != "gimi_f32_u32_4" or (attachment and not (captured and binding.asset_type == "GIMI"))
+    # Any Blend layout with raw palette IDs (no remap, VG table or offset) indexes the stream palette.
+    if ((attachment and not (captured and binding.asset_type == "GIMI"))
             or source.blend_remap or source.vertex_vg_file or source.bone_id_offset):
         return None
     try:
@@ -715,12 +716,11 @@ def _resolve_zzz_rig(binding, source, bone_ids, enabled_roots, cache, digest, ca
             else:
                 # The proven native stream decides the palette, even when
                 # another component's override draws that stream.
-                stream = _zzz_stream_palettes(rig, directory, source.native_palette_hashes, cache)
-                # A game patch can change a Blend hash the Asset never captured; only then may
-                # the stream's own position hash name it. Known but conflicting hashes reject.
-                if (not stream and source.native_position_hashes
-                        and _zzz_unknown_hashes(rig, directory, source.native_palette_hashes, cache)):
-                    stream = _zzz_stream_palettes(rig, directory, source.native_position_hashes, cache)
+                # Hashes the Asset never captured (level-of-detail copies, hashes a game
+                # patch changed) are no evidence; every captured one must name one stream.
+                evidence = _zzz_captured_hashes(
+                    rig, directory, (*source.native_palette_hashes, *source.native_position_hashes), cache)
+                stream = _zzz_stream_palettes(rig, directory, evidence, cache)
                 mapping = _zzz_stream_bone_map(stream) if stream else None
                 if mapping is None:
                     return None
