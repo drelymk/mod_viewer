@@ -14,14 +14,18 @@ export function getDefaultAnimation(kind) {
 export function gameKindFromPayload(metadata) {
   return metadata?.asset?.type || GAME_IDS[String(metadata?.game?.id || '').toLowerCase()] || null;
 }
-// The clip or sequence named like the game's default (own clips, sequences, then shared), else null.
+// The default is a ;-separated name list, highest priority first. Returns the clip or sequence
+// for the first name that matches (own clips, then sequences, then shared), else null.
 export function findDefaultAnimationId(state, kind = viewerState.gameKind) {
-  const wanted = defaults[kind]?.toLowerCase();
-  if (!wanted) return null;
-  const named = (item) => item.name.trim().toLowerCase() === wanted;
-  const found =
-    state.clips.find((clip) => !clip.shared && named(clip)) ??
-    state.sequences.find(named) ??
-    state.clips.find((clip) => clip.shared && named(clip));
-  return found?.id ?? null;
+  for (const entry of (defaults[kind] || '').toLowerCase().split(';')) {
+    const wanted = entry.trim();
+    if (!wanted) continue;
+    const named = (item) => item.name.trim().toLowerCase() === wanted;
+    const found =
+      state.clips.find((clip) => !clip.shared && named(clip)) ??
+      state.sequences.find(named) ??
+      state.clips.find((clip) => clip.shared && named(clip));
+    if (found) return found.id;
+  }
+  return null;
 }

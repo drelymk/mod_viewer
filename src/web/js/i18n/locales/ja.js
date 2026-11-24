@@ -76,7 +76,7 @@ export default {
   'gameSettings.title': '{game} の設定',
   'gameSettings.defaultAnimation': '既定のアニメーション',
   'gameSettings.defaultAnimationHint':
-    'アニメーションの開始時に、この名前と完全に一致する（大文字と小文字は区別しない）アニメーションがあれば最初に再生します。空欄のままか一致するものがない場合は、最初のアニメーションを再生します。',
+    'アニメーション名を ; で区切って指定します。左にあるものほど優先されます。アニメーションと完全に一致する（大文字と小文字は区別しない）最初の名前のものが最初に再生されます。一致するものがない場合や空欄の場合は、最初のアニメーションを再生します。',
   'settings.notSet': '未設定',
   'settings.hint': '変更は自動保存されます。',
   'asset.extractedPartial':

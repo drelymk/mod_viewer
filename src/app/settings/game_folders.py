@@ -13,7 +13,7 @@ PATH_KEY = "path"
 SETTINGS_KEY = "Settings"
 DEFAULT_ANI_KEY = "DefaultAni"
 GAME_KINDS = ("GIMI", "ZZMI", "WWMI")
-MAX_DEFAULT_ANIMATION_LENGTH = 200
+MAX_DEFAULT_ANIMATION_LENGTH = 500
 
 
 def _validated_path(kind, path):

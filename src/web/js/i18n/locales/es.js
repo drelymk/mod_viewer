@@ -77,7 +77,7 @@ export default {
   'gameSettings.title': 'Ajustes de {game}',
   'gameSettings.defaultAnimation': 'Animación predeterminada',
   'gameSettings.defaultAnimationHint':
-    'Se reproduce primero al iniciar una animación si hay una con exactamente este nombre (sin distinguir mayúsculas). Si se deja vacío o no hay coincidencias, se reproduce la primera animación.',
+    'Nombres de animación separados por ; en orden de prioridad, de izquierda a derecha. Se reproduce primero la primera que coincida exactamente con una animación (sin distinguir mayúsculas). Si no hay coincidencias o el campo está vacío, se reproduce la primera animación.',
   'settings.notSet': 'Sin definir',
   'settings.hint': 'Los cambios se guardan automáticamente.',
   'asset.extractedPartial':
