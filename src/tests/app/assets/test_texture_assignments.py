@@ -291,7 +291,6 @@ def test_asset_assignments_export_reopen_clear_and_portable_copy(asset_case, tmp
     roles[first].update(diffuse=chosen["tex_key"], light_map=None, emission_map=emission["tex_key"])
     roles[first][normal["role"]] = normal["tex_key"]
     old_automatic = _automatic_bindings(case, tmp_path, monkeypatch)
-    old_index = index.snapshot_index(case.kind, str(case.root))
     assert case.api.export_asset_textures(str(case.asset), token, _changes(before, roles)) == {"saved": 1}
     assert {p.relative_to(case.asset) for p in case.asset.rglob("*") if p.is_file()} == set(originals)
     assert all((case.asset / p).read_bytes() == data for p, data in originals.items() if p.suffix != ".json")
@@ -301,7 +300,6 @@ def test_asset_assignments_export_reopen_clear_and_portable_copy(asset_case, tmp
     assert all(item[2] == "" for item in native["texture_hashes"][0]
                if item[0] in ("NormalMap", "EmissionMap") and item[3] == "chosen.png")
     assert str(case.root) not in _metadata(case).read_text()
-    assert index.snapshot_index(case.kind, str(case.root)) != old_index
     assert not (case.asset / "texture_assignments.json").exists()
     for relative, data in originals.items():
         if relative.suffix != ".json":

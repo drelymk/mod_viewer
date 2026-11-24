@@ -1,11 +1,15 @@
 """Apply application-level Asset and material semantics to parsed mods."""
 
+from dataclasses import replace
+
 from core.materials.kind import detect_material_kind
 from core.materials.profiles import material_profile_for
 
 from app.assets import enrichment as asset_enrichment
 from app.assets import resolver as asset_resolver
 from app.assets import textures as asset_textures
+
+_ASSET_GAME_TEXTURE_API = {"zzz": "zzmi", "genshin": "gimi"}
 
 
 def enrich_mod_analysis(parsed, context):
@@ -18,6 +22,14 @@ def enrich_mod_analysis(parsed, context):
     bindings = asset_resolver.resolve_groups(
         parsed.groups, parsed.game, context.asset_folders,
         availability=availability)
+    # The Asset type the mod resolves against names its game, overriding the INI-based detection.
+    # Asset textures are native game textures, so a game with no binding API evidence gets its own.
+    asset_game = asset_resolver.GAME_BY_ASSET_TYPE.get(availability.get("asset_type"))
+    if asset_game and parsed.game.game != asset_game:
+        texture_api = parsed.game.texture_api
+        if texture_api in ("unknown", "raw"):
+            texture_api = _ASSET_GAME_TEXTURE_API.get(asset_game, texture_api)
+        parsed.game = replace(parsed.game, game=asset_game, texture_api=texture_api)
     complete_index = (
         availability.get("configured_roots", 0) > 0
         and availability.get("ready_roots", 0)

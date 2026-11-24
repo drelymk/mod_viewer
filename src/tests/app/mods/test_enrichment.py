@@ -85,3 +85,33 @@ def test_full_and_semantic_loads_share_enrichment_stage(tmp_path):
 
     assert not full_result.get("error")
     assert enrich.call_count == 2
+
+
+def test_exactly_matched_asset_game_overrides_unknown_or_misdetected_game(tmp_path):
+    """The game of the exactly matched Asset type overrides an unknown or misdetected game."""
+    def enrich(game, asset_type):
+        parsed = SimpleNamespace(
+            groups=[], game=GameDetection(
+                game=game, runtime="unknown", texture_api="unknown",
+                confidence="low", scores={}),
+            resource_files=[], texture_override_indexes=[])
+
+        def resolve(groups, detection, folders, availability):
+            availability["asset_type"] = asset_type
+            return []
+
+        summary = SimpleNamespace(to_dict=lambda: {})
+        with patch("app.mods.enrichment.asset_resolver.resolve_groups", side_effect=resolve), \
+                patch("app.mods.enrichment.asset_resolver.summarize_groups", return_value=summary), \
+                patch("app.mods.enrichment.asset_enrichment.apply"), \
+                patch("app.mods.enrichment.asset_textures.collect_texture_inventory"):
+            enrich_mod_analysis(parsed, SimpleNamespace(mod_dir=str(tmp_path), asset_folders=[]))
+        return parsed.game
+
+    for asset_type, game, api in (
+            ("ZZMI", "zzz", "zzmi"), ("GIMI", "genshin", "gimi"), ("WWMI", "wuwa", "unknown")):
+        detected = enrich("unknown", asset_type)
+        assert (detected.game, detected.texture_api) == (game, api)
+    assert enrich("unknown", None).game == "unknown"
+    assert enrich("genshin", "ZZMI").game == "zzz"
+    assert enrich("genshin", None).game == "genshin"

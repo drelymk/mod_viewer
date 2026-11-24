@@ -61,6 +61,40 @@ def test_asset_hash_applies_conditional_mod_replacement(tmp_path):
     assert draw.texture_hashes["diffuse"] == ["11111111"]
 
 
+@pytest.mark.parametrize("filename, expected", [
+    ("TorsoNormalMap.dds", {"Torso": "textures/TorsoNormalMap.dds", "Legs": None}),
+    ("GenericNormalMap.dds", {"Torso": "textures/GenericNormalMap.dds",
+                              "Legs": "textures/GenericNormalMap.dds"}),
+])
+def test_shared_asset_hash_replacement_follows_the_component_its_file_names(
+        tmp_path, filename, expected):
+    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
+    asset_dir = tmp_path / "assets" / "Asset01"
+    asset_dir.mkdir(parents=True)
+    shared = ["NormalMap", ".dds", "22222222"]
+    (asset_dir / "hash.json").write_text(json.dumps([
+        {"ib": ib, "object_indexes": [0], "texture_hashes": [[shared]]}
+        for ib in ("10101010", "20202020")]), encoding="utf-8")
+    mod_dir = tmp_path / "mod"
+    (mod_dir / "textures").mkdir(parents=True)
+    (mod_dir / "textures" / filename).write_bytes(b"replacement")
+    index = TextureOverrideIndex(replacements_by_hash={"22222222": (
+        TextureReplacement("22222222", "ResourceNormal", (), "TextureOverrideNormal",
+                           f"textures/{filename}"),)})
+    draws = {"Torso": DrawCall(), "Legs": DrawCall()}
+    groups = [{"display_name": name, "draws": [draw]} for name, draw in draws.items()]
+    bindings = [[AssetComponentBinding(
+        status="exact", asset_type="GIMI", asset="Asset01", root=root,
+        component_status="exact", range_status="exact", geometry_hash=ib,
+        component_name=name, first_index=0, metadata="Asset01/hash.json")]
+        for name, ib in (("Torso", "10101010"), ("Legs", "20202020"))]
+
+    apply(groups, bindings, texture_index=index, mod_dir=str(mod_dir))
+
+    assert {name: draw.texture_default("normal_map")
+            for name, draw in draws.items()} == expected
+
+
 def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     entries = [{"type": "GIMI", "path": root, "enabled": True}]
@@ -81,7 +115,7 @@ def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch)
         "not_found"
 
 
-def test_resolver_marks_duplicate_enabled_roots_ambiguous(tmp_path, monkeypatch):
+def test_resolver_binds_the_first_of_duplicate_enabled_roots(tmp_path, monkeypatch):
     roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
              for name in ("one", "two")]
     entries = [{"type": "GIMI", "path": root, "enabled": True}
@@ -92,7 +126,7 @@ def test_resolver_marks_duplicate_enabled_roots_ambiguous(tmp_path, monkeypatch)
     binding = resolve_component(
         GeometryMatch("10101010", 12, None), "genshin", entries)
 
-    assert binding.status == "ambiguous"
+    assert (binding.status, binding.root) == ("exact", roots[0])
     assert binding.geometry_hash == "10101010"
 
 
@@ -114,7 +148,7 @@ def test_unknown_game_accepts_exact_match_but_rejects_hash_only_enrichment(
     assert hash_only_binding.status == "not_found"
 
 
-def test_unknown_game_cross_type_exact_matches_are_ambiguous(
+def test_unknown_game_cross_type_exact_matches_bind_the_first_type(
         tmp_path, monkeypatch):
     entries = [{
         "type": asset_type,
@@ -128,8 +162,7 @@ def test_unknown_game_cross_type_exact_matches_are_ambiguous(
     binding = resolve_component(
         GeometryMatch("10101010", 12, 24), "unknown", entries)
 
-    assert binding.status == "ambiguous"
-    assert binding.asset_type is None
+    assert (binding.status, binding.asset_type) == ("exact", "GIMI")
 
 
 def test_known_genshin_does_not_probe_matching_zzmi_index(
@@ -152,8 +185,8 @@ def test_known_genshin_does_not_probe_matching_zzmi_index(
 
 @pytest.mark.parametrize("offsets, first_index, status, asset, range_status", [
     ((0, 12), 12, "exact", "Asset02", "exact"),
-    ((12, 12), 12, "ambiguous", None, "ambiguous"),
-    ((12, 12), None, "ambiguous", None, "unknown"),
+    ((12, 12), 12, "exact", "Asset01", "exact"),
+    ((12, 12), None, "exact", "Asset01", "unknown"),
 ], ids=["unique-range", "duplicate-range", "no-range"])
 def test_same_hash_range_resolution(tmp_path, monkeypatch, offsets, first_index,
                                     status, asset, range_status):
@@ -207,7 +240,7 @@ def test_draw_count_does_not_become_asset_range_evidence(
     }],
         "zzz", entries)
 
-    assert bindings[0][0].status == "ambiguous"
+    assert bindings[0][0].asset == "Asset02"
 
 
 def test_resolve_groups_scopes_narrowing_to_shared_ini_provenance(
@@ -263,7 +296,7 @@ def test_resolve_groups_scopes_narrowing_to_shared_ini_provenance(
     ], "zzz", entries)
 
     assert bindings[0][0].asset == "AssetA"
-    assert bindings[1][0].status == "ambiguous"
+    assert bindings[1][0].asset == "AssetA"
     assert bindings[2][0].asset == "AssetB"
     assert bindings[3][0].status == "exact"
     assert bindings[3][0].asset == "AssetB"
@@ -289,15 +322,16 @@ def test_resolve_groups_binds_a_section_without_first_index_to_the_assets_the_mo
         DrawCall(geometry_match=GeometryMatch("bbbbcccc", 50, 8)),
         # No match_first_index: the draw names every range of the hash the proven Asset holds.
         DrawCall(geometry_match=GeometryMatch("aabbccdd")),
-        # A first index no range holds is not a wildcard and stays ambiguous.
+        # A first index no range holds binds like a hash-only draw, its range unknown.
         DrawCall(geometry_match=GeometryMatch("aabbccdd", 99)),
     ]}], "zzz", entries)[0]
 
     assert (bindings[1].status, bindings[1].asset, bindings[1].range_status) == ("exact", "AssetB", "unknown")
-    assert bindings[1].first_index is None and bindings[2].status == "ambiguous"
+    assert bindings[1].first_index is None
+    assert (bindings[2].asset, bindings[2].range_status) == ("AssetB", "unknown")
 
 
-def test_resolve_groups_keeps_conflicting_exact_assets_ambiguous(
+def test_resolve_groups_binds_the_first_asset_when_exact_assets_conflict(
         tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
     entries = [{"type": "ZZMI", "path": root, "enabled": True}]
@@ -333,8 +367,8 @@ def test_resolve_groups_keeps_conflicting_exact_assets_ambiguous(
         DrawCall(geometry_match=GeometryMatch("aabbccdd", 100, 12)),
     ]}], "zzz", entries)
 
-    assert [item.status for item in bindings[0]] == [
-        "exact", "exact", "ambiguous"]
+    assert [(item.status, item.asset) for item in bindings[0]] == [
+        ("exact", "AssetA"), ("exact", "AssetB"), ("exact", "AssetA")]
 
 
 def test_resolve_groups_loads_each_enabled_index_once(tmp_path, monkeypatch):
@@ -359,7 +393,7 @@ def test_resolve_groups_loads_each_enabled_index_once(tmp_path, monkeypatch):
     assert calls == roots
 
 
-def test_equivalent_hash_metadata_collapses_same_root_asset_records(
+def test_same_hash_assets_with_differing_metadata_bind_the_first_without_rereading(
         tmp_path, monkeypatch):
     root = tmp_path / "zzmi"
     entries = [{"type": "ZZMI", "path": str(root), "enabled": True}]
@@ -370,31 +404,22 @@ def test_equivalent_hash_metadata_collapses_same_root_asset_records(
         "position_vb": "position",
         "texcoord_vb": "texcoord",
         "root_vs": "root",
-        "component_name": "Hair",
         "object_indexes": [0, 4368],
         "object_classifications": ["A", "B"],
-        "texture_hashes": [
-            [["Diffuse", ".dds", "11111111"]],
-            [["Diffuse", ".dds", "11111111"]],
-        ],
     }
-    for asset, counts in (("Asset02", None),
-                          ("Asset03", [4368, 15783])):
+    for asset, name, counts in (("Asset02", "Component003", [4368, 15783]),
+                                ("Asset03", "Hair", None)):
         asset_dir = root / asset
         asset_dir.mkdir(parents=True)
-        payload = dict(common)
+        payload = dict(common, component_name=name)
         if counts is not None:
             payload["object_index_counts"] = counts
         (asset_dir / "hash.json").write_text(
             json.dumps([payload]), encoding="utf-8")
 
     index = asset_index.build_index("ZZMI", str(root))
-    fingerprints = {
-        geometry["componentFingerprint"]
-        for asset in index["assets"]
-        for geometry in asset["geometry"]
-    }
-    assert len(fingerprints) == 1
+    assert not any("componentFingerprint" in geometry
+                   for asset in index["assets"] for geometry in asset["geometry"])
     monkeypatch.setattr(asset_index, "load_index",
                         lambda asset_type, path: index)
     monkeypatch.setattr(
@@ -795,7 +820,7 @@ def test_asset_resolution_summary_aggregates_draws_without_changing_identity():
     assert summary["components"] == [{
         "mod_component": "Body", "status": "partial",
         "asset": "Asset01", "component": "Body", "draws": 3,
-        "exact_draws": 2, "partial_draws": 0, "ambiguous_draws": 0,
+        "exact_draws": 2, "partial_draws": 0,
         "unmatched_draws": 1, "ranges_vary": True,
     }]
 

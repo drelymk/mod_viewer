@@ -10,6 +10,10 @@ from frame dumps is in [asset-capture.md](asset-capture.md).
   restore missing parts after a successful mod load. Read geometry-object metadata
   once per index build (fresh each build); warn about discarded objects and keep
   valid siblings. Skip folders with a case-insensitive `DISABLED` prefix.
+- Mod-to-Asset resolution has no ambiguous state. A draw several Assets fit binds the one
+  Asset the mod's range-proven parts name within its INI scope when exactly one is
+  proven, otherwise the first match in registry/index order. The index stores no
+  component fingerprint, so equivalent copies need no collapsing.
 - Direct Assets never synthesize INIs/mods or write `.mod_viewer.json`. Previews
   group meshes by exact hash.json/Metadata.json source. Source-header Remove stages
   the whole owning folder (and descendant sections of legacy root manifests) until
