@@ -75,7 +75,7 @@ rules they must follow.
   one candidate keeping every draw's provenance, even if auxiliary declarations
   (TANGENT) differ; POSITION/NORMAL layout differences stay separate.
 - A GIMI direct face whose TEXCOORD2.x > 0.05 vertices form a vertex-disjoint
-  contiguous triangle run (all other TEXCOORD2 exactly zero) holds the alternate
+  contiguous triangle run (all other TEXCOORD2 zero up to 1e-3 encoding noise) holds the alternate
   shell the face shader collapses: split it into its own excluded-by-default
   candidate in the same family and folder. Mixed or non-contiguous shells stay
   intact.
@@ -138,9 +138,14 @@ rules they must follow.
 
 - New extraction places faces only from captured object matrices and a verified
   native skinning palette: inverse(head skinning) x inverse(body world) x face
-  world. Require the supported head-local axis convention and one consistent
-  transform across matching bones, related native objects and every facial draw;
-  never hardcode bone IDs, CB slots or offsets, or infer placement from eyes.
+  world. Prove the parent bone by the supported head-local axis convention. Only
+  when no bone matches it (some body types tilt the head axes), accept a bone that
+  is the strict skin-weight plurality of the body vertices inside the face volume
+  it places, naming one matrix in at least two independently skinned objects;
+  single-skeleton or conflicting skin evidence stays unresolved, and the report
+  states the axis deviation. Require one consistent transform across matching
+  bones, related native objects and every facial draw; never hardcode bone IDs,
+  CB slots or offsets, or infer placement from eyes.
 - Validate object/inverse blocks and replay every written SO vertex from source
   positions, weights and palette first (SO allocation tails are capacity, not
   vertices, and need not be stride-aligned). Only candidates contributing matches

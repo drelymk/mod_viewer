@@ -9,6 +9,9 @@ from ..geometry import Mesh
 
 # Mirrors the captured face VS collapse test: TEXCOORD2.x above this is collapsed unless a shader switch selects it.
 _SHELL_SELECTOR = 0.05
+# Ungated vertices store TEXCOORD2 as zero up to encoding noise (captures show 1e-4);
+# any larger value may be real data, so the split is left unproven.
+_ZERO_NOISE = 1e-3
 
 
 def _slice(part, lo, hi):
@@ -24,7 +27,7 @@ def _gated_split(mesh):
     gated = [vertex[column][0] > _SHELL_SELECTOR for vertex in mesh.vertices]
     if not any(gated):
         return None
-    if any(not flag and any(value != 0 for value in vertex[column])
+    if any(not flag and any(abs(value) > _ZERO_NOISE for value in vertex[column])
            for flag, vertex in zip(gated, mesh.vertices)):
         return None
     base_parts, base_indices, shell_parts, shell_indices = [], [], [], []

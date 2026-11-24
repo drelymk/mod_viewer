@@ -352,7 +352,7 @@ def export(package, output, context=None, *, options=None):
                 placement = c.provenance.get("gimi_face_placement")
                 if placement:
                     meta["gimi_face_placement"] = {
-                        k: placement[k] for k in ("version", "method", "status", "matrix", "reason")
+                        k: placement[k] for k in ("version", "method", "status", "matrix", "reason", "evidence")
                         if k in placement}
                     if placement["status"] == "baked":
                         captured = "source_geometry/" + c.name + "-captured-position.buf"
