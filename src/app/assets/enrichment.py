@@ -596,8 +596,9 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     and binding.asset_type != "WWMI"):
                 asset_names.setdefault((binding.root, binding.asset), {})[id(group)] = (
                     binding.component_name or names[id(group)])
-    # A role hash several Asset components carry (dumps whose native texture
+    # A texture-map hash several Asset components carry (dumps whose native
     # hash collapsed across components) cannot attribute a replacement alone.
+    # Diffuse keeps plain hash behavior.
     evidence_by_binding = {}
     hash_owners = {}
     for group_bindings in bindings:
@@ -607,7 +608,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
             evidence_by_binding[binding] = _hash_evidence(binding, metadata_cache)
             component = (binding.root, binding.asset, binding.metadata, binding.geometry_hash)
             for item in evidence_by_binding[binding]:
-                if item.role:
+                if item.role and item.role != "diffuse":
                     hash_owners.setdefault((item.role, item.texture_hash), set()).add(component)
     shared_hashes = {key for key, components in hash_owners.items() if len(components) > 1}
     for position, group in enumerate(groups):

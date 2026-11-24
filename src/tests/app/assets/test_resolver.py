@@ -61,17 +61,19 @@ def test_asset_hash_applies_conditional_mod_replacement(tmp_path):
     assert draw.texture_hashes["diffuse"] == ["11111111"]
 
 
-@pytest.mark.parametrize("filename, expected", [
-    ("TorsoNormalMap.dds", {"Torso": "textures/TorsoNormalMap.dds", "Legs": None}),
-    ("GenericNormalMap.dds", {"Torso": "textures/GenericNormalMap.dds",
-                              "Legs": "textures/GenericNormalMap.dds"}),
+@pytest.mark.parametrize("role, filename, expected", [
+    ("NormalMap", "TorsoNormalMap.dds", {"Torso": "textures/TorsoNormalMap.dds", "Legs": None}),
+    ("NormalMap", "GenericNormalMap.dds", {"Torso": "textures/GenericNormalMap.dds",
+                                           "Legs": "textures/GenericNormalMap.dds"}),
+    ("Diffuse", "TorsoDiffuse.dds", {"Torso": "textures/TorsoDiffuse.dds",
+                                     "Legs": "textures/TorsoDiffuse.dds"}),
 ])
-def test_shared_asset_hash_replacement_follows_the_component_its_file_names(
-        tmp_path, filename, expected):
+def test_shared_texture_map_hash_replacement_follows_the_component_its_file_names(
+        tmp_path, role, filename, expected):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     asset_dir = tmp_path / "assets" / "Asset01"
     asset_dir.mkdir(parents=True)
-    shared = ["NormalMap", ".dds", "22222222"]
+    shared = [role, ".dds", "22222222"]
     (asset_dir / "hash.json").write_text(json.dumps([
         {"ib": ib, "object_indexes": [0], "texture_hashes": [[shared]]}
         for ib in ("10101010", "20202020")]), encoding="utf-8")
@@ -79,7 +81,7 @@ def test_shared_asset_hash_replacement_follows_the_component_its_file_names(
     (mod_dir / "textures").mkdir(parents=True)
     (mod_dir / "textures" / filename).write_bytes(b"replacement")
     index = TextureOverrideIndex(replacements_by_hash={"22222222": (
-        TextureReplacement("22222222", "ResourceNormal", (), "TextureOverrideNormal",
+        TextureReplacement("22222222", "ResourceTexture", (), "TextureOverrideTexture",
                            f"textures/{filename}"),)})
     draws = {"Torso": DrawCall(), "Legs": DrawCall()}
     groups = [{"display_name": name, "draws": [draw]} for name, draw in draws.items()]
@@ -91,7 +93,8 @@ def test_shared_asset_hash_replacement_follows_the_component_its_file_names(
 
     apply(groups, bindings, texture_index=index, mod_dir=str(mod_dir))
 
-    assert {name: draw.texture_default("normal_map")
+    semantic = {"NormalMap": "normal_map", "Diffuse": "diffuse"}[role]
+    assert {name: draw.texture_default(semantic)
             for name, draw in draws.items()} == expected
 
 
