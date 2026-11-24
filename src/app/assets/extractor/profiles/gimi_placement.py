@@ -15,6 +15,10 @@ _IDENTITY = ((1., 0., 0., 0.), (0., 1., 0., 0.),
 # Observed head-local axis convention; translation must come from the capture.
 _FACE_BASIS = ((0., 0., -1.), (-1., 0., 0.), (0., 1., 0.))
 _PLACEMENT_TOLERANCE = 1e-4
+# Bodies whose head axes deviate from the basis are proven from skin evidence:
+# the parent bone must dominate the skinning of the body vertices inside the face
+# volume it places, and a second skeleton must name the same matrix.
+_SKIN_MIN_VERTICES = 8
 
 
 def _multiply(a, b):
@@ -157,9 +161,10 @@ class _Capture:
                 or int(producer.args.get("StartVertexLocation", 0)) != 0):
             return None
         decoders = [(field, codec(field.format)[1]) for field in fields]
-        self.context.budget.allocate(count * 512)
-        influences, used = [], set()
+        self.context.budget.allocate(count * 576)
+        influences, used, positions = [], set(), []
         for i in range(count):
+            positions.append(struct.unpack_from("<3f", source, i * stride))
             row = {field.semantic: decode(weights, i * blend_stride + field.offset)
                    for field, decode in decoders}
             ids = row["BLENDINDICES"]
@@ -210,13 +215,89 @@ class _Capture:
                 objects.append(candidate)
         return dict(component=component.id, inverses=inverses, objects=objects, sources=sources,
                     palette=dict(draw=producer.id, slot=0, file=palette_name, resource=asdict(resource)),
-                    replay=verified)
+                    replay=verified, positions=positions, influences=influences)
+
+
+def _tilt_degrees(matrix):
+    """Angle between a placement's rotation and the observed head-local basis."""
+    rotation = [[sum(matrix[i][k] * _FACE_BASIS[j][k] for k in range(3)) for j in range(3)]
+                for i in range(3)]
+    cosine = (sum(rotation[i][i] for i in range(3)) - 1) / 2
+    return math.degrees(math.acos(max(-1., min(1., cosine))))
+
+
+def _face_volume(members):
+    """Face-local bounds of every family member, or None when any is unknown."""
+    bounds = [component.bounds for component in members]
+    if not all(bounds):
+        return None
+    return (tuple(min(b[0][a] for b in bounds) for a in range(3)),
+            tuple(max(b[1][a] for b in bounds) for a in range(3)))
+
+
+def _dominant_bone(native, matrix, volume):
+    """Strictly dominant skin bone of the body vertices inside the placed face volume."""
+    corners = [_point(matrix, (x, y, z)) for x in (volume[0][0], volume[1][0])
+               for y in (volume[0][1], volume[1][1]) for z in (volume[0][2], volume[1][2])]
+    low = [min(corner[a] for corner in corners) for a in range(3)]
+    high = [max(corner[a] for corner in corners) for a in range(3)]
+    mass, vertices = {}, 0
+    for position, pairs in zip(native["positions"], native["influences"]):
+        if all(low[a] <= position[a] <= high[a] for a in range(3)):
+            vertices += 1
+            for bone, amount in pairs:
+                mass[bone] = mass.get(bone, 0.) + amount
+    ranked = sorted(mass.items(), key=lambda item: item[1], reverse=True)
+    if (vertices < _SKIN_MIN_VERTICES or not ranked
+            or (len(ranked) > 1 and ranked[0][1] <= ranked[1][1])):
+        return None
+    return ranked[0][0]
+
+
+def _skin_candidates(natives, face, volume, context):
+    """Parent-bone candidates whose own placement lies on the skin they dominate."""
+    candidates = []
+    total = sum(len(native["inverses"]) * len(native["objects"]) for native in natives)
+    done = 0
+    for native in natives:
+        for body in native["objects"]:
+            relative = _multiply(_inverse(body[0]), face[0])
+            for bone, inverse in native["inverses"]:
+                context.tick("Checking face parent bones", done, total)
+                done += 1
+                matrix = _multiply(inverse, relative)
+                if _dominant_bone(native, matrix, volume) == bone:
+                    candidates.append(dict(
+                        matrix=matrix, bone=bone, component=native["component"], face=face[1],
+                        body=body[1], palette=native["palette"], replay=native["replay"],
+                        basis_error=_basis_error(matrix), evidence="skin_dominance"))
+    return candidates
+
+
+def _corroborated_group(candidates):
+    """One matrix named by at least two independently skinned objects, else why not."""
+    groups = []
+    for candidate in candidates:
+        for group in groups:
+            if _difference(group[0]["matrix"], candidate["matrix"]) <= _PLACEMENT_TOLERANCE:
+                group.append(candidate)
+                break
+        else:
+            groups.append([candidate])
+    if not groups:
+        return [], ""
+    if len(groups) > 1:
+        return [], "Captured skinning names conflicting face parents"
+    if len({candidate["component"] for candidate in groups[0]}) < 2:
+        return [], "Captured skinning names the face parent in only one skeleton"
+    return groups[0], ""
 
 
 def placement_resolver(inv, calls, components, context):
     """Share native replay validation across candidate selection and final families."""
     capture = _Capture(inv, calls, context)
     natives = None
+    skin_groups = {}
 
     def resolve(members):
         nonlocal natives
@@ -235,6 +316,7 @@ def placement_resolver(inv, calls, components, context):
                     continue
         matches, sources, failure = [], {}, "Missing or ambiguous captured face placement"
         draws = sorted({d for c in members for p in c.parts for d in p.draws})
+        volume = _face_volume(members)
         for draw_id in draws:
             call = capture.calls.get(draw_id)
             face, dependencies = capture.object(call) if call else (None, {})
@@ -251,7 +333,19 @@ def placement_resolver(inv, calls, components, context):
                                 context.budget.allocate(2048)
                                 candidates.append(dict(matrix=matrix, bone=bone, component=native["component"],
                                                        face=face[1], body=body[1], palette=native["palette"],
-                                                       replay=native["replay"], basis_error=_basis_error(matrix)))
+                                                       replay=native["replay"], basis_error=_basis_error(matrix),
+                                                       evidence="head_basis"))
+                if not candidates and natives and volume is not None:
+                    key = (volume, face[0])
+                    if key not in skin_groups:
+                        skin_groups[key] = _corroborated_group(
+                            _skin_candidates(natives, face, volume, context))
+                    candidates, reason = skin_groups[key]
+                    failure = reason or failure
+                    owners = {candidate["component"] for candidate in candidates}
+                    for native in natives:
+                        if native["component"] in owners:
+                            sources.update(native["sources"])
             if not candidates:
                 break
             matches.extend(candidates)
@@ -265,6 +359,7 @@ def placement_resolver(inv, calls, components, context):
         if not failure:
             best = min(matches, key=lambda match: match["basis_error"])
             placement.update(status="proven", matrix=best["matrix"], matches=matches,
+                             evidence=best["evidence"],
                              sources=list(sources.values()))
             placement.pop("reason")
         return placement
@@ -300,6 +395,11 @@ def apply_placement(mesh, inv, context, *, validated_sources=None):
     if placement["status"] != "proven":
         component.diagnostics.append("Face placement unavailable: " + placement["reason"] + ". Captured coordinates retained.")
         return
+    if placement.get("evidence") == "skin_dominance":
+        component.diagnostics.append(
+            "Face placement proven from skin-dominant parent bones named by "
+            f"{len({match['component'] for match in placement['matches']})} skeletons; "
+            f"head axes deviate {_tilt_degrees(placement['matrix']):.1f} degrees from the usual convention.")
     validated = set() if validated_sources is None else validated_sources
     for source in placement["sources"]:
         identity = source["file"], source["sha256"]

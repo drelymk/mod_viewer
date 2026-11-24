@@ -17,8 +17,9 @@ from app.assets.extractor.export import Selection, _component_folders, export, e
 from app.assets.extractor.geometry import Element, Mesh
 from app.assets.extractor.memory_capture import MemoryCapture
 from app.assets.extractor.profiles.gimi_faces import classify_faces, split_gated_shells
-from app.assets.extractor.profiles.gimi_placement import apply_placement
-from tests.support.gimi_capture import make_face_capture
+from app.assets.extractor.profiles.gimi_placement import (
+    _IDENTITY, _corroborated_group, _dominant_bone, apply_placement)
+from tests.support.gimi_capture import FACE_TILT, make_face_capture
 from tests.support.extraction_data import header
 from app.assets.extractor.capture import Inventory
 from app.settings import paths
@@ -194,6 +195,80 @@ def test_face_placement_uses_later_available_native_output(tmp_path, monkeypatch
     assert not extract(analysis, Selection("AvailableOutput")).partial
 
 
+def test_tilted_head_axes_need_skin_evidence_from_two_skeletons(tmp_path, monkeypatch):
+    # One skeleton cannot corroborate a placement that misses the head basis.
+    for name in ("alone", "pair"):
+        (tmp_path / name).mkdir()
+    alone, _ = _capture(tmp_path / "alone", monkeypatch, case="tilted")
+    family = [c for c in discovery.analyze(alone).components if c.provenance.get("gimi_face_family")]
+    assert len(family) == 3
+    assert {c.provenance["gimi_face_placement"]["status"] for c in family} == {"unresolved"}
+    assert {c.provenance["gimi_face_placement"]["reason"] for c in family} == {
+        "Captured skinning names the face parent in only one skeleton"}
+
+    dump, originals = _capture(tmp_path / "pair", monkeypatch, case="tilted_corroborated")
+    analysis = discovery.analyze(dump)
+    family = [c for c in analysis.components if c.provenance.get("gimi_face_family")]
+    placements = [c.provenance["gimi_face_placement"] for c in family]
+    assert {p["status"] for p in placements} == {"proven"}
+    assert {p["evidence"] for p in placements} == {"skin_dominance"}
+    assert {match["component"] for match in placements[0]["matches"]} == {
+        c.id for c in analysis.components if c.provenance.get("producer")}
+
+    monkeypatch.setattr(hash_asset, "_solve_face_alignment", _no_fit)
+    package = extract(analysis, Selection("Tilted"))
+    report, loaded = _export_and_load(package, tmp_path / "exports")
+    assert not loaded.warnings
+    assert any(f"deviate {math.degrees(FACE_TILT):.1f} degrees" in d
+               for m in package.meshes for d in m.component.diagnostics)
+    cosine, sine = math.cos(FACE_TILT), math.sin(FACE_TILT)
+    for original, name in zip(originals[1:], ("Face001", "Face002", "Face003")):
+        part = next(p for p in loaded.parts if p.component_name == name)
+        expected = [(-v[0][2], 2 - (v[0][0] * cosine - v[0][1] * sine), 3 + v[0][0] * sine + v[0][1] * cosine)
+                    for v in original.vertices]
+        placed = list(struct.iter_unpack("<3f", part.positions))
+        # Matrices travel through float32 constant buffers, so compare as point clouds.
+        assert all(any(math.dist(p, q) < 1e-3 for q in placed) for p in expected)
+        assert all(any(math.dist(p, q) < 1e-3 for q in expected) for p in placed)
+    for metadata in Path(report.output).glob("*/hash.json"):
+        for entry in json.loads(metadata.read_text())["components"]:
+            if "gimi_face_placement" in entry:
+                assert entry["gimi_face_placement"]["evidence"] == "skin_dominance"
+
+
+def _skin_native(influences, positions=None):
+    return dict(positions=positions or [(0., 0., 0.)] * len(influences), influences=influences)
+
+
+_SHIFTED = (_IDENTITY[0][:3] + (9.,),) + _IDENTITY[1:]
+_FACE_VOLUME = ((-1., -1., -1.), (1., 1., 1.))
+
+
+@pytest.mark.parametrize("native, matrix, expected", [
+    (_skin_native([[(1, 1.)]] * 12 + [[(2, 1.)]] * 8), _IDENTITY, 1),
+    (_skin_native([[(1, .5), (2, .5)]] * 20), _IDENTITY, None),
+    (_skin_native([[(1, 1.)]] * 10 + [[(2, 1.)]] * 10), _IDENTITY, None),
+    (_skin_native([[(1, 1.)]] * 7), _IDENTITY, None),
+    (_skin_native([[(1, 1.)]] * 20), _SHIFTED, None),
+])
+def test_skin_dominance_needs_a_strict_plurality_inside_the_placed_volume(native, matrix, expected):
+    assert _dominant_bone(native, matrix, _FACE_VOLUME) == expected
+
+
+@pytest.mark.parametrize("candidates, reason", [
+    ([dict(matrix=_IDENTITY, component="a"), dict(matrix=_IDENTITY, component="b")], ""),
+    ([dict(matrix=_IDENTITY, component="a"), dict(matrix=_IDENTITY, component="a")],
+     "Captured skinning names the face parent in only one skeleton"),
+    ([dict(matrix=_IDENTITY, component="a"), dict(matrix=_SHIFTED, component="b")],
+     "Captured skinning names conflicting face parents"),
+    ([], ""),
+])
+def test_skin_candidates_must_name_one_matrix_in_two_skeletons(candidates, reason):
+    group, why = _corroborated_group(candidates)
+    assert why == reason
+    assert bool(group) == (not reason and len(candidates) == 2)
+
+
 @pytest.mark.parametrize("case", ["valid", "missing", "bad_inverse", "bad_palette", "short_output", "corrupt_output", "missing_material"])
 def test_captured_family_without_eye_topology(tmp_path, monkeypatch, case):
     meshes = list(_family().values())[:-1]
@@ -347,7 +422,7 @@ def test_all_face_candidates_preserve_expressions_passes_and_topology(case, fami
     assert _component_folders(faces) == {m.component.id: m.component.streams["position"]["hash"] for m in faces}
 
 
-@pytest.mark.parametrize("case", ["gated", "mixed", "nonzero_selector", "noncontiguous"])
+@pytest.mark.parametrize("case", ["gated", "gated_noise", "mixed", "nonzero_selector", "noncontiguous"])
 def test_gated_face_shell_split(case):
     meshes = _family()
     anchor = meshes["surface-2"]
@@ -362,6 +437,10 @@ def test_gated_face_shell_split(case):
     anchor.vertices.extend([[p, (1, 0, 0), (0.5, 0.5), (0.5, 0.5), (0.5, 0.5)] for p in disc_positions])
     shell_indices = [i + start for i in disc_indices]
     anchor.indices[0].extend(shell_indices)
+    if case == "gated_noise":
+        # Captured ungated vertices hold encoding noise rather than exact zero.
+        for vertex in anchor.vertices[:start]:
+            vertex[4] = (1e-4, 1e-4)
     if case == "mixed":
         anchor.indices[0].extend((0, start, start + 1))
     elif case == "nonzero_selector":
@@ -373,7 +452,7 @@ def test_gated_face_shell_split(case):
     components = [m.component for m in meshes.values()]
     before = [(c.id, copy.deepcopy(c.parts)) for c in components]
     split_gated_shells(components, meshes)
-    if case != "gated":
+    if case not in ("gated", "gated_noise"):
         assert [(c.id, c.parts) for c in components] == before
         assert set(meshes) == {c.id for c in components}
         return

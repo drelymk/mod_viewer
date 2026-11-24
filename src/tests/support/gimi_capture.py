@@ -11,6 +11,14 @@ from app.assets.extractor.textures import digest
 from tests.support.extraction_data import header
 
 
+FACE_TILT = 0.05
+
+
+def _product(a, b):
+    return tuple(tuple(sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4))
+                 for i in range(4))
+
+
 def _write_matrices(dump, log, stream, positions, eyes, case):
     """Generate shifted CB slots, versioned bindings and a padded SO allocation."""
     if case == "missing":
@@ -19,6 +27,11 @@ def _write_matrices(dump, log, stream, positions, eyes, case):
     native_inverse = ((0, 1, 0, 30), (-1, 0, 0, 20), (0, 0, 1, -5), (0, 0, 0, 1))
     face = ((1, 0, 0, 20), (0, 0, -1, -26), (0, 1, 0, 9), (0, 0, 0, 1))
     face_inverse = ((1, 0, 0, -20), (0, 0, 1, -9), (0, -1, 0, -26), (0, 0, 0, 1))
+    if case in ("tilted", "tilted_corroborated"):
+        # The face object's head axes sit a fixed angle away from the supported basis.
+        c, s = math.cos(FACE_TILT), math.sin(FACE_TILT)
+        face = _product(face, ((c, -s, 0, 0), (s, c, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)))
+        face_inverse = _product(((c, s, 0, 0), (-s, c, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)), face_inverse)
     palette = [(1, 0, 0, 4, 0, 1, 0, -2, 0, 0, 1, 1)] * 4
     payload = []
     for ordinal, vertex in enumerate(eyes.vertices):
@@ -115,7 +128,8 @@ def make_face_capture(parent, meshes, placement_case="valid"):
                    f"{call} IASetIndexBuffer(pIndexBuffer:0x{identity * 16 + 2:x}, Format:42, Offset:0) hash={mesh.component.ib}\n"
                    f"{call} DrawIndexed(IndexCount:{len(indices)}, StartIndexLocation:0, BaseVertexLocation:0)\n")
     _write_matrices(dump, log, stream, positions, eyes, placement_case)
-    if placement_case == "unrelated_native":
+    if placement_case in ("unrelated_native", "tilted_corroborated"):
+        # A second skinned object either follows another matrix or repeats the first.
         replacements = dict(zip(
             ("11111111", "22222222", "33333333", "44444444", "55555555", "00000021", "00000001",
              "0x1000", "0x2000", "0x9000", "0xa000", "0xb000", "0x21", "0x22"),
@@ -130,8 +144,9 @@ def make_face_capture(parent, meshes, placement_case="valid"):
 
         for path in list(dump.glob("000001-*")) + list(dump.glob("000002-*")):
             shutil.copyfile(path, dump / renamed(path.name))
-        identity = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
-        (dump / "000007-vs-cb2=aaaaaaaa.buf").write_bytes(struct.pack("<40f", *(identity * 2 + (0,) * 8)))
+        if placement_case == "unrelated_native":
+            identity = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+            (dump / "000007-vs-cb2=aaaaaaaa.buf").write_bytes(struct.pack("<40f", *(identity * 2 + (0,) * 8)))
         log.append(renamed("".join(log[1:3])))
     if placement_case == "dedup":
         source = dump / "000003-vs-cb3=55555555.buf"
