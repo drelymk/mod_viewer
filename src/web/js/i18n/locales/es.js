@@ -73,6 +73,11 @@ export default {
   'settings.gameFoldersHint': 'Las carpetas guardadas rellenan la carpeta del juego al extraer.',
   'settings.selectFolder': 'Seleccionar carpeta',
   'settings.clearFolder': 'Borrar',
+  'settings.gameConfig': 'Ajustes del juego',
+  'gameSettings.title': 'Ajustes de {game}',
+  'gameSettings.defaultAnimation': 'Animación predeterminada',
+  'gameSettings.defaultAnimationHint':
+    'Se reproduce primero al iniciar una animación si hay una con exactamente este nombre (sin distinguir mayúsculas). Si se deja vacío o no hay coincidencias, se reproduce la primera animación.',
   'settings.notSet': 'Sin definir',
   'settings.hint': 'Los cambios se guardan automáticamente.',
   'asset.extractedPartial':

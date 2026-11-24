@@ -6,6 +6,8 @@ import { initAppearanceControls } from './appearance.js';
 import { bridgeReady } from '../app/bridge.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { initGameIndexDialog } from '../panels/game-index-dialog.js';
+import { initGameSettingsDialog } from '../panels/game-settings-dialog.js';
+import { getDefaultAnimation, setDefaultAnimations } from '../app/default-animation.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -14,6 +16,7 @@ function initGameFolders(root) {
   if (!error) return;
   const rows = [...root.querySelectorAll('.settings-game-row')];
   const indexDialog = initGameIndexDialog();
+  const settingsDialog = initGameSettingsDialog();
   const indexStates = new Map();
   let support = {};
   let supportFailed = false;
@@ -94,16 +97,23 @@ function initGameFolders(root) {
   };
   for (const row of rows) {
     row.querySelector('.settings-game-index').addEventListener('click', () => offerIndex(row.dataset.gameKind));
+    row
+      .querySelector('.settings-game-config')
+      .addEventListener('click', () =>
+        settingsDialog.open(row.dataset.gameKind, getDefaultAnimation(row.dataset.gameKind)),
+      );
     row.querySelector('.settings-game-select').addEventListener('click', () => run(row, 'select_game_directory'));
     row.querySelector('.settings-game-clear').addEventListener('click', () => run(row, 'clear_game_directory'));
   }
   window.addEventListener(LANGUAGE_CHANGED, () => show(current));
   bridgeReady()
     .then(async (api) => {
-      const [folders, capabilities] = await Promise.allSettled([
+      const [folders, capabilities, animations] = await Promise.allSettled([
         api.get_game_folders(),
         api.get_game_extraction_support(),
+        api.get_game_default_animations?.(),
       ]);
+      if (animations.status === 'fulfilled') setDefaultAnimations(animations.value?.value);
       supportFailed = capabilities.status === 'rejected';
       support = capabilities.status === 'fulfilled' ? capabilities.value : {};
       apply(folders.status === 'fulfilled' ? folders.value : { error: folders.reason.message });
@@ -177,7 +187,7 @@ export function initSettingsDialog() {
     (event) => {
       if (
         !backdrop.classList.contains('show') ||
-        document.querySelector('.dialog-backdrop.show, #game-index-backdrop.show')
+        document.querySelector('.dialog-backdrop.show, .modal-backdrop.show:not(#settings-backdrop)')
       )
         return;
       if (event.key === 'Escape') {

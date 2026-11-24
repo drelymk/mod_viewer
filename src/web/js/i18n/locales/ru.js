@@ -72,6 +72,11 @@ export default {
   'settings.gameFoldersHint': 'Сохранённые папки подставляются в поле папки игры при извлечении.',
   'settings.selectFolder': 'Выбрать папку',
   'settings.clearFolder': 'Очистить',
+  'settings.gameConfig': 'Настройки игры',
+  'gameSettings.title': 'Настройки: {game}',
+  'gameSettings.defaultAnimation': 'Анимация по умолчанию',
+  'gameSettings.defaultAnimationHint':
+    'Воспроизводится первой при запуске анимации, если есть анимация с точно таким же именем (без учёта регистра). Если поле пустое или совпадений нет, воспроизводится первая анимация.',
   'settings.notSet': 'Не задано',
   'settings.hint': 'Изменения сохраняются автоматически.',
   'asset.extractedPartial':

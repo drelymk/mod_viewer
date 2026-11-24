@@ -72,6 +72,11 @@ export default {
   'settings.gameFoldersHint': '保存したフォルダーは抽出時にゲームフォルダーへ自動入力されます。',
   'settings.selectFolder': 'フォルダーを選択',
   'settings.clearFolder': 'クリア',
+  'settings.gameConfig': 'ゲーム設定',
+  'gameSettings.title': '{game} の設定',
+  'gameSettings.defaultAnimation': '既定のアニメーション',
+  'gameSettings.defaultAnimationHint':
+    'アニメーションの開始時に、この名前と完全に一致する（大文字と小文字は区別しない）アニメーションがあれば最初に再生します。空欄のままか一致するものがない場合は、最初のアニメーションを再生します。',
   'settings.notSet': '未設定',
   'settings.hint': '変更は自動保存されます。',
   'asset.extractedPartial':

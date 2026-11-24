@@ -182,3 +182,45 @@ def test_settings_index_prompt_after_selecting_game_and_reused_by_index_button(m
       return {hiddenWithoutPath,noPromptForOtherGames,prompted,dismissed,indexed,protectedDuringStart,liveTranslation,routed:starts.every(kind=>kind==='WWMI'),cancelled:cancels.length===1};
     }""")
     assert all(result.values()), result
+
+
+def test_settings_game_default_animation_dialog_saves_and_cancels(module_page):
+    result = module_page.evaluate('''async () => {
+      const html = await (await fetch('./index.html')).text();
+      document.body.innerHTML = new DOMParser().parseFromString(html,'text/html').body.innerHTML;
+      let defaults = {GIMI:'Idle'};const saves=[];
+      window.pywebview={api:{
+        get_game_extraction_support:async()=>({GIMI:{extraction:false,index:false},ZZMI:{extraction:false,index:false},WWMI:{extraction:false,index:false}}),
+        get_viewer_preferences:async()=>({value:{}}),
+        get_game_folders:async()=>({value:{}}),
+        get_game_default_animations:async()=>({value:{...defaults}}),
+        set_game_default_animation:async(kind,name)=>{
+          saves.push([kind,name]);defaults={...defaults,[kind]:name.trim()};
+          return {value:{...defaults}};
+        },
+      }};
+      const {initSettingsDialog}=await import('./js/ui/settings.js');
+      initSettingsDialog();
+      const settle=()=>new Promise(r=>setTimeout(r,20));await settle();
+      const row=document.querySelector('.settings-game-row[data-game-kind="GIMI"]');
+      const backdrop=document.getElementById('game-settings-backdrop');
+      const input=document.getElementById('game-settings-default-animation');
+      const config=row.querySelector('.settings-game-config');
+      const configVisible=!config.hidden;
+      const indexHidden=row.querySelector('.settings-game-index').hidden;
+      config.click();await settle();
+      const opened={shown:backdrop.classList.contains('show'),prefilled:input.value,
+        title:document.getElementById('game-settings-title').textContent};
+      input.value='Run';
+      document.getElementById('game-settings-save').click();await settle();
+      const afterSave={saves:saves.map(entry=>[...entry]),closed:!backdrop.classList.contains('show')};
+      config.click();await settle();
+      input.value='Other';
+      document.getElementById('game-settings-cancel').click();await settle();
+      return {configVisible,indexHidden,opened,afterSave,
+        cancelSaves:saves.length,cancelClosed:!backdrop.classList.contains('show')};
+    }''')
+    assert result['configVisible'] and result['indexHidden']
+    assert result['opened'] == {'shown': True, 'prefilled': 'Idle', 'title': 'GIMI settings'}
+    assert result['afterSave']['saves'] == [['GIMI', 'Run']] and result['afterSave']['closed']
+    assert result['cancelSaves'] == 1 and result['cancelClosed']

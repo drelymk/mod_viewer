@@ -3286,3 +3286,38 @@ export const alertDialog = async message => window.menuErrors.push(message);
     module_page.wait_for_function("!document.querySelector('#menu-delete-btn').disabled")
     assert not button.is_visible()
     assert module_page.evaluate('window.menuCalls') == ['fixture-mod', 'fixture-mod']
+
+
+def test_default_animation_lookup_prefers_own_clip_then_sequence_then_shared_by_name(module_page):
+    result = module_page.evaluate('''async () => {
+      const {setDefaultAnimations, findDefaultAnimationId, gameKindFromPayload} = await import('./js/app/default-animation.js');
+      const {viewerState} = await import('./js/app/state.js');
+      const state = {
+        clips: [{id: 'x1', name: 'Idle', shared: true}, {id: 'c1', name: 'Walk'}, {id: 'c2', name: 'Idle'}],
+        sequences: [{id: 's1', name: 'Combo'}],
+      };
+      viewerState.gameKind = 'GIMI';
+      setDefaultAnimations({GIMI: 'idle'});
+      const matched = findDefaultAnimationId(state);
+      setDefaultAnimations({GIMI: 'COMBO'});
+      const sequence = findDefaultAnimationId(state);
+      setDefaultAnimations({GIMI: 'Missing'});
+      const unmatched = findDefaultAnimationId(state);
+      setDefaultAnimations({});
+      const unset = findDefaultAnimationId(state);
+      viewerState.gameKind = null;
+      return {
+        matched, sequence, unmatched, unset,
+        kinds: [
+          gameKindFromPayload({asset: {type: 'WWMI'}}),
+          gameKindFromPayload({game: {id: 'genshin'}}),
+          gameKindFromPayload({game: {id: 'zzz'}}),
+          gameKindFromPayload({game: {id: 'wuwa'}}),
+          gameKindFromPayload({}),
+        ],
+      };
+    }''')
+    assert result == {
+        'matched': 'c2', 'sequence': 's1', 'unmatched': None, 'unset': None,
+        'kinds': ['WWMI', 'GIMI', 'ZZMI', 'WWMI', None],
+    }

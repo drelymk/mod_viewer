@@ -71,6 +71,11 @@ export default {
   'settings.gameFoldersHint': '저장한 폴더는 추출 시 게임 폴더에 자동으로 입력됩니다.',
   'settings.selectFolder': '폴더 선택',
   'settings.clearFolder': '지우기',
+  'settings.gameConfig': '게임 설정',
+  'gameSettings.title': '{game} 설정',
+  'gameSettings.defaultAnimation': '기본 애니메이션',
+  'gameSettings.defaultAnimationHint':
+    '애니메이션이 시작될 때 이 이름과 정확히 일치하는(대소문자 구분 없음) 애니메이션이 있으면 먼저 재생합니다. 비워 두거나 일치하는 항목이 없으면 첫 번째 애니메이션을 재생합니다.',
   'settings.notSet': '설정 안 됨',
   'settings.hint': '변경 사항은 자동으로 저장됩니다.',
   'asset.extractedPartial':

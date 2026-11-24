@@ -37,6 +37,7 @@ import { setIniEditorContext } from '../editing/ini-editor.js';
 import { setOutlineSuppressedByDebug } from '../scene/outline-renderer.js';
 import { beginLoadBenchmark, finishLoadBenchmark, measureAsyncLoadStage, measureLoadStage } from './load-benchmark.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { findDefaultAnimationId, gameKindFromPayload } from './default-animation.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -351,6 +352,7 @@ export async function displayMeshPayload(
   setMeshesAvailable(true);
   viewerState.rightDockEnabled = true;
   syncViewportControlPlacement();
+  viewerState.gameKind = gameKindFromPayload(payload.metadata);
   const gameId = payload.metadata?.game?.id || null;
   measureLoadStage('fit_to', () =>
     fitTo(activeMeshes, {
@@ -502,7 +504,8 @@ async function autoLoadWeightRig(source) {
     const activation = await feature.loadWeightRigForModel();
     if (!isCurrent() || activation?.stale) return;
     const animation = feature.getRigAnimationState();
-    if (!animation.selected && animation.clips.length) await feature.selectRigAnimation(animation.clips[0].id);
+    if (!animation.selected && animation.clips.length)
+      await feature.selectRigAnimation(findDefaultAnimationId(animation) ?? animation.clips[0].id);
   } catch (error) {
     console.error('Automatic Weight/Rig loading failed:', error);
   }
