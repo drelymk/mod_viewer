@@ -817,6 +817,7 @@
       <div class="settings-game-row" data-game-kind="GIMI">
         <span class="settings-game-name">GIMI</span>
         <input class="settings-game-path" type="text" readonly aria-label="GIMI game directory" placeholder="Not set">
+        <button class="ui-button settings-game-config" type="button" title="Game settings" aria-label="Game settings" data-i18n-title="settings.gameConfig" data-i18n-aria-label="settings.gameConfig"><svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"></use></svg></button>
         <button class="ui-button settings-game-index" type="button" hidden data-i18n-title="gameIndex.button" data-i18n-aria-label="gameIndex.button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-rebuild"></use></svg></button>
         <button class="ui-button settings-game-select" type="button" title="Select folder" aria-label="Select folder" data-i18n-title="settings.selectFolder" data-i18n-aria-label="settings.selectFolder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
         <button class="ui-button settings-game-clear" type="button" title="Clear" aria-label="Clear" data-i18n-title="settings.clearFolder" data-i18n-aria-label="settings.clearFolder" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
@@ -825,6 +826,7 @@
       <div class="settings-game-row" data-game-kind="ZZMI">
         <span class="settings-game-name">ZZMI</span>
         <input class="settings-game-path" type="text" readonly aria-label="ZZMI game directory" placeholder="Not set">
+        <button class="ui-button settings-game-config" type="button" title="Game settings" aria-label="Game settings" data-i18n-title="settings.gameConfig" data-i18n-aria-label="settings.gameConfig"><svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"></use></svg></button>
         <button class="ui-button settings-game-index" type="button" hidden data-i18n-title="gameIndex.button" data-i18n-aria-label="gameIndex.button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-rebuild"></use></svg></button>
         <button class="ui-button settings-game-select" type="button" title="Select folder" aria-label="Select folder" data-i18n-title="settings.selectFolder" data-i18n-aria-label="settings.selectFolder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
         <button class="ui-button settings-game-clear" type="button" title="Clear" aria-label="Clear" data-i18n-title="settings.clearFolder" data-i18n-aria-label="settings.clearFolder" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
@@ -833,6 +835,7 @@
       <div class="settings-game-row" data-game-kind="WWMI">
         <span class="settings-game-name">WWMI</span>
         <input class="settings-game-path" type="text" readonly aria-label="WWMI game directory" placeholder="Not set">
+        <button class="ui-button settings-game-config" type="button" title="Game settings" aria-label="Game settings" data-i18n-title="settings.gameConfig" data-i18n-aria-label="settings.gameConfig"><svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"></use></svg></button>
         <button class="ui-button settings-game-index" type="button" hidden data-i18n-title="gameIndex.button" data-i18n-aria-label="gameIndex.button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-rebuild"></use></svg></button>
         <button class="ui-button settings-game-select" type="button" title="Select folder" aria-label="Select folder" data-i18n-title="settings.selectFolder" data-i18n-aria-label="settings.selectFolder"><svg class="ui-icon" aria-hidden="true"><use href="#icon-library"></use></svg></button>
         <button class="ui-button settings-game-clear" type="button" title="Clear" aria-label="Clear" data-i18n-title="settings.clearFolder" data-i18n-aria-label="settings.clearFolder" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
@@ -856,6 +859,22 @@
     <div class="modal-actions">
       <button id="game-index-cancel" type="button" data-i18n="common.cancel">Cancel</button>
       <button id="game-index-ok" type="button" data-i18n="gameIndex.start">Index</button>
+    </div>
+  </section>
+</div>
+
+<div id="game-settings-backdrop" class="modal-backdrop">
+  <section class="modal panel-surface" role="dialog" aria-modal="true" aria-labelledby="game-settings-title">
+    <h4 id="game-settings-title">Game settings</h4>
+    <div id="game-settings-error" class="modal-error" role="alert"></div>
+    <label class="modal-field" for="game-settings-default-animation">
+      <span data-i18n="gameSettings.defaultAnimation">Default animation</span>
+      <input id="game-settings-default-animation" type="text" maxlength="200" autocomplete="off" spellcheck="false">
+    </label>
+    <p class="modal-field-hint" data-i18n="gameSettings.defaultAnimationHint">Played first when an animation starts, if an animation has exactly this name (case-insensitive). Leave empty, or if nothing matches, the first animation plays.</p>
+    <div class="modal-actions">
+      <button id="game-settings-cancel" type="button" data-i18n="common.cancel">Cancel</button>
+      <button id="game-settings-save" type="button" data-i18n="common.save">Save</button>
     </div>
   </section>
 </div>

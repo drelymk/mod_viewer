@@ -11,6 +11,7 @@ import {
 import { LANGUAGE_CHANGED, getLocale, t } from '../i18n/index.js';
 import { getLoadedWeightRigFeature } from '../weight-rig/weight-rig-feature.js';
 import { sortRigAnimations, splitRigClips } from '../weight-rig/rig-animation.js';
+import { findDefaultAnimationId } from '../app/default-animation.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const ICONS = { rest: '#icon-rest-pose', clip: '#icon-clip', sequence: '#icon-sequence', byName: '#icon-by-name' };
@@ -418,7 +419,9 @@ export function initAnimationPlayback() {
     // Play after Stop resumes the last choice instead of jumping to the first clip.
     const id =
       state.selected ||
-      (catalog.byId.has(lastChoice) ? lastChoice : catalog.clips[0]?.id || catalog.shared[0]?.id || state.clips[0].id);
+      (catalog.byId.has(lastChoice)
+        ? lastChoice
+        : findDefaultAnimationId(state) || catalog.clips[0]?.id || catalog.shared[0]?.id || state.clips[0].id);
     void getRig().selectRigAnimation(id);
   }
 

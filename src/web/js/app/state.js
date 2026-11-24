@@ -3,6 +3,7 @@
 export const viewerState = {
   currentModPath: null,
   currentSource: null,
+  gameKind: null,
 
   displayedModPath: null,
   displayedSource: null,

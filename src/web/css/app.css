@@ -893,11 +893,11 @@ body.focus-mode #view-gizmo { top: 12px; right: 12px; }
 #tm-save { background: var(--panel-fill-success); color: #fff; border-color: rgba(240,246,252,.15); }
 #tm-save:hover:not(:disabled) { background: var(--panel-fill-success-hover); }
 #tm-save:disabled { opacity: .6; cursor: default; }
-#afm-cancel, #asset-extract-cancel, #rig-extract-cancel { background: var(--panel-fill-control); color: var(--text); }
-#afm-cancel:hover, #asset-extract-cancel:hover:not(:disabled), #rig-extract-cancel:hover:not(:disabled) { background: var(--panel-fill-border); }
-#afm-save, #asset-extract-ok, #rig-extract-ok { background: var(--panel-fill-success); color: #fff; border-color: rgba(240,246,252,.15); }
-#afm-save:hover:not(:disabled), #asset-extract-ok:hover:not(:disabled), #rig-extract-ok:hover:not(:disabled) { background: var(--panel-fill-success-hover); }
-#afm-save:disabled, #asset-extract-ok:disabled, #rig-extract-ok:disabled { opacity: .6; cursor: default; }
+#afm-cancel, #asset-extract-cancel, #rig-extract-cancel, #game-settings-cancel { background: var(--panel-fill-control); color: var(--text); }
+#afm-cancel:hover, #asset-extract-cancel:hover:not(:disabled), #rig-extract-cancel:hover:not(:disabled), #game-settings-cancel:hover:not(:disabled) { background: var(--panel-fill-border); }
+#afm-save, #asset-extract-ok, #rig-extract-ok, #game-settings-save { background: var(--panel-fill-success); color: #fff; border-color: rgba(240,246,252,.15); }
+#afm-save:hover:not(:disabled), #asset-extract-ok:hover:not(:disabled), #rig-extract-ok:hover:not(:disabled), #game-settings-save:hover:not(:disabled) { background: var(--panel-fill-success-hover); }
+#afm-save:disabled, #asset-extract-ok:disabled, #rig-extract-ok:disabled, #game-settings-save:disabled { opacity: .6; cursor: default; }
 #pm-cancel { background: var(--panel-fill-control); color: var(--text); }
 #pm-cancel:hover { background: var(--panel-fill-border); }
 #pm-save { background: var(--panel-fill-success); color: #fff; border-color: rgba(240,246,252,.15); }

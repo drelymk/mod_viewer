@@ -54,6 +54,11 @@ export default {
   'settings.gameFoldersHint': 'Saved folders prefill the game folder when extracting.',
   'settings.selectFolder': 'Select folder',
   'settings.clearFolder': 'Clear',
+  'settings.gameConfig': 'Game settings',
+  'gameSettings.title': '{game} settings',
+  'gameSettings.defaultAnimation': 'Default animation',
+  'gameSettings.defaultAnimationHint':
+    'Played first when an animation starts, if an animation has exactly this name (case-insensitive). Leave empty, or if nothing matches, the first animation plays.',
   'settings.notSet': 'Not set',
   'settings.hint': 'Changes are saved automatically.',
   'asset.extractedPartial':

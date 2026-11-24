@@ -56,6 +56,8 @@ EXPECTED_API_METHODS = {
     "get_game_folders",
     "select_game_directory",
     "clear_game_directory",
+    "get_game_default_animations",
+    "set_game_default_animation",
     "get_game_index_status",
     "start_game_index",
     "get_game_index_job",

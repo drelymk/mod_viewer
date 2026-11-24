@@ -67,6 +67,11 @@ export default {
   'settings.gameFoldersHint': '已保存的文件夹会在提取时自动填入游戏文件夹。',
   'settings.selectFolder': '选择文件夹',
   'settings.clearFolder': '清除',
+  'settings.gameConfig': '游戏设置',
+  'gameSettings.title': '{game} 设置',
+  'gameSettings.defaultAnimation': '默认动画',
+  'gameSettings.defaultAnimationHint':
+    '开始动画时，若存在名称完全相同（不区分大小写）的动画则优先播放它。留空或无匹配时播放第一个动画。',
   'settings.notSet': '未设置',
   'settings.hint': '更改会自动保存。',
   'asset.extractedPartial':

@@ -137,6 +137,18 @@ class ModViewerAPI:
         except (OSError, ValueError) as error:
             return {"error": str(error)}
 
+    def get_game_default_animations(self):
+        try:
+            return {"value": game_folders.load_default_animations()}
+        except ValueError as error:
+            return {"error": str(error), "value": {}}
+
+    def set_game_default_animation(self, kind, name):
+        try:
+            return {"value": game_folders.save_default_animation(kind, name)}
+        except (OSError, ValueError) as error:
+            return {"error": str(error)}
+
     def get_game_index_status(self, kind="WWMI"):
         return self._rig_extraction.index_status(kind)
 

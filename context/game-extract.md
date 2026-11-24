@@ -31,6 +31,9 @@ Rules every game backend follows. Per-game proof lives in
   driven by `game_extract/backends.py` capabilities. Unregistered games keep folder
   selection but cannot start jobs. Extraction prefills only its Asset's game
   folder, re-validated and re-granted by the backend.
+- `gameFolders[kind]` is `{"path", "Settings": {"DefaultAni"}}` (a bare path string is legacy).
+  Default animation is independent of the folder; its case-insensitive name picks the first
+  auto-played clip/sequence (auto Weight/Rig load, first Play); no match keeps the first clip.
 - Adapters own validation, native clients, indexing and package building; the
   shared bridge owns authorization, jobs and atomic installation.
 

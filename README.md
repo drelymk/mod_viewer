@@ -214,9 +214,10 @@ rigs and animations.
    parts are preview-only.
 3. **Extract a game rig and animations:** right-click an indexed Asset >
    `Extract Rig/Animation`, point to the game folder (or set it once in `Settings`
-   > `Game directory`), and `OK`. The viewer verifies the game mesh against the
-   Asset before saving `Rig.json`, `Animation` and props into it; a failed run
-   keeps the previous files. ZZZ and Genshin build a one-time game index first.
+   > `Game directory`), and `OK`. Its row's settings button sets a default animation
+   to play first. The viewer verifies the game mesh against the Asset before
+   saving `Rig.json`, `Animation` and props into it; a failed run keeps the
+   previous files. ZZZ and Genshin build a one-time game index first.
    Extraction is offline; a game update may need a new viewer release. Details:
    [game-folder extraction](docs/asset-rig.md#game-folder-extraction).
 4. **Extract from a frame dump:** right-click an Asset Folder > `Add asset`, or an
