@@ -83,6 +83,11 @@
   filename membership. Native TextureUsage slots stay candidate evidence; a
   labelled diffuse hash may establish its component's slot for unambiguous
   bindings; conflicting untracked routes stay manual.
+- A texture-map (non-diffuse) hash that several of the mod's exact Asset components
+  carry (native hashes can collapse across components) cannot attribute a hash
+  replacement alone: it then applies only to the component its file name proves
+  (existing filename association); a file naming no component keeps plain hash
+  behavior. Diffuse hashes keep plain hash behavior.
 - Filename associations give choices, never roles. Selection (semantic, slot,
   conditional) runs once per draw in authored order, keeping no-mod-diffuse Asset
   eligibility and game-specific normal transport. Asset defaults pick unique files

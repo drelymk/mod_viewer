@@ -53,7 +53,7 @@ Clip playback is in [animation-playback.md](animation-playback.md).
   prove one Asset it binds to it with an unknown range. Its rig binds only through the
   one native stream every captured component of that hash shares (no attachment, no
   conflicting stream) and carries no morph reference. A first index matching no captured
-  range stays ambiguous.
+  range binds like a hash-only draw, its range unknown.
 - Retain every proof in the loaded manifest/skinning source; never reread INIs on
   Weight access. Admission never depends on character/mod names or numeric ID
   ranges, and generic admission verifies every referenced captured VB/IB.

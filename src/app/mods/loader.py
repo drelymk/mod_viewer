@@ -270,6 +270,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             # Asset bindings can change draw grouping, but not the packed
             # vertices. Finalize material semantics using the same geometry.
             _bindings, asset_resolution = enrich_mod_analysis(parsed, context)
+            build_options["game_profile"] = parsed.game.game
             built = build_mesh_result(
                 parsed.groups, context.mod_dir, geometry=built.geometry,
                 texture_source=texture_source, **build_options)

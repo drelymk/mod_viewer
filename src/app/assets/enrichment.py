@@ -298,15 +298,21 @@ def _clear_null_texture_assignments(draw):
         draw.set_texture_variants(role, remaining)
 
 
-def _apply_hash_replacements(draw, evidence, texture_index):
-    """Apply exact Asset hash roles to conditional mod replacements."""
+def _apply_hash_replacements(draw, evidence, texture_index, allowed=None):
+    """Apply exact Asset hash roles to conditional mod replacements.
+
+    ``allowed(item, replacement)`` lets the caller drop a replacement that a
+    hash shared by several components cannot attribute to this draw.
+    """
     if not isinstance(texture_index, TextureOverrideIndex):
         return
     for item in evidence:
         if not item.role:
             continue
-        replacements = texture_index.replacements_by_hash.get(
-            item.texture_hash, ())
+        replacements = tuple(
+            replacement for replacement in
+            texture_index.replacements_by_hash.get(item.texture_hash, ())
+            if allowed is None or allowed(item, replacement))
         if not replacements:
             continue
         activation = DNF_TRUE
@@ -590,9 +596,37 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     and binding.asset_type != "WWMI"):
                 asset_names.setdefault((binding.root, binding.asset), {})[id(group)] = (
                     binding.component_name or names[id(group)])
+    # A texture-map hash several Asset components carry (dumps whose native
+    # hash collapsed across components) cannot attribute a replacement alone.
+    # Diffuse keeps plain hash behavior.
+    evidence_by_binding = {}
+    hash_owners = {}
+    for group_bindings in bindings:
+        for binding in group_bindings:
+            if binding in evidence_by_binding or not asset_textures.exact_texture_binding(binding):
+                continue
+            evidence_by_binding[binding] = _hash_evidence(binding, metadata_cache)
+            component = (binding.root, binding.asset, binding.metadata, binding.geometry_hash)
+            for item in evidence_by_binding[binding]:
+                if item.role and item.role != "diffuse":
+                    hash_owners.setdefault((item.role, item.texture_hash), set()).add(component)
+    shared_hashes = {key for key, components in hash_owners.items() if len(components) > 1}
     for position, group in enumerate(groups):
         group_bindings = bindings[position] if position < len(bindings) else ()
         index = group.get("_texture_override_index") or texture_index
+
+        allowed = None
+        if shared_hashes:
+            def allowed(item, replacement, group=group):
+                """Keep a shared-hash replacement only for the component its file names.
+
+                A file naming no component proves nothing and keeps hash behavior.
+                """
+                if not replacement.file or (item.role, item.texture_hash) not in shared_hashes:
+                    return True
+                named = filename_matches.get(_texture_file_identity(replacement.file))
+                return not named or id(group) in named
+
         resources = group.get("_texture_resources", {})
         if id(resources) not in declarations_by_ini:
             declarations_by_ini[id(resources)] = _texture_declarations(resources, inventory)
@@ -600,7 +634,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
         records = []
         for draw, binding in zip(group.get("draws", ()), group_bindings):
             exact = asset_textures.exact_texture_binding(binding)
-            evidence = _hash_evidence(binding, metadata_cache) if exact else []
+            evidence = evidence_by_binding.get(binding, [])
             slots = (_wwmi_slot_evidence(binding, metadata_cache)
                      if exact and binding.asset_type == "WWMI" else {})
             records.append((draw, binding, evidence, slots))
@@ -688,7 +722,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                 evidence + role_hint_evidence)
             _apply_slot_hashes(draw, evidence + role_hint_evidence, declarations, binding.geometry_hash,
                                asset_slots=slots)
-            _apply_hash_replacements(draw, all_evidence, index)
+            _apply_hash_replacements(draw, all_evidence, index, allowed)
             _clear_null_texture_assignments(draw)
             # Use the existing Asset defaults only in states with no applicable
             # mod binding. Authored nulls clear the mod assignment.

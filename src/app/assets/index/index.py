@@ -329,9 +329,6 @@ def _merge_asset_records(records):
                 previous.metadata_path,
                 previous.detail_metadata_path or item.detail_metadata_path,
                 previous.component_name or item.component_name,
-                (previous.component_fingerprint
-                 if previous.component_fingerprint ==
-                 item.component_fingerprint else None),
                 metadata_paths,
             )
         merged[record.relative_path] = AssetRecord(
