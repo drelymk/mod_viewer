@@ -71,7 +71,7 @@ export default {
   'gameSettings.title': '{game} 设置',
   'gameSettings.defaultAnimation': '默认动画',
   'gameSettings.defaultAnimationHint':
-    '开始动画时，若存在名称完全相同（不区分大小写）的动画则优先播放它。留空或无匹配时播放第一个动画。',
+    '用 ; 分隔多个动画名称，优先级从左到右。第一个与动画名称完全相同（不区分大小写）的名称对应的动画将优先播放。无匹配或留空时播放第一个动画。',
   'settings.notSet': '未设置',
   'settings.hint': '更改会自动保存。',
   'asset.extractedPartial':

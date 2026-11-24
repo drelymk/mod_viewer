@@ -96,6 +96,9 @@ export function detachOutline(mesh) {
   const outline = mesh?.userData?.viewerOutline;
   if (!outline) return null;
   mesh.remove(outline);
+  // The shared material is never disposed, so only this event releases the
+  // renderer's cached RenderObject (and the geometry it retains).
+  outline.dispatchEvent({ type: 'dispose' });
   attachedOutlines.delete(outline);
   delete mesh.userData.viewerOutline;
   return outline;

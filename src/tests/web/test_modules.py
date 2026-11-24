@@ -673,6 +673,20 @@ def test_outline_zoom_keeps_distant_edges_visible_and_restores_reference(module_
     assert result['restored'] == pytest.approx(fitted)
 
 
+def test_detached_outline_emits_dispose_so_renderer_cache_releases_geometry(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {attachOutline, detachOutline} = await import('./js/scene/outline-renderer.js');
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
+      const outline = attachOutline(mesh);
+      let disposed = 0;
+      outline.addEventListener('dispose', () => { disposed += 1; });
+      detachOutline(mesh);
+      return disposed;
+    }""")
+    assert result == 1
+
+
 def test_camera_clipping_tracks_zoom_pan_and_model_lifecycle(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');
@@ -3288,7 +3302,7 @@ export const alertDialog = async message => window.menuErrors.push(message);
     assert module_page.evaluate('window.menuCalls') == ['fixture-mod', 'fixture-mod']
 
 
-def test_default_animation_lookup_prefers_own_clip_then_sequence_then_shared_by_name(module_page):
+def test_default_animation_lookup_follows_name_list_priority_then_own_sequence_shared(module_page):
     result = module_page.evaluate('''async () => {
       const {setDefaultAnimations, findDefaultAnimationId, gameKindFromPayload} = await import('./js/app/default-animation.js');
       const {viewerState} = await import('./js/app/state.js');
@@ -3301,13 +3315,17 @@ def test_default_animation_lookup_prefers_own_clip_then_sequence_then_shared_by_
       const matched = findDefaultAnimationId(state);
       setDefaultAnimations({GIMI: 'COMBO'});
       const sequence = findDefaultAnimationId(state);
+      setDefaultAnimations({GIMI: 'Missing; ; combo ;Walk'});
+      const listed = findDefaultAnimationId(state);
+      setDefaultAnimations({GIMI: 'walk;Combo'});
+      const ordered = findDefaultAnimationId(state);
       setDefaultAnimations({GIMI: 'Missing'});
       const unmatched = findDefaultAnimationId(state);
       setDefaultAnimations({});
       const unset = findDefaultAnimationId(state);
       viewerState.gameKind = null;
       return {
-        matched, sequence, unmatched, unset,
+        matched, sequence, listed, ordered, unmatched, unset,
         kinds: [
           gameKindFromPayload({asset: {type: 'WWMI'}}),
           gameKindFromPayload({game: {id: 'genshin'}}),
@@ -3318,6 +3336,6 @@ def test_default_animation_lookup_prefers_own_clip_then_sequence_then_shared_by_
       };
     }''')
     assert result == {
-        'matched': 'c2', 'sequence': 's1', 'unmatched': None, 'unset': None,
+        'matched': 'c2', 'sequence': 's1', 'listed': 's1', 'ordered': 'c1', 'unmatched': None, 'unset': None,
         'kinds': ['WWMI', 'GIMI', 'ZZMI', 'WWMI', None],
     }

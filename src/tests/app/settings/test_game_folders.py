@@ -60,7 +60,7 @@ def test_default_animation_lives_under_each_game_entry_next_to_its_folder(tmp_pa
     assert "gameFolders" not in stored
 
 
-@pytest.mark.parametrize("kind, name", [("Other", "Idle"), ("WWMI", 5), ("GIMI", "x" * 201)])
+@pytest.mark.parametrize("kind, name", [("Other", "Idle"), ("WWMI", 5), ("GIMI", "x" * 501)])
 def test_default_animation_rejects_invalid_input_and_persists_nothing(tmp_path, monkeypatch, kind, name):
     filename = tmp_path / "config.json"
     filename.write_text(json.dumps({"version": 1, "modFolders": []}), encoding="utf-8")

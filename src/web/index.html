@@ -869,9 +869,9 @@
     <div id="game-settings-error" class="modal-error" role="alert"></div>
     <label class="modal-field" for="game-settings-default-animation">
       <span data-i18n="gameSettings.defaultAnimation">Default animation</span>
-      <input id="game-settings-default-animation" type="text" maxlength="200" autocomplete="off" spellcheck="false">
+      <input id="game-settings-default-animation" type="text" maxlength="500" autocomplete="off" spellcheck="false">
     </label>
-    <p class="modal-field-hint" data-i18n="gameSettings.defaultAnimationHint">Played first when an animation starts, if an animation has exactly this name (case-insensitive). Leave empty, or if nothing matches, the first animation plays.</p>
+    <p class="modal-field-hint" data-i18n="gameSettings.defaultAnimationHint">Animation names separated by ; in priority order, left to right. The first name that exactly matches an animation (case-insensitive) plays first. If none match, or the field is empty, the first animation plays.</p>
     <div class="modal-actions">
       <button id="game-settings-cancel" type="button" data-i18n="common.cancel">Cancel</button>
       <button id="game-settings-save" type="button" data-i18n="common.save">Save</button>

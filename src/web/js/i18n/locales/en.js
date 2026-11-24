@@ -58,7 +58,7 @@ export default {
   'gameSettings.title': '{game} settings',
   'gameSettings.defaultAnimation': 'Default animation',
   'gameSettings.defaultAnimationHint':
-    'Played first when an animation starts, if an animation has exactly this name (case-insensitive). Leave empty, or if nothing matches, the first animation plays.',
+    'Animation names separated by ; in priority order, left to right. The first name that exactly matches an animation (case-insensitive) plays first. If none match, or the field is empty, the first animation plays.',
   'settings.notSet': 'Not set',
   'settings.hint': 'Changes are saved automatically.',
   'asset.extractedPartial':
