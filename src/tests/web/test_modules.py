@@ -673,6 +673,20 @@ def test_outline_zoom_keeps_distant_edges_visible_and_restores_reference(module_
     assert result['restored'] == pytest.approx(fitted)
 
 
+def test_detached_outline_emits_dispose_so_renderer_cache_releases_geometry(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {attachOutline, detachOutline} = await import('./js/scene/outline-renderer.js');
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
+      const outline = attachOutline(mesh);
+      let disposed = 0;
+      outline.addEventListener('dispose', () => { disposed += 1; });
+      detachOutline(mesh);
+      return disposed;
+    }""")
+    assert result == 1
+
+
 def test_camera_clipping_tracks_zoom_pan_and_model_lifecycle(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');

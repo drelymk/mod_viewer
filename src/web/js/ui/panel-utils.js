@@ -16,14 +16,16 @@ function syncSourceSection(section) {
   );
 }
 
-function syncSourceSections() {
+// A cleared panel's sections would otherwise retain their rows, meshes and geometry.
+function pruneDetachedSections() {
   for (const section of sourceSections) {
-    if (!section.header.isConnected) {
-      sourceSections.delete(section);
-      continue;
-    }
-    syncSourceSection(section);
+    if (!section.header.isConnected) sourceSections.delete(section);
   }
+}
+
+function syncSourceSections() {
+  pruneDetachedSections();
+  sourceSections.forEach(syncSourceSection);
 }
 
 window.addEventListener(LANGUAGE_CHANGED, syncSourceSections);
@@ -72,6 +74,7 @@ export function buildSourceSection(
     items.classList.toggle('collapsed', collapsed);
     syncSourceSection(section);
   });
+  pruneDetachedSections();
   sourceSections.add(section);
   container.append(header, items);
   return items;
