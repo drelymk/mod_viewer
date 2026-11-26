@@ -56,13 +56,15 @@ and props as the viewer plays them. How each game produces them is in the
   Switching clips freezes the displayed pose until the replacement is ready, then
   starts at zero, keeping only active and incoming clips; failures still release
   ownership and restore the baseline.
-- Opening Weight/Rig loads weights and the library, then activates the manual rig
-  as the final stage (same lifecycle with or without clips). Animation controls
-  stay disabled until activation settles; stale loads never activate a replacement
-  model; playback reuses the rig. The opt-in Auto load Weight/Rig preference runs
-  activation after automatic Asset Fill and requested textures settle, then plays
-  the first clip, detached from the model transition and cancelled on every source
-  replacement.
+- Opening Weight/Rig decodes the shared weights (then one ready paint), then runs
+  three independent branches in parallel: Weight (saved selection, then Physics),
+  Rig (model rig build) and Animation (clip library). Successful branches are kept
+  per generation; only failed ones retry. Clips play while the Rig builds: an
+  installed rig or newly attached Physics rebinds the shown clip instead of
+  stopping it. Stale loads never activate a replacement model. The opt-in Auto
+  load Weight/Rig preference starts activation after automatic Asset Fill and
+  requested textures settle and plays the default clip once the library is ready,
+  detached from the model transition and cancelled on every source replacement.
 - Rig clips share the viewport playback bar (clip selector, previous/next, Play/
   Pause, seeking) synchronized with the Weight/Rig panel; models without clips keep
   ordinary mod playback controls.

@@ -5,7 +5,6 @@ import { weightRigApi } from '../weight-rig/weight-rig-core.js';
 import { createIcon } from '../ui/ui-icons.js';
 const {
   activateWeightRig,
-  loadRigAnimationLibrary,
   getRigAnimationState,
   getRigPropsShown,
   setRigPropsShown,
@@ -734,16 +733,16 @@ function syncAnimation(state = getRigAnimationState()) {
   ui.animationSelect.value = state.selected || '';
   ui.animationPropsLabel.hidden = !state.hasProps;
   ui.animationProps.checked = getRigPropsShown();
-  const activating = isWeightRigActivating();
-  ui.animationSelect.disabled = activating || (!state.clips.length && !state.sequences?.length);
+  // Clips need only the decoded weights, so they play while the Rig still builds.
+  ui.animationSelect.disabled = !state.clips.length && !state.sequences?.length;
   ui.animationPlay.textContent = t(state.playing ? 'animation.pause' : 'animation.play');
-  ui.animationPlay.disabled = activating || !state.duration || state.loading;
+  ui.animationPlay.disabled = !state.duration || state.loading;
   ui.animationStop.disabled = !state.selected;
   // Sequences scrub along their whole timeline; clips in clip seconds.
   const sequence = !!state.stepCount;
   const position = sequence ? state.sequenceTime : state.time;
   const duration = sequence ? state.sequenceDuration : state.duration;
-  ui.animationTime.disabled = activating || !duration || state.loading;
+  ui.animationTime.disabled = !duration || state.loading;
   ui.animationTime.max = String(duration || 1);
   ui.animationTime.value = String(position);
   const timeText = `${position.toFixed(2)} / ${duration.toFixed(2)} s`;
@@ -1241,19 +1240,12 @@ export function isWeightRigActivating() {
 
 export function loadWeightRigForModel() {
   if (loadingPromise) return loadingPromise;
-  const request = loadRigAnimationLibrary()
-    .then((animation) => {
-      if (animation.stale) return { stale: true };
-      syncAnimation(animation);
-      syncRigOptions();
-      return activateWeightRig();
-    })
-    .finally(() => {
-      if (loadingPromise !== request) return;
-      loadingPromise = null;
-      syncAnimation();
-      window.dispatchEvent(new CustomEvent('mod-viewer-weight-rig-activation-changed'));
-    });
+  const request = activateWeightRig().finally(() => {
+    if (loadingPromise !== request) return;
+    loadingPromise = null;
+    syncAnimation();
+    window.dispatchEvent(new CustomEvent('mod-viewer-weight-rig-activation-changed'));
+  });
   loadingPromise = request;
   window.dispatchEvent(new CustomEvent('mod-viewer-weight-rig-activation-changed'));
   return request;

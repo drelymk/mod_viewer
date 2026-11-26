@@ -501,11 +501,13 @@ async function autoLoadWeightRig(source) {
     if (!isCurrent()) return;
     const feature = await loadWeightRigFeature();
     if (!isCurrent()) return;
-    const activation = await feature.loadWeightRigForModel();
-    if (!isCurrent() || activation?.stale) return;
-    const animation = feature.getRigAnimationState();
-    if (!animation.selected && animation.clips.length)
+    // Weight, Rig and animation load in parallel once the shared weights decode,
+    // so the default clip starts without waiting for the Rig or Physics.
+    const activation = feature.loadWeightRigForModel();
+    const animation = await feature.loadRigAnimationLibrary();
+    if (isCurrent() && !animation.stale && !animation.selected && animation.clips.length)
       await feature.selectRigAnimation(findDefaultAnimationId(animation) ?? animation.clips[0].id);
+    await activation;
   } catch (error) {
     console.error('Automatic Weight/Rig loading failed:', error);
   }

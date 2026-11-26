@@ -673,10 +673,21 @@ export function createRigAnimation({
       fail(failure, current);
     }
   }
+  // Re-attach the shown clip after what it deforms through changed (the model
+  // rig was installed or Physics attached) while it played. A clip still
+  // downloading prepares itself once it arrives.
+  function rebind() {
+    if (!clip || loading) return;
+    applyPose(null);
+    prepare();
+    suspendPhysics(true);
+    pose();
+  }
   return {
     snapshot,
     select,
     stop,
+    rebind,
     setPlaying,
     // Clips seek in clip seconds; sequences seek along their whole timeline.
     seek(value) {

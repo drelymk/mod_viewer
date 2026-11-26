@@ -41,6 +41,18 @@ def identity(row):
     return hashlib.sha256(json.dumps([row[key] for key in LOCATOR_KEYS], separators=(",", ":")).encode()).hexdigest()
 
 
+def references(lookup, owner, reference, kind):
+    """Identities of the `kind` rows an external Unity pointer from `owner` names."""
+    if not isinstance(reference, dict) or not isinstance(reference.get("cab"), str):
+        return set()
+    # External pointers may spell CAB names in another case (Genshin lowercases them).
+    matches = lookup.get((kind, reference["cab"].casefold(), reference.get("path_id")), ())
+    if "file_ordinal" in reference:
+        matches = [row for row in matches if (row["block"], row["offset"], row["file_ordinal"])
+                   == (owner["block"], reference.get("offset"), reference["file_ordinal"])]
+    return {identity(row) for row in matches}
+
+
 def fingerprint(folder):
     root = validate_folder(folder)
     digest = hashlib.sha256(INDEX_VERSION.encode())

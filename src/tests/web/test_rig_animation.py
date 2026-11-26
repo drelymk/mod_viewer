@@ -6,6 +6,17 @@ from .payloads import model_payload, weighted_payload
 from .support import bridge_calls, open_model, wait_loaded
 
 
+def wait_activation_settled(page, rig='!feature.getModelRigState().loading'):
+    """Wait until Weight/Rig activation finished and the Rig satisfies `rig`."""
+    page.evaluate('''async () => {
+      window.__weightFeatureModule=await import('./js/weight-rig/weight-rig-feature.js');
+    }''')
+    page.wait_for_function(f'''() => {{
+      const feature=window.__weightFeatureModule.getLoadedWeightRigFeature();
+      return feature && !feature.isWeightRigActivating() && {rig};
+    }}''')
+
+
 @pytest.mark.parametrize('stage', ['texture', 'fill', 'weights'])
 def test_auto_weight_rig_cancels_deferred_work_on_model_switch(viewer, stage):
     payload, weights = weighted_payload()
@@ -42,13 +53,7 @@ def test_auto_weight_rig_cancels_deferred_work_on_model_switch(viewer, stage):
         page.evaluate('stage=>window.__bridge.release(stage)', stage)
     if stage == 'weights':
         page.wait_for_function('window.__weightRequestFinished')
-    page.evaluate('''async () => {
-      window.__weightFeatureModule=await import('./js/weight-rig/weight-rig-feature.js');
-    }''')
-    page.wait_for_function('''() => {
-      const feature=window.__weightFeatureModule.getLoadedWeightRigFeature();
-      return feature && !feature.isWeightRigActivating() && !feature.getModelRigState().loading;
-    }''')
+    wait_activation_settled(page)
     assert page.evaluate('''async () => {
       const {getLoadedWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
       const feature=getLoadedWeightRigFeature();
@@ -123,11 +128,15 @@ def test_auto_weight_rig_load_order_and_viewport_playback_lifecycle(viewer, kind
     assert page.locator('#animation-frame').is_visible()
     # Rigs without props never offer the Show props toggle.
     assert page.locator('#animation-props').is_hidden()
-    assert page.evaluate('''async () => {
+    page.evaluate('''async () => {
       const {getLoadedWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
       window.__autoRig=getLoadedWeightRigFeature();
-      return window.__autoRig.getModelRigState().loaded && window.__autoRig.getRigAnimationState().playing;
     }''')
+    # The default clip starts once the shared weights decode; the Rig finishing
+    # its build afterwards rebinds that clip instead of stopping it.
+    page.wait_for_function('window.__autoRig.getModelRigState().loaded && !window.__autoRig.isWeightRigActivating()')
+    assert page.evaluate("window.__autoRig.getRigAnimationState().selected === 'clip01'")
+    assert page.evaluate('window.__autoRig.getRigAnimationState().playing')
     playing = "id => window.__autoRig.getRigAnimationState().selected===id && window.__autoRig.getRigAnimationState().playing"
     revision = page.evaluate('window.__autoRig.getModelRigState().structureRevision')
     # Toolbar popovers stay anchored to their button and overlay the dock.
@@ -381,12 +390,18 @@ def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_p
       const posed=latest instanceof Map;
       const heldPose=latest;
       const switching=runtime.select('clip02'), resolveSecond=resolve;
+      // A clip still downloading prepares itself when it arrives, so rebinding waits for it.
+      runtime.rebind();
       const held=latest===heldPose&&suspended&&prepared===1&&scheduled===null&&runtime.snapshot().loading;
       const newest=runtime.select('clip03'), resolveNewest=resolve;
       resolveSecond(response);await switching;
       const superseded=latest===heldPose&&prepared===1&&runtime.snapshot().selected==='clip03';
       resolveNewest(response);await newest;
       const replaced=runtime.snapshot().playing&&runtime.snapshot().time===0&&latest!==heldPose&&prepared===2;
+      // A rig installed mid-playback re-prepares the shown clip and keeps it playing.
+      suspended=false;runtime.rebind();
+      const rebound=prepared===3&&suspended&&latest instanceof Map&&runtime.snapshot().playing&&
+        runtime.snapshot().selected==='clip03';
       const brokenSwitch=runtime.select('clip02');resolve({status:'error',error:'Fixture unavailable'});await brokenSwitch;
       const failedSwitch=latest===null&&!suspended&&!filtered&&!runtime.snapshot().loading&&!!runtime.snapshot().error;
       const retry=runtime.select('clip03');resolve(response);await retry;
@@ -404,12 +419,13 @@ def test_animation_interpolation_playback_and_stale_selection_lifecycle(module_p
         t(runtime.snapshot().errorKey)!==runtime.snapshot().error;
       runtime.stop();
       URL.revokeObjectURL(url);
-      return {point,endpoint,stale,started,firstFrame,secondFrame,paused,posed,held,superseded,replaced,failedSwitch,stopped,recovered,translatedError};
+      return {point,endpoint,stale,started,firstFrame,secondFrame,paused,posed,held,superseded,replaced,rebound,failedSwitch,stopped,recovered,translatedError};
     }''')
     assert result['point'] == pytest.approx([1, 2, 0], abs=1e-6)
     assert result['endpoint'] == pytest.approx([0, 0, 0], abs=1e-6)
     assert result['stale'] and result['started'] and result['posed'] and result['stopped'] and result['recovered']
     assert result['held'] and result['superseded'] and result['replaced'] and result['failedSwitch']
+    assert result['rebound']
     assert result['translatedError']
     assert result['firstFrame'] == pytest.approx(.0166)
     assert result['secondFrame'] == pytest.approx(.0334)
@@ -810,8 +826,10 @@ def test_animation_panel_and_weight_rig_model_lifecycle(viewer, tmp_path, kind, 
         }''')
     page.wait_for_function("document.querySelectorAll('.rig-animation-select option').length === 2")
     page.wait_for_function("!document.querySelector('.rig-animation-select').disabled")
+    wait_activation_settled(page, rig='feature.getModelRigState().loaded')
     assert page.locator('.rig-load').count() == 0
-    assert page.evaluate('window.__rigAutoStages') == [{'clips': 2, 'blocked': True}]
+    # Clips need only the shared weights, so they stay selectable while the Rig builds.
+    assert page.evaluate('window.__rigAutoStages') == [{'clips': 2, 'blocked': False}]
     assert page.evaluate('''async () => {
       const {weightRigApi:f,weightRigSkinningRuntime:skin} = await import('./js/weight-rig/weight-rig-core.js');
       window.__animationApi = f;

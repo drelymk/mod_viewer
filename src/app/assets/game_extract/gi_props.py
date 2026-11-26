@@ -18,7 +18,6 @@ import zlib
 from app.assets.loader.hash_asset import load_hash_asset
 from . import unity_dds, zzz_index, zzz_prop_textures, zzz_props
 from .runtime import ExtractionCancelled, check_cancelled
-from .zzz_morphs import _references
 
 MAX_RENDERERS = 64
 MAX_TEXTURE_BYTES = 512 * 1024 * 1024
@@ -45,8 +44,8 @@ def routes(index, sources, avatar, prefabs=frozenset()):
             continue
         if zlib.crc32(renderer["path"].encode("utf-8")) not in paths:
             continue
-        avatars = _references(lookup, row, renderer.get("avatar"), "Avatar")
-        meshes = _references(lookup, row, renderer.get("mesh"), "Mesh")
+        avatars = zzz_index.references(lookup, row, renderer.get("avatar"), "Avatar")
+        meshes = zzz_index.references(lookup, row, renderer.get("mesh"), "Mesh")
         if len(meshes) == 1 and (avatars and avatars <= sources or _null_avatar(row, renderer, prefabs)):
             found.setdefault(next(iter(meshes)), []).append(row)
     return found

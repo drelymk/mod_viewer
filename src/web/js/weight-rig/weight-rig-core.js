@@ -296,12 +296,32 @@ rigModelSession = createRigModelSession({
   rotationSnapValues: RIG_ROTATION_SNAP_DEGREES,
 });
 
+// Weight branch: saved selection first, then Physics for whatever it selected.
+// Either step returns false when it did not finish, which retries the branch.
+async function activateWeightSelection({ isCurrent }) {
+  const selection = await weightModelSession.restoreSavedSelection({ isCurrent });
+  if (selection === false || !isCurrent()) return false;
+  const physics = await physicsRuntime.syncToSelection();
+  // Physics attached under a clip that started meanwhile must stay suspended.
+  if (isCurrent()) rigAnimation.rebind();
+  return physics === false ? false : { selection, physics };
+}
+
+// The shared stage. Asset Fill meshes registered while the model's weights
+// decoded load in a second, fill-only pass (immediate when none are pending).
+async function ensureAllWeightsLoaded() {
+  const weights = await weightModelSession.ensureLoaded();
+  return weights?.loaded && !weights.error ? weightModelSession.ensureLoaded() : weights;
+}
+
 weightRigActivationSession = createWeightRigActivationSession({
   getGeneration: () => modelWeightGeneration,
-  ensureWeightsLoaded: weightModelSession.ensureLoaded,
-  restoreSavedSelection: weightModelSession.restoreSavedSelection,
-  ensureRigLoaded: rigModelSession.ensureLoaded,
-  syncPhysicsToSelection: physicsRuntime.syncToSelection,
+  ensureWeightsLoaded: ensureAllWeightsLoaded,
+  branches: {
+    weight: activateWeightSelection,
+    rig: () => rigModelSession.ensureLoaded(),
+    animation: () => publishAnimationLibrary(),
+  },
 });
 
 function beginWeightModelPicking(...args) {
@@ -408,6 +428,13 @@ const rigAnimation = createRigAnimation({
   },
   notify: (detail) => window.dispatchEvent(new CustomEvent('mod-viewer-model-animation-changed', { detail })),
 });
+// The clip library needs only installed weights: rebuild the binding and publish it.
+function publishAnimationLibrary() {
+  animationBindingGeneration = -1;
+  notifyModelWeightChanged();
+  return rigAnimation.snapshot();
+}
+
 function manualPose(action) {
   return (...args) => {
     if (rigAnimation.snapshot().selected) rigAnimation.stop();
@@ -419,10 +446,8 @@ export const weightRigApi = Object.freeze({
   getRigAnimationState: rigAnimation.snapshot,
   loadRigAnimationLibrary: async () => {
     const generation = modelWeightGeneration;
-    await weightModelSession.ensureLoaded();
-    animationBindingGeneration = -1;
-    notifyModelWeightChanged();
-    return { ...rigAnimation.snapshot(), stale: generation !== modelWeightGeneration };
+    await ensureAllWeightsLoaded();
+    return { ...publishAnimationLibrary(), stale: generation !== modelWeightGeneration };
   },
   selectRigAnimation: rigAnimation.select,
   // Every game prop shows unless the viewer turns them off (the snapshot's `hasProps` says whether any exist).
@@ -923,7 +948,6 @@ async function buildModelSkinningRig(
     return generation === null || isCurrent();
   };
   if (!(await checkpoint())) return null;
-  rigAnimation.stop();
   const previousSelectedJointId = modelRigState.selectedJointId;
   const previousRootSignatures = new Set(modelRigState.explicitRootSignatures);
   const reconciliation =
@@ -1048,6 +1072,8 @@ async function buildModelSkinningRig(
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId =
     Number.isInteger(previousSelectedJointId) && joints[previousSelectedJointId] ? previousSelectedJointId : null;
+  // A clip that started while the rig built keeps playing, now through the rig.
+  rigAnimation.rebind();
   return rig;
 }
 

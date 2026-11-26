@@ -299,7 +299,7 @@ export function initAnimationPlayback() {
     });
   }
 
-  function syncRig(rig, activating) {
+  function syncRig(rig) {
     if (refreshCatalog(rig) && !picker.hidden) renderOptions('selected');
     if (rig.selected) lastChoice = rig.selected;
     const choice = catalog.byId.get(rig.selected) || null;
@@ -311,9 +311,7 @@ export function initAnimationPlayback() {
     setText(triggerMeta, choice ? describe(choice) : '');
     trigger.title = name;
     trigger.setAttribute('aria-label', `${t('animation.select')}: ${name}`);
-    trigger.disabled = previous.disabled = next.disabled = !!activating;
-    if (activating) closePicker();
-    stopButton.disabled = !!activating || (!rig.selected && !rig.loading);
+    stopButton.disabled = !rig.selected && !rig.loading;
     propsButton.hidden = !rig.hasProps;
     propsButton.setAttribute('aria-pressed', String(!!getRig()?.getRigPropsShown()));
     const sequence = choice?.kind === 'sequence' ? choice.item : null;
@@ -328,7 +326,7 @@ export function initAnimationPlayback() {
     slider.title = live ? steps.children[rig.step]?.title || '' : '';
     const position = live ? rig.sequenceTime : rig.time;
     const duration = live ? rig.sequenceDuration : rig.duration;
-    slider.disabled = !!activating || rig.loading || !duration;
+    slider.disabled = rig.loading || !duration;
     slider.min = '0';
     slider.max = String(duration || 1);
     slider.step = '0.001';
@@ -358,7 +356,6 @@ export function initAnimationPlayback() {
     const canSeek = useRig || state.canSeek;
     const paused = useRig ? !rig.playing : state.paused;
     const available = useRig || state.available;
-    const activating = useRig && getRig().isWeightRigActivating();
     const docked = available && canSeek;
     bar.hidden = !docked || collapsed;
     if (bar.hidden) closePicker();
@@ -371,7 +368,7 @@ export function initAnimationPlayback() {
     toggle.setAttribute('aria-label', toggleLabel);
     // A collapsed dock leaves its play button beside the toggle.
     button.hidden = !available;
-    button.disabled = useRig && (activating || rig.loading);
+    button.disabled = useRig && rig.loading;
     if (docked && !collapsed) {
       if (button.parentElement !== transport) transport.prepend(button);
     } else if (button.parentElement !== tools) tools.append(button);
@@ -382,7 +379,7 @@ export function initAnimationPlayback() {
     bar.classList.toggle('playing', !paused);
     head.hidden = !useRig;
     if (useRig) {
-      syncRig(rig, activating);
+      syncRig(rig);
       return;
     }
     if (catalogKey) {

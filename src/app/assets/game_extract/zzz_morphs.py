@@ -16,17 +16,6 @@ MAX_BYTES = 128 * 1024 * 1024
 TOLERANCE = 1e-6
 
 
-def _references(lookup, owner, reference, kind):
-    if not isinstance(reference, dict) or not isinstance(reference.get("cab"), str):
-        return set()
-    # External pointers may spell CAB names in another case (Genshin lowercases them).
-    matches = lookup.get((kind, reference["cab"].casefold(), reference.get("path_id")), ())
-    if "file_ordinal" in reference:
-        matches = [row for row in matches if (row["block"], row["offset"], row["file_ordinal"])
-                   == (owner["block"], reference.get("offset"), reference["file_ordinal"])]
-    return {zzz_index.identity(row) for row in matches}
-
-
 def _channels(mesh):
     raw = mesh.get("blend_shapes")
     if not raw:
@@ -122,8 +111,8 @@ def prepare(chosen, captured, rows, expressions=None):
         renderer = owner.get("renderer") if owner["type"] == "SkinnedMeshRenderer" else None
         if not isinstance(renderer, dict) or not isinstance(renderer.get("path"), str):
             continue
-        meshes = _references(lookup, owner, renderer.get("mesh"), "Mesh")
-        avatars = _references(lookup, owner, renderer.get("avatar"), "Avatar")
+        meshes = zzz_index.references(lookup, owner, renderer.get("mesh"), "Mesh")
+        avatars = zzz_index.references(lookup, owner, renderer.get("avatar"), "Avatar")
         path = renderer["path"]
         key = zlib.crc32(path.encode("utf-8"))
         if isinstance(renderer.get("mesh"), dict) and renderer["mesh"].get("path_id") == 0:
