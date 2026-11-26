@@ -13,8 +13,9 @@ Placement (``AnimNotifyStateEffect``): an attached effect (the default) follows 
 socket; one with ``Attached`` off is placed once, at spawn, at its socket's transform and
 stays there; one without a socket is placed at the character mesh's origin, which needs
 the clip's root at rest at spawn so that origin does not depend on whether the game
-moves the character by root motion. Offsets, follow rules (``NotRealAttach``) and
-tag-gated notifies are reported, never approximated.
+moves the character by root motion. Notify, group and model transforms compose with the
+socket, and settings are classified (handled, ignored, blocking or unverified), in
+``wuwa_effect_settings``.
 
 Timing (``EffectModelGroupSpec``, ``EffectSpec``, ``EffectLifeTime``): the effect spawns
 at the notify's start; a group plays each model after its delay (``Value``), and the
@@ -28,26 +29,27 @@ never later than the clip. ``ContinuousLoop`` only concerns particle groups.
 
 An animation whose skeleton converts onto the mesh's own bones is baked into a
 ``prop-track-v1`` track per clip, with the clip window it shows in; a shorter animation
-holds its last frame, as a non-looping animation does.
+holds its last frame, as a non-looping animation does; a prop that scales bakes
+``prop-track-v2`` affine tracks instead (see ``wuwa_blueprint_props.write_tracks``).
 """
 
+import json
 from pathlib import Path
 
 import numpy as np
 
 from app.assets.animations import MAX_PROP_BONES
+from . import wuwa_effect_settings as policy
 from .native import read_limited
 from .pipeline import MAX_ANIMATION_BYTES, document, exported_file, package_name, rest_worlds
 from .runtime import ExtractionCancelled, check_cancelled
-from .wuwa_blueprint_props import poses, sequence_items, track
+from .wuwa_blueprint_props import poses, prepare, sequence_items, write_tracks
 from .wuwa_props import CHARACTER_ROOT, mesh_parts
 
 GROUP = "EffectModelGroup_C"
 MESH_MODEL = "EffectModelSkeletalMesh_C"
-# Effect model settings whose meaning for a mesh the viewer reproduces.
-MESH_SETTINGS = frozenset(("SkeletalMeshRef", "AnimationRef", "Looping", "StartTime", "LoopTime", "EndTime",
-                           "ContinuousLoop", "NativeClass"))
-GROUP_SETTINGS = frozenset(("EffectData", "StartTime", "LoopTime", "EndTime", "ContinuousLoop", "NativeClass"))
+# Transform settings whose offsets are part of a placement's identity.
+TRANSFORMS = ("Location", "Rotation", "Scale")
 ABSOLUTE = "EAnimLinkMethod::Absolute"
 MAX_EFFECTS = 512
 BATCH = 250
@@ -127,9 +129,15 @@ def mesh_models(exports, package):
             raise ValueError("The effect group delays a mesh by a negative time.")
     except ValueError as error:
         delays, reason = [0.0] * len(models), str(error)
-    if not reason and set(properties) - GROUP_SETTINGS:
-        reason = ("The effect group has settings the viewer does not support: "
-                  + ", ".join(sorted(set(properties) - GROUP_SETTINGS)) + ".")
+    if not reason:
+        blocking, _unverified = policy.classify(policy.GROUP, properties)
+        if blocking:
+            reason = policy.unsupported(policy.GROUP, blocking)
+    if not reason:
+        try:
+            policy.level_transform(properties)
+        except ValueError as error:
+            reason = str(error)
     return list(zip(models, delays)), stages, reason
 
 
@@ -147,13 +155,14 @@ def mesh_model(exports):
     mesh = package_name(mesh.get("ObjectPath")) if isinstance(mesh, dict) else ""
     animation = package_name(animation.get("ObjectPath")) if isinstance(animation, dict) else ""
     refs = (mesh, animation) if mesh and animation else None
-    if set(properties) - MESH_SETTINGS:
-        return refs, None, ("The effect mesh model has settings the viewer does not support: "
-                            + ", ".join(sorted(set(properties) - MESH_SETTINGS)) + ".")
+    blocking, _unverified = policy.classify(policy.MODEL, properties)
+    if blocking:
+        return refs, None, policy.unsupported(policy.MODEL, blocking)
     if properties.get("Looping") not in (None, False):
         return refs, None, "The effect mesh animation loops."
     try:
         stages = lifetime(properties)
+        policy.level_transform(properties)
     except ValueError as error:
         return refs, None, str(error)
     if refs is None or not mesh.startswith(CHARACTER_ROOT):
@@ -214,8 +223,9 @@ def resolve(client, effects, cancel):
 
     ``effects`` maps clip ids to (clip length, effect notify facts from ``pipeline.sequence``).
     Returns (uses, skipped): ``uses`` lists dicts of clip, length, notify, model, delay,
-    refs ((mesh, animation) or None), group and model lifetimes, and the reason it
-    cannot be exported or None; ``skipped`` maps (source, reason) to clips.
+    refs ((mesh, animation) or None), group and model lifetimes, group and model properties,
+    the unverified setting labels (``level:name``) and the reason it cannot be exported or
+    None; ``skipped`` maps (source, reason) to clips.
     """
     notified = [(clip, length, notify) for clip, (length, notifies) in sorted(effects.items())
                 for notify in notifies if isinstance(notify, dict) and notify.get("effect")][:MAX_EFFECTS]
@@ -231,16 +241,21 @@ def resolve(client, effects, cancel):
             skipped.setdefault((notify["effect"], str(error)), set()).add(clip)
             continue
         # Groups without meshes are particle and other effects, not props.
+        group_properties = _one(groups.get(notify["effect"]), GROUP) or {}
         for model, delay in found:
             uses.append(dict(clip=clip, length=length, notify=notify, model=model, delay=delay, group=group,
-                             reason=reason))
+                             group_properties=group_properties, reason=reason))
             models[model] = None
     if uses:
         for model, exports in _exports(client, models, "effect-models", cancel).items():
-            models[model] = mesh_model(exports)
+            models[model] = mesh_model(exports) + (_one(exports, MESH_MODEL) or {},)
     for use in uses:
-        refs, stages, reason = models[use["model"]]
-        use.update(refs=refs, stages=stages, reason=use["reason"] or reason)
+        refs, stages, reason, model_properties = models[use["model"]]
+        unverified = [f"{level}:{name}" for level, properties in (
+            (policy.NOTIFY, use["notify"]["settings"]), (policy.GROUP, use["group_properties"]),
+            (policy.MODEL, model_properties)) for name in policy.classify(level, properties)[1]]
+        use.update(refs=refs, stages=stages, reason=use["reason"] or reason, model_properties=model_properties,
+                   unverified=sorted(unverified))
     return uses, skipped
 
 
@@ -298,9 +313,9 @@ def placement(use, names, poses):
     """("socket", bone index) for a prop following its socket, or ("fixed", asset-space
     world) for one placed once at spawn; a ValueError when the viewer cannot reproduce it."""
     notify = use["notify"]
-    if notify["settings"]:
-        raise ValueError("The effect notify has settings the viewer does not support: "
-                         + ", ".join(notify["settings"]) + ".")
+    blocking, _unverified = policy.classify(policy.NOTIFY, notify["settings"])
+    if blocking:
+        raise ValueError(policy.unsupported(policy.NOTIFY, blocking))
     spawn = float(notify["start"])
     socket = notify["socket"]
     if socket is None:
@@ -321,6 +336,13 @@ def placement(use, names, poses):
     return "socket", index
 
 
+def _offset_key(use):
+    """The transform inputs and delay that fix a use's offset at every time."""
+    inputs = [{name: properties.get(name) for name in TRANSFORMS} for properties in
+              (use["notify"]["settings"], use["group_properties"], use["model_properties"])]
+    return json.dumps([inputs, use["delay"]], sort_keys=True)
+
+
 def extract(client, resolved, rig, library, writer, cancel):
     """Add the effect meshes of ``resolve`` that extraction can reproduce to ``writer``."""
     uses, skipped = resolved
@@ -338,22 +360,28 @@ def extract(client, resolved, rig, library, writer, cancel):
                 raise ValueError(use["reason"])
             play, hide = visible(use["notify"], use["length"], use["delay"], use["group"], use["stages"])
             kind, where = placement(use, names, poses)
+            sampler = policy.combined(use["notify"]["settings"], use["group_properties"], use["model_properties"],
+                                      use["delay"])
         except ValueError as error:
             skip(use["model"], use["clip"], str(error))
             continue
         mesh, animation = use["refs"]
-        key = (mesh, kind, where if kind == "socket" else tuple(np.round(where, 4).ravel()))
-        props.setdefault(key, dict(where=where, clips={}))["clips"].setdefault(use["clip"], []).append(
-            (animation, play, hide))
+        # Different offsets of one mesh at one placement are different props; the key is the
+        # transform inputs and delay, which fix the offset at every time.
+        offset = None if sampler is None else _offset_key(use)
+        key = (mesh, kind, where if kind == "socket" else tuple(np.round(where, 4).ravel()), offset)
+        prop = props.setdefault(key, dict(where=where, clips={}, sampler=sampler))
+        prop["clips"].setdefault(use["clip"], []).append((animation, play, hide, tuple(use["unverified"])))
     # A clip spawning one mesh at one place several times shows several instances: the
     # n-th spawn of each clip (by animation, then window) is the n-th instance.
     instances = {}
-    for (mesh, kind, where), prop in sorted(props.items(), key=lambda item: str(item[0])):
+    for (mesh, kind, where, offset), prop in sorted(props.items(), key=lambda item: str(item[0])):
         for clip, spawns in prop["clips"].items():
             for number, spawn in enumerate(sorted(set(spawns))):
-                instances.setdefault((mesh, kind, where, number), dict(where=prop["where"], clips={}))["clips"][clip] = spawn
+                instances.setdefault((mesh, kind, where, offset, number),
+                                     dict(where=prop["where"], sampler=prop["sampler"], clips={}))["clips"][clip] = spawn
     items = sequence_items(client, {spawn[0] for prop in instances.values() for spawn in prop["clips"].values()}, cancel)
-    for (mesh, kind, _where, _number), prop in instances.items():
+    for (mesh, kind, _where, _offset, _number), prop in instances.items():
         check_cancelled(cancel)
         anchor = worlds[prop["where"]] if kind == "socket" else prop["where"]
         try:
@@ -366,22 +394,38 @@ def extract(client, resolved, rig, library, writer, cancel):
             for clip in prop["clips"]:
                 skip(mesh, clip, str(error) if isinstance(error, ValueError) else "The prop could not be read.")
             continue
-        tracks, baked, references = {}, {}, {}
-        for clip, (animation, play, hide) in sorted(prop["clips"].items()):
+        prepared, failed, wanted, references = {}, {}, {}, {}
+        for clip, (animation, play, hide, labels) in sorted(prop["clips"].items()):
             check_cancelled(cancel)
-            try:
-                if animation not in items:
-                    raise ValueError("The effect mesh animation is unreadable.")
-                if animation not in baked:
-                    baked[animation] = track(client, writer, animation, items[animation], native["bones"], anchor, references)
-            except ExtractionCancelled:
-                raise
-            except (ValueError, KeyError, TypeError) as error:
-                skip(animation, clip, str(error) if isinstance(error, ValueError) else "The effect mesh animation is incomplete.")
+            if animation not in items:
+                skip(animation, clip, "The effect mesh animation is unreadable.")
                 continue
-            tracks[clip] = dict(baked[animation], start=play, end=hide)
+            if animation not in prepared and animation not in failed:
+                try:
+                    frames, binary, duration = prepare(client, animation, items[animation], native["bones"], references)
+                    # Offsets are sampled at the animation's frame times and hold after its last frame.
+                    offsets = (None if prop["sampler"] is None
+                               else prop["sampler"](np.arange(frames) * duration / (frames - 1)))
+                    prepared[animation] = frames, binary, duration, offsets
+                except ExtractionCancelled:
+                    raise
+                except (ValueError, KeyError, TypeError) as error:
+                    failed[animation] = str(error) if isinstance(error, ValueError) else "The effect mesh animation is incomplete."
+            if animation in failed:
+                skip(animation, clip, failed[animation])
+            else:
+                wanted[clip] = (animation, play, hide, labels)
+        entries, failures, extra = write_tracks(writer, prepared, native["bones"], anchor)
+        tracks, unverified = {}, set()
+        for clip, (animation, play, hide, labels) in sorted(wanted.items()):
+            if animation in failures:
+                skip(animation, clip, failures[animation])
+            else:
+                tracks[clip] = dict(entries[animation], start=play, end=hide)
+                unverified.update(labels)
         if tracks:
             writer.add(mesh, parts, socket=prop["where"] if kind == "socket" else None,
-                       bone_count=len(native["bones"]), tracks=tracks)
+                       bone_count=len(native["bones"]), tracks=tracks, **extra,
+                       **({"unverified_settings": sorted(unverified)} if unverified else {}))
     for (source, reason), clips in sorted(skipped.items()):
         writer.skipped.append(dict(kind="effect", source=source, clips=sorted(clips), reason=reason))

@@ -53,7 +53,9 @@ def _animation_reference(rig, reference, authored_bones):
     return source, fallback
 
 
-def convert_clip(data, rig, duration, *, reference=None, authored_bones=None):
+def convert_clip(data, rig, duration, *, reference=None, authored_bones=None, scales=False):
+    """Convert a PSA to frame-major local transforms; ``scales`` adds each bone's xyz scale (10 floats):
+    its SCALEKEYS key times the rig's rest scale, or the rest scale when the chunk is absent."""
     expected, fallback = rig["bones"], set()
     if reference is not None:
         expected, fallback = _animation_reference(rig, reference, authored_bones)
@@ -112,6 +114,12 @@ def convert_clip(data, rig, duration, *, reference=None, authored_bones=None):
     size, count, keys = chunks[b"ANIMKEYS"]
     if size != 32 or count != frames * len(rig["bones"]):
         raise ValueError("Animation frame keys are incomplete.")
+    scale_rows = None
+    if scales and b"SCALEKEYS" in chunks:
+        size, count, scale_keys = chunks[b"SCALEKEYS"]
+        if size != 16 or count != frames * len(rig["bones"]):
+            raise ValueError("Animation scale keys are incomplete.")
+        scale_rows = struct.iter_unpack("<4f", scale_keys)
     output = bytearray()
     for index, row in enumerate(struct.iter_unpack("<8f", keys)):
         x, y, z, qx, qy, qz, qw, _ = row
@@ -125,12 +133,25 @@ def convert_clip(data, rig, duration, *, reference=None, authored_bones=None):
         root = rig["bones"][bone_index]["parent"] < 0
         translation = (x, -y, z)
         rotation = (qx / length, -qy / length, qz / length, (-qw if root else qw) / length)
+        scale = rig["bones"][bone_index].get("scale", [1, 1, 1])
+        if scale_rows is not None:
+            # Scale is not mirrored by the Y flip; fallback bones keep their rest scale.
+            sx, sy, sz, _time = next(scale_rows)
+            if bone_index not in fallback:
+                if not all(math.isfinite(v) and abs(v) <= 1e6 for v in (sx, sy, sz)):
+                    raise ValueError("Animation contains invalid transforms.")
+                # Keys are relative to the rest scale: the game draws a key of 1 at the
+                # bone's built size, also for a bone whose rest scale is not 1.
+                scale = (sx * scale[0], sy * scale[1], sz * scale[2])
         if bone_index in fallback:
             if (not _same_rotation(rotation, expected[bone_index]["rotation"])
                     or not _near(translation, expected[bone_index]["translation"])):
                 raise ValueError("An undeclared animation track differs from its source reference pose.")
             translation = rig["bones"][bone_index]["translation"]
             rotation = rig["bones"][bone_index]["rotation"]
+        if scales:
+            output.extend(struct.pack("<10f", *translation, *rotation, *scale))
+            continue
         output.extend(
             struct.pack(
                 "<7f",

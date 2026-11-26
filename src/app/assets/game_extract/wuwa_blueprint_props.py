@@ -15,14 +15,15 @@ clip, since the prop plays from the clip's start. A clip paired with two sequenc
 never guessed between, and a sequence one of the clip's own effects plays belongs to
 that effect (see wuwa_effect_props), never to the component. Intentional exception to name-free proof, like ribbon layers'
 ``Rib_`` names: the game pairs them in its animation blueprints. Each pair is baked
-into per-frame prop bone transforms relative to the socket (``prop-track-v1``), and a
-prop shows only while its paired animation runs.
+into per-frame prop bone transforms relative to the socket (``prop-track-v1``, or
+``prop-track-v2`` affine rows when the prop scales: the game hides props by scaling a bone
+to zero), and a prop shows only while its paired animation runs.
 """
 
 import numpy as np
 
 from app.assets.animation_conversion import ReferencePoseMismatch, convert_clip
-from app.assets.animations import MAX_PROP_BONES
+from app.assets.animations import MAX_PROP_BONES, PROP_AFFINE_TRACK_LAYOUT
 from .mecanim import qfrom_basis
 from .native import read_limited
 from .pipeline import MAX_ANIMATION_BYTES, document, exported_file, package_name, rest_worlds, sequence, source_skeleton
@@ -153,7 +154,8 @@ def poses(locals_, bones):
 
 
 def convert(client, package, item, bones, cache):
-    """(frames, frame-major local transforms) of one prop sequence on the prop mesh's bones.
+    """(frames, frame-major local transforms with xyz scale, 10 floats per bone) of one prop
+    sequence on the prop mesh's bones.
 
     A sequence whose skeleton keeps another reference pose plays its authored tracks as
     absolute locals over that skeleton's reference (the pipeline's Animation mode).
@@ -165,36 +167,61 @@ def convert(client, package, item, bones, cache):
     properties = item["Properties"]
     data = read_limited(file, MAX_ANIMATION_BYTES, "Native animation")
     try:
-        frames, binary = convert_clip(data, dict(bones=bones), properties["SequenceLength"])
+        frames, binary = convert_clip(data, dict(bones=bones), properties["SequenceLength"], scales=True)
     except ReferencePoseMismatch:
         skeleton = package_name(properties.get("Skeleton", {}).get("ObjectPath"))
         if skeleton not in cache:
             cache[skeleton] = dict(bones=source_skeleton(client, skeleton, strict_tree=True))
         frames, binary = convert_clip(data, dict(bones=bones), properties["SequenceLength"], reference=cache[skeleton],
-                                      authored_bones=[row["BoneTreeIndex"] for row in properties["TrackToSkeletonMapTable"]])
+                                      authored_bones=[row["BoneTreeIndex"] for row in properties["TrackToSkeletonMapTable"]],
+                                      scales=True)
     if frames != properties["NumFrames"]:
         raise ValueError("Prop animation frame count differs from its sequence metadata.")
     return frames, binary
 
 
-def bake(binary, frames, bones, anchor):
-    """``PROP_TRACK_LAYOUT`` bytes: per frame and prop bone, the asset-space transform
-    (xyz translation, xyzw quaternion) that moves the bone's rest skin to its pose,
-    expressed relative to the prop's placement ``anchor``; a socket's own clip motion
-    is applied on top during playback."""
-    data = np.frombuffer(binary, "<f4", count=frames * len(bones) * 7).reshape(frames, len(bones), 7).astype(float)
+def _deltas(binary, frames, bones, anchor, offsets=None):
+    """(frames, bones, 4, 4) asset-space transforms that move each prop bone's rest skin to its
+    pose, relative to the prop's placement ``anchor``; ``offsets`` ((frames, 4, 4) matrices in
+    the placement's frame) move the whole pose first. A socket's own clip motion is applied
+    on top during playback."""
+    data = np.frombuffer(binary, "<f4", count=frames * len(bones) * 10).reshape(frames, len(bones), 10).astype(float)
     if not np.isfinite(data).all():
         raise ValueError("The prop animation is invalid.")
     rest = np.asarray(rest_worlds(bones, affine=True))
-    delta = anchor @ poses(data, bones) @ np.linalg.inv(rest) @ np.linalg.inv(anchor)
+    pose = poses(data, bones)
+    if offsets is not None:
+        pose = np.asarray(offsets, dtype=float)[:, None] @ pose
+    delta = anchor @ pose @ np.linalg.inv(rest) @ np.linalg.inv(anchor)
+    if not (np.isfinite(delta).all() and np.abs(delta).max() <= 1e6):
+        raise ValueError("The prop animation is invalid.")
+    return delta
+
+
+def _rigid(delta):
+    """Whether every transform only rotates and moves, so a ``prop-track-v1`` track keeps it."""
     rotation = delta[..., :3, :3]
     error = np.abs(np.swapaxes(rotation, -1, -2) @ rotation - np.eye(3)).max() if delta.size else 0
-    if not error <= 1e-3 or not (np.linalg.det(rotation) > 0).all():
+    return bool(error <= 1e-3 and (np.linalg.det(rotation) > 0).all())
+
+
+def _pack(delta, affine):
+    """Track bytes of :func:`_deltas` output: rigid ``PROP_TRACK_LAYOUT`` records (xyz translation,
+    xyzw quaternion), or with ``affine`` ``PROP_AFFINE_TRACK_LAYOUT`` 3x4 rows, which may scale."""
+    if affine:
+        return delta[..., :3, :].astype("<f4").tobytes()
+    if not _rigid(delta):
         raise ValueError("The prop animation is not rigid in the viewer's space.")
+    rotation = delta[..., :3, :3]
     track = np.concatenate([delta[..., :3, 3], qfrom_basis(rotation[..., 0], rotation[..., 1], rotation[..., 2])], -1)
     if not np.isfinite(track).all():
         raise ValueError("The prop animation is invalid.")
     return track.astype("<f4").tobytes()
+
+
+def bake(binary, frames, bones, anchor, affine=False, offsets=None):
+    """Track bytes of one converted prop sequence (see :func:`_deltas` and :func:`_pack`)."""
+    return _pack(_deltas(binary, frames, bones, anchor, offsets), affine)
 
 
 def sequence_items(client, packages, cancel):
@@ -212,11 +239,34 @@ def sequence_items(client, packages, cancel):
     return items
 
 
-def track(client, writer, package, item, bones, anchor, references):
-    """Manifest fields of one prop sequence baked at ``anchor`` into a written track."""
+def prepare(client, package, item, bones, references):
+    """(frames, local transforms with scale, duration) of one prop sequence."""
     frames, binary = convert(client, package, item, bones, references)
-    path, digest = writer.write(bake(binary, frames, bones, anchor), track=True)
-    return dict(file=path, sha256=digest, frame_count=frames, duration=float(item["Properties"]["SequenceLength"]))
+    return frames, binary, float(item["Properties"]["SequenceLength"])
+
+
+def write_tracks(writer, prepared, bones, anchor):
+    """(package -> track entry, package -> reason it failed, extra prop manifest fields) of one
+    prop's prepared sequences, each (frames, local transforms, duration, offsets or None). A prop any of whose tracks scales (bone scale keys or offsets)
+    bakes every track as ``prop-track-v2`` affine rows (the viewer reads one layout per prop);
+    others stay rigid."""
+    deltas, failures = {}, {}
+    for package, (frames, binary, _duration, offsets) in sorted(prepared.items()):
+        try:
+            deltas[package] = _deltas(binary, frames, bones, anchor, offsets)
+        except ValueError as error:
+            failures[package] = str(error)
+    affine = not all(_rigid(delta) for delta in deltas.values())
+    entries = {}
+    for package, delta in deltas.items():
+        frames, _binary, duration, _offsets = prepared[package]
+        try:
+            path, digest = writer.write(_pack(delta, affine), track=True)
+        except ValueError as error:
+            failures[package] = str(error)
+            continue
+        entries[package] = dict(file=path, sha256=digest, frame_count=frames, duration=duration)
+    return entries, failures, (dict(track_layout=PROP_AFFINE_TRACK_LAYOUT) if affine else {})
 
 
 def skeleton_of(exports):
@@ -229,7 +279,8 @@ def skeleton_of(exports):
 
 
 def _tracks(client, mesh, skeleton, folder, clips, anchor, writer, cancel, claimed=frozenset()):
-    """Clip id -> written track entry for every paired prop sequence of one prop mesh.
+    """(clip id -> written track entry, manifest fields) for every paired prop sequence of one
+    prop mesh. Sequences are prepared once each, then written together with one layout.
 
     A (clip id, sequence) pair in ``claimed`` is played by one of the clip's effects instead.
     """
@@ -240,22 +291,27 @@ def _tracks(client, mesh, skeleton, folder, clips, anchor, writer, cancel, claim
                            float(item["Properties"]["SequenceLength"])) for package, item in items.items()}
     paired = {clip_id: package for clip_id, package in pairs(sequences, clips).items()
               if (clip_id, package) not in claimed}
-    tracks, references, baked = {}, {}, {}
+    references, prepared, attempted = {}, {}, set()
     for clip_id, package in sorted(paired.items()):
         check_cancelled(cancel)
+        # A sequence paired with several same-named clips is converted once, and a failure is reported once.
+        if package in attempted:
+            continue
+        attempted.add(package)
         try:
-            # A sequence paired with several same-named clips is converted once.
-            if package not in baked:
-                baked[package] = track(client, writer, package, items[package], mesh["bones"], anchor, references)
+            prepared[package] = prepare(client, package, items[package], mesh["bones"], references) + (None,)
         except ExtractionCancelled:
             raise
         except (ValueError, KeyError, TypeError) as error:
             writer.skipped.append(dict(source=package, reason=str(error) if isinstance(error, ValueError)
                                        else "The prop animation is incomplete."))
-            continue
-        # The prop shows while its animation plays from the clip's start.
-        tracks[clip_id] = dict(baked[package], start=0.0, end=baked[package]["duration"])
-    return tracks
+    entries, failures, extra = write_tracks(writer, prepared, mesh["bones"], anchor)
+    for package, reason in sorted(failures.items()):
+        writer.skipped.append(dict(source=package, reason=reason))
+    # The prop shows while its animation plays from the clip's start.
+    tracks = {clip_id: dict(entries[package], start=0.0, end=entries[package]["duration"])
+              for clip_id, package in sorted(paired.items()) if package in entries}
+    return tracks, extra
 
 
 def extract(client, own, names, worlds, clips, writer, cancel, claimed=frozenset()):
@@ -280,7 +336,7 @@ def extract(client, own, names, worlds, clips, writer, cancel, claimed=frozenset
             if not 0 < len(mesh["bones"]) <= MAX_PROP_BONES:
                 raise ValueError("The prop skeleton is unsupported.")
             folder = package.split("/Model/", 1)[0] if "/Model/" in package else package.rsplit("/", 1)[0]
-            tracks = _tracks(client, mesh, skeleton_of(exports), folder, clips, anchor, writer, cancel, claimed)
+            tracks, extra = _tracks(client, mesh, skeleton_of(exports), folder, clips, anchor, writer, cancel, claimed)
             if not tracks:
                 raise ValueError("No clip has a paired animation for the prop.")
         except ExtractionCancelled:
@@ -289,4 +345,4 @@ def extract(client, own, names, worlds, clips, writer, cancel, claimed=frozenset
             writer.skipped.append(dict(kind="blueprint", source=package or variable,
                                        reason=str(error) if isinstance(error, ValueError) else "The prop could not be read."))
             continue
-        writer.add(package, parts, socket=names.index(socket), bone_count=len(mesh["bones"]), tracks=tracks)
+        writer.add(package, parts, socket=names.index(socket), bone_count=len(mesh["bones"]), tracks=tracks, **extra)
