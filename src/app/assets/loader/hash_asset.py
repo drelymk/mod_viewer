@@ -446,8 +446,12 @@ def _is_native_eyes_record(record):
     return "eyes" in _record_prefix(record)
 
 
+def _has_captured_placement(record):
+    return "coordinate_space" in record.entry or "gimi_face_placement" in record.entry
+
+
 def _is_face_local_record(record):
-    if "coordinate_space" in record.entry or "gimi_face_placement" in record.entry:
+    if _has_captured_placement(record):
         return False
     component = _compact_name(record.component_name)
     if component:
@@ -458,7 +462,7 @@ def _is_face_local_record(record):
 
 
 def _is_face_anchor_record(record):
-    if "coordinate_space" in record.entry or "gimi_face_placement" in record.entry:
+    if _has_captured_placement(record):
         return False
     component = _compact_name(record.component_name)
     if component:
@@ -672,6 +676,10 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 warnings.append(_warning(
                     item.component_name, None, "captured_face_placement_unavailable",
                     "Captured face placement was not proven during extraction; stored coordinates retained."))
+            elif placement.get("approximate"):
+                warnings.append(_warning(
+                    item.component_name, None, "captured_face_placement_approximate",
+                    "Captured face placement is approximate; check the face alignment."))
     if (asset_type == "GIMI"
             and any(_is_face_local_record(item)
                     for item, _ranges_for_output in selected_records)):

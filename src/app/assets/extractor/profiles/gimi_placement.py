@@ -19,6 +19,9 @@ _PLACEMENT_TOLERANCE = 1e-4
 # the parent bone must dominate the skinning of the body vertices inside the face
 # volume it places, and a second skeleton must name the same matrix.
 _SKIN_MIN_VERTICES = 8
+# Last-resort placements are unproven: flagged `approximate`, reported partial and
+# need a replay-verified native skeleton. Nearest-basis picks stay within this tilt.
+_BEST_EFFORT_MAX_TILT = 15.
 
 
 def _multiply(a, b):
@@ -274,8 +277,7 @@ def _skin_candidates(natives, face, volume, context):
     return candidates
 
 
-def _corroborated_group(candidates):
-    """One matrix named by at least two independently skinned objects, else why not."""
+def _group_by_matrix(candidates):
     groups = []
     for candidate in candidates:
         for group in groups:
@@ -284,6 +286,12 @@ def _corroborated_group(candidates):
                 break
         else:
             groups.append([candidate])
+    return groups
+
+
+def _corroborated_group(candidates):
+    """One matrix named by at least two independently skinned objects, else why not."""
+    groups = _group_by_matrix(candidates)
     if not groups:
         return [], ""
     if len(groups) > 1:
@@ -293,11 +301,55 @@ def _corroborated_group(candidates):
     return groups[0], ""
 
 
+def _prefer_dominant(paired, volume):
+    """Break exact-basis ties between different matrices with skin dominance."""
+    candidates = [candidate for candidate, _ in paired]
+    if volume is None or all(
+            _difference(candidate["matrix"], candidates[0]["matrix"]) <= _PLACEMENT_TOLERANCE
+            for candidate in candidates):
+        return paired
+    dominant = [(candidate, native) for candidate, native in paired
+                if _dominant_bone(native, candidate["matrix"], volume) == candidate["bone"]]
+    return dominant or paired
+
+
+def _best_effort(natives, face, skin):
+    """Pick the most plausible unproven placement: (candidates, evidence) or None."""
+    groups = _group_by_matrix(skin)
+    if groups:
+        group = max(groups, key=lambda g: (len({c["component"] for c in g}),
+                                           -min(c["basis_error"] for c in g)))
+        return group, "skin_dominance"
+    nearest = None
+    for native in natives:
+        for body in native["objects"]:
+            relative = _multiply(_inverse(body[0]), face[0])
+            for bone, inverse in native["inverses"]:
+                matrix = _multiply(inverse, relative)
+                error = _basis_error(matrix)
+                if nearest is None or error < nearest["basis_error"]:
+                    nearest = dict(matrix=matrix, bone=bone, component=native["component"],
+                                   face=face[1], body=body[1], palette=native["palette"],
+                                   replay=native["replay"], basis_error=error,
+                                   evidence="nearest_basis",
+                                   native=native)
+    if nearest is None or _tilt_degrees(nearest["matrix"]) > _BEST_EFFORT_MAX_TILT:
+        return None
+    nearest.pop("native")
+    return [nearest], nearest["evidence"]
+
+
 def placement_resolver(inv, calls, components, context):
     """Share native replay validation across candidate selection and final families."""
     capture = _Capture(inv, calls, context)
     natives = None
-    skin_groups = {}
+    skin_candidates = {}
+
+    def skin_for(face, volume):
+        key = (volume, face[0])
+        if key not in skin_candidates:
+            skin_candidates[key] = _skin_candidates(natives, face, volume, context)
+        return skin_candidates[key]
 
     def resolve(members):
         nonlocal natives
@@ -323,24 +375,24 @@ def placement_resolver(inv, calls, components, context):
             sources.update(dependencies)
             candidates = []
             if face:
+                paired = []
                 for native in natives:
                     for body in native["objects"]:
                         relative = _multiply(_inverse(body[0]), face[0])
                         for bone, inverse in native["inverses"]:
                             matrix = _multiply(inverse, relative)
                             if _basis_error(matrix) <= _PLACEMENT_TOLERANCE:
-                                sources.update(native["sources"])
                                 context.budget.allocate(2048)
-                                candidates.append(dict(matrix=matrix, bone=bone, component=native["component"],
-                                                       face=face[1], body=body[1], palette=native["palette"],
-                                                       replay=native["replay"], basis_error=_basis_error(matrix),
-                                                       evidence="head_basis"))
+                                paired.append((dict(matrix=matrix, bone=bone, component=native["component"],
+                                                    face=face[1], body=body[1], palette=native["palette"],
+                                                    replay=native["replay"], basis_error=_basis_error(matrix),
+                                                    evidence="head_basis"), native))
+                paired = _prefer_dominant(paired, volume) if paired else paired
+                for candidate, native in paired:
+                    sources.update(native["sources"])
+                    candidates.append(candidate)
                 if not candidates and natives and volume is not None:
-                    key = (volume, face[0])
-                    if key not in skin_groups:
-                        skin_groups[key] = _corroborated_group(
-                            _skin_candidates(natives, face, volume, context))
-                    candidates, reason = skin_groups[key]
+                    candidates, reason = _corroborated_group(skin_for(face, volume))
                     failure = reason or failure
                     owners = {candidate["component"] for candidate in candidates}
                     for native in natives:
@@ -355,13 +407,28 @@ def placement_resolver(inv, calls, components, context):
                 break
         else:
             failure = "" if matches else failure
+        approximate = False
+        if failure and natives and volume is not None:
+            faces = [capture.object(capture.calls[d])[0] for d in draws if d in capture.calls]
+            if faces and all(f and _difference(f[0], faces[0][0]) < 1e-7 for f in faces):
+                fallback = _best_effort(natives, faces[0], skin_for(faces[0], volume))
+                if fallback:
+                    matches, evidence = fallback
+                    approximate = True
+                    owners = {match["component"] for match in matches}
+                    for native in natives:
+                        if native["component"] in owners:
+                            sources.update(native["sources"])
         placement = dict(version=1, method="captured_matrices", status="unresolved", reason=failure)
-        if not failure:
+        if matches and (not failure or approximate):
             best = min(matches, key=lambda match: match["basis_error"])
             placement.update(status="proven", matrix=best["matrix"], matches=matches,
-                             evidence=best["evidence"],
+                             evidence=evidence if approximate else best["evidence"],
                              sources=list(sources.values()))
-            placement.pop("reason")
+            if approximate:
+                placement["approximate"] = True
+            else:
+                placement.pop("reason")
         return placement
 
     return resolve
@@ -395,7 +462,13 @@ def apply_placement(mesh, inv, context, *, validated_sources=None):
     if placement["status"] != "proven":
         component.diagnostics.append("Face placement unavailable: " + placement["reason"] + ". Captured coordinates retained.")
         return
-    if placement.get("evidence") == "skin_dominance":
+    if placement.get("approximate"):
+        component.diagnostics.append(
+            "Face placement is approximate (" + placement["reason"] + "); chosen from "
+            + placement["evidence"].replace("_", " ")
+            + f", head axes deviate {_tilt_degrees(placement['matrix']):.1f} degrees. "
+            "Check the face alignment.")
+    elif placement.get("evidence") == "skin_dominance":
         component.diagnostics.append(
             "Face placement proven from skin-dominant parent bones named by "
             f"{len({match['component'] for match in placement['matches']})} skeletons; "

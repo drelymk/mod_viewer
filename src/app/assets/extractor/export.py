@@ -248,12 +248,16 @@ def extract(analysis, selection=None, context=None):
     unresolved = [c for c in analysis.components if c.status in ("uncertain", "unsupported")]
     unplaced = [mesh for mesh in meshes if mesh.component.provenance.get(
         "gimi_face_placement", {}).get("status") == "unresolved"]
+    approximate = [mesh for mesh in meshes if mesh.component.provenance.get(
+        "gimi_face_placement", {}).get("approximate")]
     unproven = sum(c.unproven_direct and c.id not in selected_ids for c in analysis.components)
-    partial = bool(unresolved or unplaced)
+    partial = bool(unresolved or unplaced or approximate)
     if unresolved:
         diagnostics.append(f"Partial capture coverage: {len(unresolved)} unresolved or unsupported geometry candidates are not exported. Static attachments may be missing.")
     if unplaced:
         diagnostics.append(f"Captured face placement is unresolved for {len(unplaced)} components; their source coordinates are retained.")
+    if approximate:
+        diagnostics.append(f"Captured face placement is approximate for {len(approximate)} components (not proven by the capture); check the face alignment.")
     return ModelPackage(analysis, name, meshes, list(dict.fromkeys(diagnostics)), partial, time.perf_counter() - started,
                         skipped=len(unresolved), unproven_candidates=unproven)
 
@@ -352,7 +356,7 @@ def export(package, output, context=None, *, options=None):
                 placement = c.provenance.get("gimi_face_placement")
                 if placement:
                     meta["gimi_face_placement"] = {
-                        k: placement[k] for k in ("version", "method", "status", "matrix", "reason", "evidence")
+                        k: placement[k] for k in ("version", "method", "status", "matrix", "reason", "evidence", "approximate")
                         if k in placement}
                     if placement["status"] == "baked":
                         captured = "source_geometry/" + c.name + "-captured-position.buf"

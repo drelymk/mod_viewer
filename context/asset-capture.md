@@ -142,8 +142,13 @@ rules they must follow.
   when no bone matches it (some body types tilt the head axes), accept a bone that
   is the strict skin-weight plurality of the body vertices inside the face volume
   it places, naming one matrix in at least two independently skinned objects;
-  single-skeleton or conflicting skin evidence stays unresolved, and the report
-  states the axis deviation. Require one consistent transform across matching
+  disagreeing basis ties prefer the skin-dominant bone, and the report states the
+  axis deviation. When proof still fails but a replay-verified native skeleton
+  exists, place the face approximately instead of leaving it: the skin-dominant
+  parent (most skeletons, then best basis), else the nearest-basis bone within 15
+  degrees. Mark it `approximate`, keep the failure reason, report the capture
+  partial and warn on load. Missing, corrupt or unverified evidence stays
+  unresolved. Require one consistent transform across matching
   bones, related native objects and every facial draw; never hardcode bone IDs,
   CB slots or offsets, or infer placement from eyes.
 - Validate object/inverse blocks and replay every written SO vertex from source
