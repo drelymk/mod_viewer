@@ -18,7 +18,7 @@ from app.assets.extractor.geometry import Element, Mesh
 from app.assets.extractor.memory_capture import MemoryCapture
 from app.assets.extractor.profiles.gimi_faces import classify_faces, split_gated_shells
 from app.assets.extractor.profiles.gimi_placement import (
-    _IDENTITY, _corroborated_group, _dominant_bone, apply_placement)
+    _IDENTITY, _best_effort, _corroborated_group, _dominant_bone, _prefer_dominant, apply_placement)
 from tests.support.gimi_capture import FACE_TILT, make_face_capture
 from tests.support.extraction_data import header
 from app.assets.extractor.capture import Inventory
@@ -162,7 +162,7 @@ def test_captured_face_extraction_and_selection_lifecycle(tmp_path, monkeypatch,
     assert len(renamed.parts) == 1 and renamed.parts[0].positions == parts[native_name].positions
 
 
-@pytest.mark.parametrize("case", ["missing", "conflicting", "bad_inverse", "nonfinite",
+@pytest.mark.parametrize("case", ["missing", "bad_inverse", "nonfinite",
                                  "bad_palette", "unbound", "unsupported_scale"])
 def test_face_placement_rejects_missing_or_conflicting_capture_evidence(tmp_path, monkeypatch, case):
     dump, _originals = _capture(tmp_path, monkeypatch, case=case)
@@ -202,8 +202,12 @@ def test_tilted_head_axes_need_skin_evidence_from_two_skeletons(tmp_path, monkey
     alone, _ = _capture(tmp_path / "alone", monkeypatch, case="tilted")
     family = [c for c in discovery.analyze(alone).components if c.provenance.get("gimi_face_family")]
     assert len(family) == 3
-    assert {c.provenance["gimi_face_placement"]["status"] for c in family} == {"unresolved"}
-    assert {c.provenance["gimi_face_placement"]["reason"] for c in family} == {
+    # No proof, but the one skin-dominant parent is used and labelled approximate.
+    placements = [c.provenance["gimi_face_placement"] for c in family]
+    assert {p["status"] for p in placements} == {"proven"}
+    assert {p["evidence"] for p in placements} == {"skin_dominance"}
+    assert all(p["approximate"] for p in placements)
+    assert {p["reason"] for p in placements} == {
         "Captured skinning names the face parent in only one skeleton"}
 
     dump, originals = _capture(tmp_path / "pair", monkeypatch, case="tilted_corroborated")
@@ -234,6 +238,45 @@ def test_tilted_head_axes_need_skin_evidence_from_two_skeletons(tmp_path, monkey
         for entry in json.loads(metadata.read_text())["components"]:
             if "gimi_face_placement" in entry:
                 assert entry["gimi_face_placement"]["evidence"] == "skin_dominance"
+
+
+def test_ambiguous_basis_ties_pick_a_best_effort_placement(tmp_path, monkeypatch):
+    dump, _originals = _capture(tmp_path, monkeypatch, case="conflicting")
+    analysis = discovery.analyze(dump)
+    family = [c for c in analysis.components if c.provenance.get("gimi_face_family")]
+    placements = [c.provenance["gimi_face_placement"] for c in family]
+    assert {p["status"] for p in placements} == {"proven"}
+    assert {p["evidence"] for p in placements} == {"nearest_basis"}
+    assert all(p["approximate"] for p in placements)
+    monkeypatch.setattr(hash_asset, "_solve_face_alignment", _no_fit)
+    package = extract(analysis, Selection("Approximate"))
+    assert package.partial
+    assert any("approximate" in d for d in package.diagnostics)
+    _report, loaded = _export_and_load(package, tmp_path / "exports")
+    assert {w["reason"] for w in loaded.warnings} == {"captured_face_placement_approximate"}
+    assert loaded.parts
+
+
+def test_nearest_basis_is_the_last_resort_and_is_tilt_limited():
+    face = (_IDENTITY, dict(draw="f"))
+    native = dict(component="n", objects=[(_IDENTITY, dict(draw="b"))], inverses=[(1, _IDENTITY)],
+                  palette={}, replay={}, positions=[], influences=[])
+    picked = _best_effort([native], face, [])
+    assert picked is None  # identity is 90 degrees from the head basis
+    rotated = (( 0., 0., -1., 0.), (-1., 0., 0., 0.), (0., 1., 0., 0.), (0., 0., 0., 1.))
+    native["inverses"] = [(1, rotated)]
+    candidates, evidence = _best_effort([native], face, [])
+    assert evidence == "nearest_basis" and candidates[0]["bone"] == 1
+
+
+def test_basis_ties_with_different_matrices_prefer_the_skin_dominant_bone():
+    dominant = _skin_native([[(1, 1.)]] * 12)
+    other = _skin_native([[(1, 1.)]] * 12)
+    paired = [(dict(matrix=_IDENTITY, bone=1), dominant), (dict(matrix=_SHIFTED, bone=2), other)]
+    assert [c["bone"] for c, _ in _prefer_dominant(paired, _FACE_VOLUME)] == [1]
+    assert _prefer_dominant(paired, None) == paired
+    same = [(dict(matrix=_IDENTITY, bone=1), dominant), (dict(matrix=_IDENTITY, bone=2), other)]
+    assert _prefer_dominant(same, _FACE_VOLUME) == same
 
 
 def _skin_native(influences, positions=None):

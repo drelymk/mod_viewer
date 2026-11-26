@@ -531,13 +531,6 @@ def solve(body_eyes, face_anchor, landmark=None, *, landmark_kind=None,
     })
 
 
-def solve_face_alignment(body_eyes, face_anchor, landmark=None, *,
-                         landmark_kind=None, refine=True):
-    """Descriptive alias for callers outside the geometry module."""
-    return solve(body_eyes, face_anchor, landmark,
-                 landmark_kind=landmark_kind, refine=refine)
-
-
 def unpack_f32x3(data):
     """Unpack canonical packed Float32 XYZ data."""
     if data is None or len(data) % 12:
@@ -548,14 +541,15 @@ def unpack_f32x3(data):
     return points
 
 
-def _transform_vectors(data, matrix, *, normalize=False):
+def _transform_vectors(data, matrix, *, normalize=False, translate=False):
     if data is None:
         return None
     points = unpack_f32x3(data)
     result = bytearray(len(points) * 12)
     for index, point in enumerate(points):
-        transformed = _rotation_point((
-            matrix[0][:3], matrix[1][:3], matrix[2][:3]), point)
+        transformed = (transform_point(matrix, point) if translate else
+                       _rotation_point((matrix[0][:3], matrix[1][:3],
+                                        matrix[2][:3]), point))
         if normalize:
             length = _length(transformed)
             if length > _EPSILON:
@@ -566,14 +560,7 @@ def _transform_vectors(data, matrix, *, normalize=False):
 
 def transform_position_bytes(data, matrix):
     """Transform packed canonical positions, including translation."""
-    if data is None:
-        return None
-    points = unpack_f32x3(data)
-    result = bytearray(len(points) * 12)
-    for index, point in enumerate(points):
-        struct.pack_into("<3f", result, index * 12,
-                         *transform_point(matrix, point))
-    return bytes(result)
+    return _transform_vectors(data, matrix, translate=True)
 
 
 def transform_normal_bytes(data, matrix):
@@ -583,7 +570,7 @@ def transform_normal_bytes(data, matrix):
 
 __all__ = [
     "AlignmentMesh", "GimiFaceAlignment", "Matrix4", "Vec3",
-    "solve", "solve_face_alignment",
+    "solve",
     "transform_normal_bytes", "transform_point", "transform_position_bytes",
     "unpack_f32x3",
 ]
