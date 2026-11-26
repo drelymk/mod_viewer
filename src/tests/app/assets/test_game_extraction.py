@@ -39,7 +39,7 @@ def attributes(values):
     return struct.pack("<i", len(values)) + b"".join(string(key) + struct.pack("<i", len(data)) + data for key, data in values.items())
 
 
-def psa(bones, rows, duration=1):
+def psa(bones, rows, duration=1, *, scales=None):
     records = bytearray()
     for bone in bones:
         row = bytearray(120)
@@ -56,7 +56,10 @@ def psa(bones, rows, duration=1):
         keys.extend(struct.pack("<8f", x, -y, z, qx, -qy, qz, -qw if bones[ordinal % len(bones)]["parent"] < 0 else qw, 1))
     def chunk(name, size, count, data):
         return struct.pack("<20siii", name, 0, size, count) + data
-    return chunk(b"BONENAMES", 120, len(bones), records) + chunk(b"ANIMINFO", 168, 1, info) + chunk(b"ANIMKEYS", 32, len(rows), keys)
+    data = chunk(b"BONENAMES", 120, len(bones), records) + chunk(b"ANIMINFO", 168, 1, info) + chunk(b"ANIMKEYS", 32, len(rows), keys)
+    if scales is not None:
+        data += chunk(b"SCALEKEYS", 16, len(rows), b"".join(struct.pack("<4f", *scale, 0) for scale in scales))
+    return data
 
 
 def fixture(tmp_path, scale=(1, 1, 1)):
@@ -1655,6 +1658,10 @@ MODEL01 = "Client/Content/Aki/Effect/DataAsset/DA_Mesh01"
 ABSOLUTE = "EAnimLinkMethod::Absolute"
 MESH_KEY = f"EffectModelSkeletalMesh_C'{MODEL01}.DA_Mesh01'"
 REFS = dict(SkeletalMeshRef=dict(ObjectPath=MESH + ".0"), AnimationRef=dict(ObjectPath=BASE + ".1"))
+def _scale(*keys, axes=("Curve", "Curve[1]", "Curve[2]"), mode="RCIM_Linear"):
+    """An effect model's per-axis Scale curves with (time, value) keys of one interpolation."""
+    return {axis: dict(EditorCurveData=dict(Keys=[dict(InterpMode=mode, Time=time, Value=value)
+                                                   for time, value in keys])) for axis in axes}
 
 
 @pytest.mark.parametrize("check,value,expected", [
@@ -1671,7 +1678,7 @@ REFS = dict(SkeletalMeshRef=dict(ObjectPath=MESH + ".0"), AnimationRef=dict(Obje
     ("group", [dict(Type="EffectModelNiagara_C", Properties={})], ([], None, None)),
     ("group", [dict(Type="EffectModelGroup_C", Properties=dict(Location=dict(bUseCurve=True), EffectData=[
         dict(Key=MESH_KEY, Value=0.0)]))],
-     ([(MODEL01, 0.0)], (0.0, 0.0, 0.0), "The effect group has settings the viewer does not support: Location.")),
+     ([(MODEL01, 0.0)], (0.0, 0.0, 0.0), None)),
     ("group", None, None),
     # A notify may name one mesh model directly: it plays at spawn without a group level.
     ("group", [dict(Type="EffectModelSkeletalMesh_C", Properties=REFS)], ([(MODEL01, 0.0)], None, None)),
@@ -1681,6 +1688,15 @@ REFS = dict(SkeletalMeshRef=dict(ObjectPath=MESH + ".0"), AnimationRef=dict(Obje
      ((MESH, BASE), (0.1, 1.0, 1.2), None)),
     ("model", dict(REFS, Looping=True), ((MESH, BASE), None, "The effect mesh animation loops.")),
     ("model", dict(REFS, HideFrames=2),
+     ((MESH, BASE), None, "The effect mesh model has settings the viewer does not support: HideFrames.")),
+    # Scale curves only drive the mesh with bUseCurve, and cubic keys are not reproduced.
+    ("model", dict(REFS, StartTime=40, Scale=_scale((0, 0), (0.015, 1))), ((MESH, BASE), (40.0, 0.0, 0.0), None)),
+    ("model", dict(REFS, StartTime=1, Scale=dict(_scale((0, 0), (0.015, 1)), bUseCurve=True)),
+     ((MESH, BASE), (1.0, 0.0, 0.0), None)),
+    ("model", dict(REFS, StartTime=1, Scale=dict(_scale((0, 0), (0.015, 1), mode="RCIM_Cubic"), bUseCurve=True)),
+     ((MESH, BASE), None, "The effect curve interpolation is unsupported.")),
+    ("model", dict(REFS, HideFrames=0), ((MESH, BASE), (0.0, 0.0, 0.0), None)),
+    ("model", dict(REFS, HideFrames=2, Scale=_scale((0, 0), (0.015, 1))),
      ((MESH, BASE), None, "The effect mesh model has settings the viewer does not support: HideFrames.")),
     ("model", dict(SkeletalMeshRef=dict(ObjectPath=MESH + ".0")),
      (None, None, "The effect mesh model names no character mesh and animation.")),
@@ -1717,17 +1733,157 @@ def test_effect_props_follow_the_game_effect_lifetimes(check, value, expected):
         assert (pytest.approx(result) if check == "visible" else result) == expected
 
 
-@pytest.mark.parametrize("socket,attached,start,expected", [
-    # Without a socket: the mesh's origin, while the root rests at spawn.
-    (None, True, 0, ("fixed", "origin")),
-    (None, True, 1.5, "The clip moves its root when the effect spawns."),
-    # Attached: follows the socket. Placed: the socket's world at spawn, even while it moves later.
-    ("Bone01", True, 0, ("socket", 1)),
-    ("Bone01", False, 0, ("fixed", "bone")),
-    ("Bone01", False, 0.5, "The effect spawns while its socket moves between frames."),
-    ("Bone03", True, 0, "The effect socket is not a unique bone of the verified rig."),
+def _curve_keys(*keys, mode="RCIM_Linear"):
+    """One transform axis curve with (time, value) keys of one interpolation."""
+    return dict(EditorCurveData=dict(Keys=[dict(InterpMode=mode, Time=time, Value=value) for time, value in keys]))
+
+
+@pytest.mark.parametrize("check,value,expected", [
+    # Handled and ignored settings never block; blocking ones block unless neutral; any other is unverified.
+    ("classify", ("notify", dict(Location=dict(X=1), exportIndex=3)), ([], [])),
+    ("classify", ("mesh model", dict(bForceLod0=True, NativeClass="Cls", CurrentTimeLength=1.0)), ([], [])),
+    ("classify", ("notify", dict(NotRealAttach=True, AttachLocationTime=0.5)), (["AttachLocationTime", "NotRealAttach"], [])),
+    ("classify", ("notify", dict(NotRealAttach=False, AttachLocationTime=0, PlayNeedTags=[])), ([], [])),
+    ("classify", ("mesh model", dict(HideFrames=0)), ([], [])),
+    ("classify", ("mesh model", dict(HideFrames=2, Foo=1)), (["HideFrames"], ["Foo"])),
+    ("classify", ("group", dict(Mystery=None)), ([], ["Mystery"])),
+    ("classify", ("notify", {"(unreadable)": None}), (["(unreadable)"], [])),
+    ("classify", ("notify", "unreadable"), (["(unreadable)"], [])),
+    # Notify offsets: Unreal to asset space negates Y; Rotation is Pitch, Yaw, Roll in degrees.
+    ("offset", (dict(Location=dict(X=1, Y=2, Z=3)), (0, 0, 0)), [1, -2, 3]),
+    ("offset", (dict(Rotation=dict(Yaw=90)), (1, 0, 0)), [0, -1, 0]),
+    ("offset", (dict(Rotation=dict(Pitch=90)), (1, 0, 0)), [0, 0, 1]),
+    ("offset", (dict(Scale=dict(X=2, Y=2, Z=2)), (1, 1, 0)), [2, 2, 0]),
+    ("offset", (dict(Scale=dict(X=0, Y=1, Z=1)), (1, 0, 0)), None),
+    ("offset", (dict(Location=5), (0, 0, 0)), None),
+    # Group and model transforms: Constant unless bUseCurve, then curves per axis (held outside their keys).
+    ("transform", (dict(Location=dict(Constant=dict(X=1, Y=0, Z=0), Curve=_curve_keys((0, 5), (1, 9)))), [0.5], 3),
+     [[1, 0, 0]]),
+    ("transform", (dict(Location=dict(bUseCurve=True, Curve=_curve_keys((0, 0), (1, 2)))), [0.5], 3), [[1, 0, 0]]),
+    ("transform", (dict(Location=dict(bUseCurve=True, Curve=_curve_keys((0, 0), (1, 2), mode="RCIM_Constant"))),
+                   [0.5, 1, 2], 3), [[0, 0, 0], [2, 0, 0], [2, 0, 0]]),
+    ("transform", (dict(Location=dict(bUseCurve=True, Curve=_curve_keys((0, 0), (1, 2)))), [-1, 5], 3),
+     [[0, 0, 0], [2, 0, 0]]),
+    # Rotation axes are Roll, Pitch and Yaw: Z 90 is the notify's Yaw 90.
+    ("transform", (dict(Rotation=dict(Constant=dict(Z=90))), [0], 0), [[0, -1, 0]]),
+    ("transform", (dict(Location=dict(bUseCurve=True, Curve=_curve_keys((0, 0), (1, 2), mode="RCIM_Cubic"))), [0.5], 3), None),
+    ("transform", (dict(Location=dict(Constant=dict(X=0, Y=0, Z=0), Foo=1)), [0], 3), None),
+    # A group's curve runs from its own start, so the mesh's delay shifts it.
+    ("combined", ({}, dict(Location=dict(bUseCurve=True, Curve=_curve_keys((0, 0), (2, 2)))), {}, 1.0, [0.0]), [[1, 0, 0]]),
+    ("combined", ({}, {}, {}, 0.0, [0.0]), "none"),
 ])
-def test_effect_placement_reproduces_the_notify_attachment(tmp_path, socket, attached, start, expected):
+def test_effect_settings_are_classified_and_offsets_reproduced(check, value, expected):
+    from app.assets.game_extract import wuwa_effect_settings as policy
+
+    def run():
+        if check == "classify":
+            return policy.classify(*value)
+        if check == "offset":
+            properties, point = value
+            return (policy.notify_offset(properties) @ [*point, 1])[:3].round(9).tolist()
+        if check == "transform":
+            properties, moments, column = value
+            return policy.level_transform(properties)(moments)[:, :3, column].round(9).tolist()
+        notify, group, model, delay, moments = value
+        sampler = policy.combined(notify, group, model, delay)
+        return "none" if sampler is None else sampler(moments)[:, :3, 3].round(9).tolist()
+
+    if expected is None:
+        with pytest.raises(ValueError):
+            run()
+    else:
+        assert run() == expected
+
+
+def test_prop_scale_keys_hide_and_resize_props():
+    from app.assets.animation_conversion import convert_clip
+    from app.assets.game_extract import wuwa_blueprint_props
+
+    class Writer:
+        def __init__(self):
+            self.lengths = []
+
+        def write(self, data, track=False):
+            digest = hashlib.sha256(data).hexdigest()
+            self.lengths.append(len(data))
+            return f"Props/{digest[:32]}.bin", digest
+
+    bones = [dict(name="Root", parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
+             dict(name="Bone01", parent=0, translation=[1, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])]
+    rig = dict(bones=bones)
+    root, bone = (0, 0, 0, 0, 0, 0, 1), (1, 0, 0, 0, 0, 0, 1)
+    rows = [root, bone, root, bone]
+    # Bone01 hides at scale 0 on the first frame and shows at 0.9 on the second.
+    scaled_psa = psa(bones, rows, 1, scales=[(1, 1, 1), (0, 0, 0), (1, 1, 1), (0.9, 0.9, 0.9)])
+    plain_psa = psa(bones, rows, 1)
+
+    frames, scaled_binary = convert_clip(scaled_psa, rig, 1, scales=True)
+    records = list(struct.iter_unpack("<10f", scaled_binary))
+    assert frames == 2 and len(records) == 4
+    assert records[1][7:] == pytest.approx((0, 0, 0)) and records[3][7:] == pytest.approx((0.9, 0.9, 0.9))
+    _frames, plain_binary = convert_clip(plain_psa, rig, 1, scales=True)
+    assert [record[7:] for record in struct.iter_unpack("<10f", plain_binary)] == [(1, 1, 1)] * 4
+    # Without scales, the output keeps the old 7-float records exactly.
+    assert convert_clip(scaled_psa, rig, 1, scales=False)[1] == convert_clip(plain_psa, rig, 1)[1]
+
+    affine = np.frombuffer(wuwa_blueprint_props.bake(scaled_binary, 2, bones, np.eye(4), affine=True), "<f4")
+    assert affine.size == 2 * 2 * 12
+    affine = affine.reshape(2, 2, 3, 4)
+    assert np.allclose(affine[0, 1, :, :3], 0)
+    assert affine[1, 1, :, :3] == pytest.approx(0.9 * np.eye(3))
+    rigid = wuwa_blueprint_props.bake(plain_binary, 2, bones, np.eye(4))
+    assert len(rigid) == 2 * 2 * 7 * 4
+
+    writer = Writer()
+    entries, failures, extra = wuwa_blueprint_props.write_tracks(
+        writer, {"A": (2, scaled_binary, 1.0, None), "B": (2, plain_binary, 1.0, None)}, bones, np.eye(4))
+    assert set(entries) == {"A", "B"} and failures == {}
+    assert extra == {"track_layout": "prop-track-v2"}
+    assert writer.lengths == [2 * 2 * 48, 2 * 2 * 48]
+
+    writer = Writer()
+    entries, failures, extra = wuwa_blueprint_props.write_tracks(
+        writer, {"B": (2, plain_binary, 1.0, None)}, bones, np.eye(4))
+    assert set(entries) == {"B"} and failures == {} and extra == {}
+    assert writer.lengths == [2 * 2 * 28]
+
+    # Keys are relative to a rest scale other than 1: a key of 1 draws the built size.
+    shrunk = [bones[0], dict(bones[1], scale=[0.5, 0.5, 0.5])]
+    relative_psa = psa(shrunk, rows, 1, scales=[(1, 1, 1), (1, 1, 1), (1, 1, 1), (0.5, 0.5, 0.5)])
+    _frames, relative = convert_clip(relative_psa, dict(bones=shrunk), 1, scales=True)
+    assert [record[7:] for record in struct.iter_unpack("<10f", relative)][1::2] == [(0.5,) * 3, (0.25,) * 3]
+    drawn = np.frombuffer(wuwa_blueprint_props.bake(relative, 2, shrunk, np.eye(4), affine=True), "<f4").reshape(2, 2, 3, 4)
+    assert drawn[0, 1, :, :3] == pytest.approx(np.eye(3)) and drawn[1, 1, :, :3] == pytest.approx(0.5 * np.eye(3))
+    # Offsets move the whole pose: a z translation of 5 shifts Bone01's delta by 5 in z; a scaled
+    # offset makes its track affine.
+    shift = np.eye(4)
+    shift[2, 3] = 5
+    moved = np.frombuffer(wuwa_blueprint_props.bake(plain_binary, 2, bones, np.eye(4), affine=True,
+                                                    offsets=np.stack([shift, shift])), "<f4").reshape(2, 2, 3, 4)
+    base = np.frombuffer(wuwa_blueprint_props.bake(plain_binary, 2, bones, np.eye(4), affine=True),
+                         "<f4").reshape(2, 2, 3, 4)
+    np.testing.assert_allclose(moved[:, 1, :, 3] - base[:, 1, :, 3], [[0, 0, 5], [0, 0, 5]], atol=1e-6)
+    writer = Writer()
+    scaled_offset = np.stack([np.diag([2.0, 2.0, 2.0, 1.0])] * 2)
+    entries, failures, extra = wuwa_blueprint_props.write_tracks(
+        writer, {"C": (2, plain_binary, 1.0, scaled_offset)}, bones, np.eye(4))
+    assert set(entries) == {"C"} and failures == {} and extra == {"track_layout": "prop-track-v2"}
+
+
+@pytest.mark.parametrize("socket,attached,start,settings,expected", [
+    # Without a socket: the mesh's origin, while the root rests at spawn.
+    (None, True, 0, {}, ("fixed", "origin")),
+    (None, True, 1.5, {}, "The clip moves its root when the effect spawns."),
+    # Attached: follows the socket. Placed: the socket's world at spawn, even while it moves later.
+    ("Bone01", True, 0, {}, ("socket", 1)),
+    ("Bone01", False, 0, {}, ("fixed", "bone")),
+    ("Bone01", False, 0.5, {}, "The effect spawns while its socket moves between frames."),
+    ("Bone03", True, 0, {}, "The effect socket is not a unique bone of the verified rig."),
+    # A blocking notify setting refuses the placement; an ignored one places normally.
+    ("Bone01", True, 0, {"NotRealAttach": True}, "The effect notify has settings the viewer does not support: NotRealAttach."),
+    ("Bone01", True, 0, {"bRestartWithReplay": True}, ("socket", 1)),
+])
+def test_effect_placement_reproduces_the_notify_attachment(tmp_path, socket, attached, start, settings, expected):
     from app.assets.game_extract import wuwa_effect_props
 
     rig = dict(bones=[dict(name="Root", parent=-1, translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1]),
@@ -1741,7 +1897,7 @@ def test_effect_placement_reproduces_the_notify_attachment(tmp_path, socket, att
     (tmp_path / "Clip01.bin").write_bytes(frames.tobytes())
     (tmp_path / "Clip01.json").write_text(json.dumps(dict(layout="frame-major-tq-f32le", frame_count=4, bone_count=3,
                                                           duration=3, data_file="Clip01.bin")))
-    notify = dict(socket=socket, attached=attached, start=start, settings=[])
+    notify = dict(socket=socket, attached=attached, start=start, settings=settings)
     use = dict(clip="Clip01", notify=notify)
     poses = wuwa_effect_props._Poses(tmp_path, rig)
     try:

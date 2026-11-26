@@ -56,10 +56,10 @@ def exported_file(item, directory, extension):
 SEQUENCE_PROPERTIES = ("Skeleton", "AdditiveAnimType", "RefPoseType", "NumFrames", "SequenceLength")
 # Notify states that spawn an effect (which may be an animated mesh) for their window.
 EFFECT_NOTIFY = "AnimNotifyStateEffect_C"
-# Effect notify settings prop extraction reproduces (see wuwa_effect_props): the
-# effect, its socket and attachment, its stop, time sync, its replacement slot, its inner
-# notifies and what happens when a skill ends (the viewer's clip has no skill). Any other
-# one (an offset, a follow rule, a tag gate...) is reported, never approximated.
+# Core effect notify facts read into each notify's fields: the effect, its socket and
+# attachment, its stop, time sync, its replacement slot, its inner notifies and what happens
+# when a skill ends (the viewer's clip has no skill). Every other notify property is kept
+# in ``settings`` for classification (see wuwa_effect_settings).
 EFFECT_SETTINGS = frozenset(("EffectDataAssetRef", "SocketName", "Attached", "FasterStop", "SyncEventTimeToEffectTime",
                              "SyncEventTimeContinuous", "EffectSlotName", "EndInnerAnimNotifyStatesOnStop",
                              "DetachWhenSkillEnd", "WhenSkillEnd", "exportIndex", "CurrentTimeLength"))
@@ -71,8 +71,9 @@ def effect_notifies(row, rows):
     ``[{effect, socket, attached, faster_stop, start, duration, link, settings}]``.
     Both flags default to on: ``FasterStop`` in the notify class, and ``Attached`` in its
     native base, which cooked notifies only ever turn off (only values differing from the
-    default are stored, and no notify stores it on). ``settings`` lists the notify
-    object's other (or unreadable) property names. Nothing here is validated."""
+    default are stored, and no notify stores it on). ``settings`` maps every other property
+    of the notify object to its value (``{"(unreadable)": None}`` when the object cannot be
+    read). Nothing here is validated."""
     objects = {}
     for item in rows:
         if isinstance(item, dict) and item.get("Type") == EFFECT_NOTIFY and isinstance(item.get("Name"), str):
@@ -94,7 +95,8 @@ def effect_notifies(row, rows):
             socket=socket if isinstance(socket, str) and socket not in ("", "None") else None,
             attached=properties.get("Attached") is not False, faster_stop=properties.get("FasterStop") is not False,
             start=notify.get("LinkValue"), duration=notify.get("Duration"), link=notify.get("LinkMethod"),
-            settings=sorted(set(properties) - EFFECT_SETTINGS) if target else ["(unreadable)"]))
+            settings={name: value for name, value in properties.items() if name not in EFFECT_SETTINGS}
+            if target else {"(unreadable)": None}))
         if len(found) == MAX_EFFECT_NOTIFIES:
             break
     return found
@@ -317,15 +319,18 @@ def verify_candidates(client, captured, candidates, cancel):
 
 
 def manifest_props(props):
-    """Manifest prop entries: everything but the report-only ``source``, ``section`` and ``texture_error``."""
-    return [{key: value for key, value in prop.items() if key not in ("source", "section", "texture_error")}
-            for prop in props]
+    """Manifest prop entries: everything but the report-only ``source``, ``section``, ``texture_error``
+    and ``unverified_settings``."""
+    return [{key: value for key, value in prop.items()
+             if key not in ("source", "section", "texture_error", "unverified_settings")} for prop in props]
 
 
 def report_props(props):
     """Extraction report summaries of the written props."""
     return [dict(id=prop["id"], name=prop["name"], source=prop["source"], textures=sorted(prop.get("textures", {})),
-                 **({"texture_error": prop["texture_error"]} if "texture_error" in prop else {})) for prop in props]
+                 **({"texture_error": prop["texture_error"]} if "texture_error" in prop else {}),
+                 **({"unverified_settings": prop["unverified_settings"]} if "unverified_settings" in prop else {}))
+            for prop in props]
 
 
 def rest_worlds(bones, *, affine=False):

@@ -98,8 +98,13 @@ Shared rules: [game-extract.md](game-extract.md). Playback contracts:
   wins), same frame interval, no longer than the clip; it pairs with every same-named
   clip it fits, and a clip paired twice is not guessed. Bake `prop-track-v1` tracks
   (per frame and bone, asset-space translation + quaternion relative to the rigid
-  socket rest). Manifest props carry `socket`, `bone_count` and `tracks` (clip id ->
-  file, sha256, frame_count, duration, window `start`/`end`).
+  socket rest). Prop sequences keep their PSA scale keys (the game hides props by
+  scaling a bone to 0 and resizes them); a key is relative to the bone's rest scale (a
+  key of 1 draws the built size, as frame dumps show for a rest scale other than 1).
+  A prop whose sequences scale any bone off its rest scale bakes every track as
+  `prop-track-v2` affine rows instead, for blueprint and effect props alike. Manifest
+  props carry `socket`, `bone_count`, `tracks` (clip id -> file, sha256, frame_count,
+  duration, window `start`/`end`) and, when affine, `track_layout`.
 - Serving checks every track and publishes one fresh single-use blob of the
   session's clips per load; a prop lacking a track for any session clip is left
   out. Playback applies the socket's clip transform over the track sampled at clip
@@ -118,15 +123,20 @@ Shared rules: [game-extract.md](game-extract.md). Playback contracts:
 - Effect placement: attached effects follow their socket (a unique rig bone);
   `Attached` defaults on. Unattached ones are placed once at the socket's clip-pose
   world at spawn (`socket` null). Socketless ones sit at the mesh origin, accepted
-  only while the clip's root bones rest at spawn.
+  only while the clip's root bones rest at spawn. Notify `Location`/`Rotation`/`Scale`
+  and group/model transforms (`Constant`, or axis curves only with `bUseCurve`; Rotation
+  axes are Roll, Pitch, Yaw; curve time counts from that level's start) compose socket
+  x notify x group x model; offsets after the mesh animation's last frame hold its value.
 - Effect timing: spawn at the notify's absolute start; the mesh plays after its
   group delay; each level has a `StartTime`/`LoopTime`/`EndTime` lifetime that ends
   after their sum without a loop, or with one lives until the notify ends and then
   plays out unless `FasterStop` (default on) stops it. Hide when either level ends
   and never after the clip (`ContinuousLoop` only concerns particle groups).
-  Supported settings: effect, socket, `Attached`, `FasterStop`, time sync,
-  `EffectSlotName`, inner-notify ending on stop and skill-end handling; anything else
-  (offsets, `NotRealAttach`, tag gates, looping mesh animations) goes to
-  `skipped_props` (`kind` `effect`), never approximated. The animation must convert
+  Settings are classified by `wuwa_effect_settings`: handled, ignored, or blocking
+  unless at a neutral value. Unknown settings never drop a mesh; the prop's report
+  entry lists them as `unverified_settings` (report only). Blocking ones (`NotRealAttach`,
+  `AttachLocationOnly`, `AttachLocationTime`, tag gates `PlayNeedTags`, `HideFrames`,
+  looping mesh animations) go to `skipped_props` (`kind` `effect`), never approximated.
+  The animation must convert
   onto the mesh's own bones. One mesh at one placement is one prop; the n-th spawn
   is the n-th instance. Tracks carry the clip window and hold their last frame.
