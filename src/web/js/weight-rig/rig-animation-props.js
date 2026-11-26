@@ -12,6 +12,7 @@ import {
   Uint16BufferAttribute,
   Vector3,
 } from 'three';
+import { invalidateCharacterShadowMap } from '../scene/shadow-invalidation.js';
 
 // Game props that the capture never drew. Extraction skins them in asset space, so
 // clip bone transforms apply to them directly. They exist only while a clip is applied:
@@ -100,6 +101,8 @@ function propMesh(descriptor, buffer, boneCount, textured) {
   );
   mesh.frustumCulled = false;
   mesh.matrixAutoUpdate = false;
+  // Props join the character's shadow pass like the body meshes do.
+  mesh.castShadow = mesh.receiveShadow = true;
   textured?.bind(mesh);
   return { mesh, palette, textured };
 }
@@ -232,6 +235,8 @@ export function createAnimationProps({ loadProps, getScene, requestRender, mater
       prop.mesh.skeleton.update();
       if (prop.mesh.parent !== scene) scene.add(prop.mesh);
     }
+    // Props move every frame, so the cached shadow map must be redrawn with them.
+    invalidateCharacterShadowMap({ request: false });
     requestRender();
   }
   function dispose() {

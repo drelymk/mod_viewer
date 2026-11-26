@@ -15,7 +15,6 @@ import zlib
 
 from . import unity_dds, zzz_index
 from .runtime import ExtractionCancelled, check_cancelled
-from .zzz_morphs import _references
 
 # Captured hash.json role names -> viewer texture roles extraction can prove byte-exactly.
 CAPTURED_ROLES = {"Diffuse": "diffuse", "LightMap": "light_map", "MaterialMap": "material_map"}
@@ -144,7 +143,7 @@ def renderers(reader, chosen, mesh):
         renderer = row["renderer"]
         if zlib.crc32(renderer["path"].encode("utf-8")) not in paths:
             continue
-        sources = _references(avatars, row, renderer.get("avatar"), "Avatar")
+        sources = zzz_index.references(avatars, row, renderer.get("avatar"), "Avatar")
         if sources and sources <= chosen["avatar_sources"]:
             found.append(row)
     return sorted(found, key=zzz_index.identity)

@@ -6,76 +6,66 @@ function afterWeightReadyPaint() {
   });
 }
 
-/** Own the Weight-ready, saved-selection, Rig-build, and Physics-restore stages. */
+const failure = (error) => ({ error: error instanceof Error ? error.message : String(error) });
+const succeeded = (result) => result !== false && !result?.error;
+
+/**
+ * Activate Weight/Rig in two stages. The shared stage decodes the model's
+ * weights, which every feature reads, and lets the Weight-ready state paint.
+ * Then three independent branches run in parallel:
+ * - weight: restore the saved bone selection, then sync Physics to it (Physics
+ *   consumes the selected source rigs directly, so it never waits on the Rig);
+ * - rig: build the model rig;
+ * - animation: publish the game-clip library, which needs only the weights.
+ * A branch that succeeds is kept until `invalidate()` (called on every model
+ * rebaseline); a failed one retries on the next activation without rerunning
+ * the others.
+ */
 export function createWeightRigActivationSession({
   getGeneration,
   ensureWeightsLoaded,
-  restoreSavedSelection,
-  ensureRigLoaded,
-  syncPhysicsToSelection,
+  branches = {},
   waitForWeightReadyPaint = afterWeightReadyPaint,
 } = {}) {
   let activationSerial = 0;
   let activeActivation = null;
-  let completedActivation = null;
-  let paintedGeneration = null;
-  let physicsReadyGeneration = null;
+  let painted = false;
+  const done = new Map();
+
+  function runBranch(name, isCurrent) {
+    if (done.has(name)) return Promise.resolve(done.get(name));
+    return Promise.resolve()
+      .then(() => branches[name]?.({ isCurrent }))
+      .catch(failure)
+      .then((result) => {
+        if (isCurrent() && succeeded(result)) done.set(name, result);
+        return result;
+      });
+  }
 
   function activate() {
     const generation = getGeneration();
-    if (completedActivation?.generation === generation) return Promise.resolve(completedActivation.result);
     if (activeActivation?.generation === generation) return activeActivation.promise;
     const serial = ++activationSerial;
     const isCurrent = () => serial === activationSerial && generation === getGeneration();
 
     const promise = (async () => {
-      let weight;
+      let weights;
       try {
-        weight = await ensureWeightsLoaded();
+        weights = await ensureWeightsLoaded();
       } catch (error) {
-        return { weight: { loaded: false, error: error instanceof Error ? error.message : String(error) } };
+        return { weights: { loaded: false, ...failure(error) } };
       }
-      if (!isCurrent() || !weight?.loaded || weight.error) return { weight };
-      if (weight.noWeights) {
-        const result = { weight };
-        if (isCurrent()) completedActivation = { generation, result };
-        return result;
-      }
-
-      if (paintedGeneration !== generation) {
+      if (!isCurrent() || !weights?.loaded || weights.error || weights.noWeights) return { weights };
+      if (!painted) {
         await waitForWeightReadyPaint();
-        if (!isCurrent()) return { weight, stale: true };
-        paintedGeneration = generation;
+        if (!isCurrent()) return { weights, stale: true };
+        painted = true;
       }
-
-      let selection;
-      try {
-        selection = await restoreSavedSelection?.({ generation, isCurrent });
-      } catch (error) {
-        selection = { error: error instanceof Error ? error.message : String(error) };
-      }
-      if (!isCurrent()) return { weight, selection, stale: true };
-      const selectionReady = selection !== false && !selection?.error;
-
-      // Physics consumes the selected source rigs directly and remains useful
-      // when cross-source model reconciliation fails.
-      const [physics, rig] = await Promise.all([
-        physicsReadyGeneration === generation
-          ? Promise.resolve({ restored: true, reused: true })
-          : Promise.resolve()
-              .then(() => syncPhysicsToSelection?.())
-              .catch((error) => ({ error: error instanceof Error ? error.message : String(error) })),
-        Promise.resolve()
-          .then(() => ensureRigLoaded?.())
-          .catch((error) => ({ error: error instanceof Error ? error.message : String(error) })),
-      ]);
-      const result = { weight, selection, physics, rig, stale: !isCurrent() };
-      const physicsReady = physics !== false && !physics?.error;
-      if (isCurrent() && physicsReady) physicsReadyGeneration = generation;
-      if (isCurrent() && rig?.loaded && !rig.error && physicsReady && selectionReady) {
-        completedActivation = { generation, result };
-      }
-      return result;
+      const [weight, rig, animation] = await Promise.all(
+        ['weight', 'rig', 'animation'].map((name) => runBranch(name, isCurrent)),
+      );
+      return { weights, weight, rig, animation, stale: !isCurrent() };
     })().finally(() => {
       if (activeActivation?.serial === serial) activeActivation = null;
     });
@@ -87,9 +77,8 @@ export function createWeightRigActivationSession({
   function invalidate() {
     activationSerial += 1;
     activeActivation = null;
-    completedActivation = null;
-    paintedGeneration = null;
-    physicsReadyGeneration = null;
+    painted = false;
+    done.clear();
   }
 
   return { activate, invalidate };

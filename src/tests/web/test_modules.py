@@ -2544,22 +2544,26 @@ def test_weight_session_preserves_model_wide_descriptor_through_saved_selection_
     assert result['saved']['entries'][0]['bone_ids'] == [3, 5]
 
 
-def test_weight_rig_activation_sequences_ready_paint_and_retries_independent_stages(module_page):
+def test_weight_rig_activation_runs_branches_in_parallel_and_retries_only_failures(module_page):
     result = module_page.evaluate("""async () => {
       const {createWeightRigActivationSession} = await import('./js/weight-rig/weight-rig-activation-session.js');
-      let generation = 4, releasePaint;
+      let generation = 4, releasePaint, releaseRig;
       const paintGate = new Promise(resolve => { releasePaint = resolve; });
+      const rigGate = new Promise(resolve => { releaseRig = resolve; });
       const calls = [];
       let rigAttempt = 0;
       const session = createWeightRigActivationSession({
         getGeneration: () => generation,
         ensureWeightsLoaded: async () => { calls.push('weights'); return {loaded: true}; },
         waitForWeightReadyPaint: async () => { calls.push('paint-wait'); await paintGate; calls.push('painted'); },
-        restoreSavedSelection: async () => { calls.push('selection'); return {savedSelectionMasksRestored: true}; },
-        syncPhysicsToSelection: async () => { calls.push('physics'); return true; },
-        ensureRigLoaded: async () => {
-          calls.push('rig'); rigAttempt += 1;
-          return rigAttempt === 1 ? {loaded: false, error: 'fixture rig failure'} : {loaded: true};
+        branches: {
+          weight: async () => { calls.push('weight'); return {selection: true}; },
+          rig: async () => {
+            calls.push('rig'); rigAttempt += 1;
+            if (rigAttempt === 1) { await rigGate; return {loaded: false, error: 'fixture rig failure'}; }
+            return {loaded: true};
+          },
+          animation: async () => { calls.push('animation'); return {clips: []}; },
         },
       });
       const first = session.activate();
@@ -2567,20 +2571,27 @@ def test_weight_rig_activation_sequences_ready_paint_and_retries_independent_sta
       await Promise.resolve();
       const beforePaint = [...calls];
       releasePaint();
+      while (!calls.includes('animation')) await new Promise(resolve => setTimeout(resolve, 0));
+      // Every branch started while the Rig was still building.
+      const whileRigBuilds = [...calls];
+      releaseRig();
       const firstResult = await first;
       const retryResult = await session.activate();
       const afterRetry = [...calls];
-      const completedResult = await session.activate();
-      return {samePromise: first === duplicate, beforePaint, firstRig: firstResult.rig,
-        retryRig: retryResult.rig, afterRetry, afterComplete: calls, completedRig: completedResult.rig};
+      await session.activate();
+      return {samePromise: first === duplicate, beforePaint, whileRigBuilds, firstRig: firstResult.rig,
+        retryRig: retryResult.rig, afterRetry, afterComplete: calls};
     }""")
     assert result['samePromise'] is True
     assert result['beforePaint'] == ['weights', 'paint-wait']
+    assert result['whileRigBuilds'] == ['weights', 'paint-wait', 'painted', 'weight', 'rig', 'animation']
     assert result['firstRig']['error'] == 'fixture rig failure'
     assert result['retryRig']['loaded'] is True
-    assert result['afterRetry'].count('physics') == 1
+    assert result['afterRetry'].count('weight') == 1
+    assert result['afterRetry'].count('animation') == 1
     assert result['afterRetry'].count('rig') == 2
-    assert result['afterComplete'] == result['afterRetry']
+    # Once every branch succeeded, activation only rechecks the shared weights.
+    assert result['afterComplete'] == [*result['afterRetry'], 'weights']
 
 
 def test_weight_rig_activation_cancels_after_model_rebaseline(module_page):
@@ -2589,13 +2600,12 @@ def test_weight_rig_activation_cancels_after_model_rebaseline(module_page):
       let generation = 2, releasePaint;
       const paintGate = new Promise(resolve => { releasePaint = resolve; });
       const calls = [];
+      const branch = name => async () => { calls.push(name); return {loaded: true}; };
       const session = createWeightRigActivationSession({
         getGeneration: () => generation,
         ensureWeightsLoaded: async () => ({loaded: true}),
         waitForWeightReadyPaint: async () => paintGate,
-        restoreSavedSelection: async () => { calls.push('selection'); },
-        syncPhysicsToSelection: async () => { calls.push('physics'); },
-        ensureRigLoaded: async () => { calls.push('rig'); return {loaded: true}; },
+        branches: {weight: branch('weight'), rig: branch('rig'), animation: branch('animation')},
       });
       const pending = session.activate();
       await Promise.resolve();
