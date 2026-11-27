@@ -476,10 +476,10 @@ def test_zzz_native_stream_palette_is_shared_by_every_component_and_drawing_over
 
     def resolve(geometry_hash, ordinal, ids, hashes=(native,), merged_layout=(), count=3, positions=(),
                 layout=("gimi_f32_u32_4", 32)):
-        binding = SimpleNamespace(asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
-                                  geometry_hash=geometry_hash, first_index=None if ordinal is None else ordinal * 3,
-                                  index_count=count,
-                                  component_ordinal=ordinal, metadata_entry=None)
+        binding = AssetComponentBinding(status="exact", asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
+                                        geometry_hash=geometry_hash,
+                                        first_index=None if ordinal is None else ordinal * 3, index_count=count,
+                                        component_ordinal=ordinal, metadata_entry=None)
         source = SkinningSource("blend.buf", layout[1], 4, layout[0], native_palette_hashes=hashes,
                                 native_position_hashes=positions)
         return resolve_game_rig(binding, source, ids, set(), {}, merged_layout=merged_layout)
@@ -570,9 +570,9 @@ def test_attachment_palette_admits_only_the_assets_own_attachment_stream(tmp_pat
     monkeypatch.setattr(rig, "_zzz_metadata", lambda *_: {})
 
     def binding(geometry_hash, asset_type="GIMI"):
-        return SimpleNamespace(asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
-                               geometry_hash=geometry_hash, first_index=0, index_count=6, component_ordinal=0,
-                               metadata_entry=None)
+        return AssetComponentBinding(status="exact", asset_type=asset_type, root=str(tmp_path), metadata="hash.json",
+                                     geometry_hash=geometry_hash, first_index=0, index_count=6, component_ordinal=0,
+                                     metadata_entry=None)
 
     def resolve(geometry_hash, attachment, asset_type="GIMI", captured=True):
         source = SkinningSource("part.txt", 32, 4, "gimi_f32_u32_4",
@@ -614,8 +614,9 @@ def test_alternate_passes_sharing_an_index_range_are_told_apart_by_metadata_entr
     monkeypatch.setattr(rig, "_zzz_metadata", lambda *_: {})
 
     def binding(entry):
-        return SimpleNamespace(asset_type="GIMI", root=str(tmp_path), metadata="hash.json", geometry_hash="cccccccc",
-                               first_index=0, index_count=6, component_ordinal=0, metadata_entry=entry)
+        return AssetComponentBinding(status="exact", asset_type="GIMI", root=str(tmp_path), metadata="hash.json",
+                                     geometry_hash="cccccccc", first_index=0, index_count=6, component_ordinal=0,
+                                     metadata_entry=entry)
 
     assert rig.game_attachment(binding(0), set(), {}) == ATTACHMENT
     assert rig.game_attachment(binding(1), set(), {}) == alternate

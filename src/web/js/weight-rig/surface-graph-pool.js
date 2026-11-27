@@ -5,7 +5,7 @@
 import { buildSurfaceInfluenceGraphCooperative } from './weight-rig-surface.js';
 import { createWorkBudget } from './cooperative-scheduler.js';
 
-const MAX_WORKERS = 4;
+const MAX_WORKERS = 8;
 
 class WorkersUnavailable extends Error {}
 

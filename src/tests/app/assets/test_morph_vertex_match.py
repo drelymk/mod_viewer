@@ -53,7 +53,10 @@ def test_scalar_and_batch_matching_agree_on_contract_cases(query, expected):
     assert match._match_batch(buckets, positions, {}) == [expected] * match._MIN_BATCH_VERTICES
 
 
-def test_batch_matching_matches_scalar_on_jittered_symmetric_mesh():
+@pytest.mark.parametrize("occupancy", [True, False], ids=["occupancy-filter", "full-search"])
+def test_batch_matching_matches_scalar_on_jittered_symmetric_mesh(monkeypatch, occupancy):
+    if not occupancy:
+        monkeypatch.setattr(match, "_MAX_OCCUPIED_KEYS", 0)
     rng = random.Random("morph-vertex-match")
     reference = [(rng.randrange(-300, 300) / 1e4, rng.randrange(-300, 300) / 1e4,
                   rng.randrange(0, 300) / 1e4) for _ in range(4000)]
@@ -61,15 +64,20 @@ def test_batch_matching_matches_scalar_on_jittered_symmetric_mesh():
     queries = [(x + rng.uniform(-2e-4, 2e-4), y + rng.uniform(-2e-4, 2e-4), z)
                for x, y, z in rng.choices(reference, k=6000)]
     queries += [(0., y, z) for _x, y, z in reference[:500]]
+    # Inside the sparse reference grid but mostly away from its cells, then outside it.
+    queries += [(x, y, z + .0151) for x, y, z in reference[:500]]
+    queries += [(x, y, z + 1.) for x, y, z in reference[:500]]
     buckets = _buckets(reference)
     positions = _pack(queries)
     cache = {}
 
     batch = match._match_batch(buckets, positions, cache)
 
+    assert (cache["bucket_arrays"]["occupied"] is not None) == occupancy
     assert batch == match._match_scalar(buckets, positions)
     assert match.match_positions(buckets, positions, cache) == batch
     assert sum(index >= 0 for index in batch) > 1000
+    assert batch[-500:] == [-1] * 500
 
 
 def test_unpackable_coordinates_use_scalar_matching():
