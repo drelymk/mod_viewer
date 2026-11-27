@@ -57,12 +57,14 @@ def extract(client, root, rig, sequences, skin_root, convert, library_dir, rejec
     """Write paired layers; returns (manifest entries, their distinct bone masks, every baked layer bone)."""
     shutil.rmtree(library_dir / DIRECTORY, ignore_errors=True)
     pairs = []
+    # Unreal package names are case-insensitive; names differing only in case stay ambiguous.
+    named = pipeline.folded_paths(sequences)
     for library in shared_animations.discover(str(root), rig):
         targets = set(library["mapping"].values())
         for clip, name, frames, duration in _clip_sources(library):
             check_cancelled(cancel)
-            candidates = [path for path in (f"{skin_root}/{folder}/Rib_{name}" for folder in LAYER_FOLDERS)
-                          if path in sequences and _is_layer(sequences[path], frames, duration)]
+            candidates = [path for folder in LAYER_FOLDERS for path in named.get(f"{skin_root}/{folder}/Rib_{name}".casefold(), [])
+                          if _is_layer(sequences[path], frames, duration)]
             if len(candidates) > 1:
                 reject("shared-layer", candidates[0], "Several ribbon layers match this shared clip's timing.",
                        f"{library['name']}/{clip['id']}")

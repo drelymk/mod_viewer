@@ -32,6 +32,26 @@ def component_texture_matches(filename, components, *, wwmi=False):
     return identities if len(identities) == 1 else set()
 
 
+def metadata_texture_file(reference, *, authored, ordinal, directory, asset_dir):
+    """The one rule deciding whether a WWMI Metadata texture item names an Asset file.
+
+    Shared by direct Asset loading and mod enrichment so both pick identical
+    defaults. An authored reference needs only to be an image inside the Asset;
+    otherwise it must also sit in the metadata directory and carry the
+    component's ordinal in its name. Existence is the caller's check.
+    """
+    if (not reference or not asset_dir
+            or not reference.casefold().endswith(IMAGE_EXTENSIONS)
+            or asset_paths.relative_asset_path(asset_dir, reference) is None):
+        return None
+    if authored:
+        return reference
+    if (os.path.normcase(os.path.dirname(reference)) != os.path.normcase(directory)
+            or not component_texture_matches(reference, {0: ordinal}, wwmi=True)):
+        return None
+    return reference
+
+
 def component_texture_name(group, *, wwmi=False):
     name = group.get("display_name") or group.get("name") or ""
     if not wwmi:

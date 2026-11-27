@@ -162,6 +162,14 @@ def source_skeleton(client, skeleton, *, strict_tree=False):
             for info, pose in zip(infos, poses)]
 
 
+def folded_paths(paths):
+    """Package paths grouped case-insensitively, as Unreal resolves package names."""
+    groups = collections.defaultdict(list)
+    for path in paths:
+        groups[path.casefold()].append(path)
+    return groups
+
+
 def is_base_clip(item):
     """A complete, non-additive clip within the viewer's frame and duration limits."""
     properties = item["Properties"]
@@ -535,14 +543,21 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     if not bases:
         raise ValueError("No compatible skeletal animation clips were found for the verified rig.")
     pairs = {}
+    named_packages = folded_paths(packages)
     for package, item in bases.items():
-        # Supported game layout: exact companion under this skin's RibbonAnim.
+        # Supported game layout: exact companion under this skin's RibbonAnim, matched
+        # case-insensitively like Unreal package names (Rib_X_loop pairs with X_Loop).
         # Skeleton, sample spacing, additive metadata and omitted base tracks also
         # have to agree; a similar filename alone never authorizes a layer.
-        layer_path = skin_root + "/RibbonAnim/Rib_" + item["Name"]
-        layer = sequences.get(layer_path)
         if not package.startswith(character_root + "/CommonAnim/"):
             continue
+        layer_path = skin_root + "/RibbonAnim/Rib_" + item["Name"]
+        named = named_packages.get(layer_path.casefold(), [])
+        if len(named) > 1:
+            reject("layer", named[0], "Several secondary clips differ only in letter case.", package)
+            continue
+        layer_path = named[0] if named else layer_path
+        layer = sequences.get(layer_path)
         if layer is None:
             if layer_path in packages:
                 reason = ("Secondary clip skeleton differs from the verified body skeleton." if layer_path in other_skeletons
