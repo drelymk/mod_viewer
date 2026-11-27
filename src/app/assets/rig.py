@@ -7,6 +7,8 @@ import os
 import re
 import struct
 
+import numpy as np
+
 from core.geometry.migoto_format import MigotoBinaryLayout, MigotoElement, parse_fmt
 from core.geometry.migoto_dump import parse_vertex_dump, parse_index_dump, pack_indices
 from core.geometry.skinning import wwmi_component_domain
@@ -328,12 +330,18 @@ def _mod_morph_uv_triangles(reference, vertex_count, topology):
                         triangles[triangle] = None
         reference["triangles"], reference["unique_uvs"] = triangles, unique
     triangles, unique = reference["triangles"], reference["unique_uvs"]
-    points = [uvs[offset:offset + 8] for offset in range(0, len(uvs), 8)]
+    if "uv_keys" not in reference:
+        # Each 8-byte UV point compares as one integer.
+        reference["uv_keys"] = np.unique(np.frombuffer(reference["topology"][1], dtype="<u8"))
+    keys = np.frombuffer(uvs, dtype="<u8")
+    rows = np.frombuffer(indices, dtype="<u4").reshape(-1, 3)
+    if int(rows.max()) >= vertex_count:
+        return None
+    # A triangle with a UV point the reference lacks is never a reference triangle.
+    known = np.isin(keys, reference["uv_keys"])
     mapping, conflicts = [-1] * vertex_count, set()
-    for row in struct.iter_unpack("<3I", indices):
-        if max(row) >= vertex_count:
-            return None
-        source = triangles.get(tuple(points[index] for index in row))
+    for row in rows[known[rows].all(axis=1)].tolist():
+        source = triangles.get(tuple(uvs[index * 8:index * 8 + 8] for index in row))
         if source is None:
             continue
         for index, target in zip(row, source):
@@ -342,9 +350,10 @@ def _mod_morph_uv_triangles(reference, vertex_count, topology):
             mapping[index] = target
     for index in conflicts:
         mapping[index] = -1
-    proven = {points[index] for index, target in enumerate(mapping) if target >= 0}
-    for index, point in enumerate(points):
-        if mapping[index] < 0 and index not in conflicts and point in proven and unique.get(point) is not None:
+    proven = keys[np.array(mapping) >= 0]
+    for index in np.flatnonzero(np.isin(keys, proven)).tolist():
+        point = uvs[index * 8:index * 8 + 8]
+        if mapping[index] < 0 and index not in conflicts and unique.get(point) is not None:
             mapping[index] = unique[point]
     return mapping, conflicts
 
@@ -656,6 +665,14 @@ def _hash_asset_palette(binding, enabled_roots, cache):
 
     Returns (directory, rig, palette, metadata component).
     """
+    # Many meshes share one binding; resolve its Asset paths once per request.
+    key = "hash-asset-palette", binding, frozenset(enabled_roots)
+    if key not in cache:
+        cache[key] = _verified_hash_asset_palette(binding, enabled_roots, cache)
+    return cache[key]
+
+
+def _verified_hash_asset_palette(binding, enabled_roots, cache):
     admitted = _admitted_rig(binding, enabled_roots, cache)
     if not admitted:
         return None

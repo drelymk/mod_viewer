@@ -5,7 +5,8 @@ vertices share it. A query takes the reference point with the smallest squared
 distance below ``MATCH_DISTANCE`` in its grid cell and the 26 surrounding cells.
 It is unmapped when that minimum is tied, absent, or non-finite. Large inputs
 use bounded array batches. Small or unusual inputs use the scalar path, which
-gives the same results.
+gives the same results. Batches search only queries whose cell neighbors a
+reference cell; every other query has no candidate within ``MATCH_DISTANCE``.
 """
 
 import math
@@ -21,6 +22,9 @@ _QUERY_CHUNK = 16384
 # Cell coordinates stay exactly representable in Float64 and packed keys in int64.
 _MAX_CELL = 2 ** 52
 _MAX_KEY_SPAN = 2 ** 62
+# Above this many dilated cell keys (bounding the transient arrays), batches
+# search every query instead.
+_MAX_OCCUPIED_KEYS = 2 ** 22
 
 
 def match_positions(buckets, positions, cache):
@@ -89,7 +93,33 @@ def _bucket_arrays(np, buckets):
         "keys": keys[order],
         "points": np.array(points, dtype=np.float64)[order],
         "indices": np.array(indices, dtype=np.int64)[order],
+        "occupied": _occupied_keys(np, keys, span),
     }
+
+
+def _occupied_keys(np, keys, span):
+    """Sorted packed keys of every cell within one cell of a reference cell.
+
+    Packing is linear and ``low``/``span`` leave one spare cell on each side,
+    so each neighbor's key is the cell's key plus a fixed offset.
+    """
+    keys = np.unique(keys)
+    if len(keys) * len(_NEIGHBOR_DELTAS) > _MAX_OCCUPIED_KEYS:
+        return None
+    offsets = np.array([(dx * span[1] + dy) * span[2] + dz for dx, dy, dz in _NEIGHBOR_DELTAS], dtype=np.int64)
+    return np.unique((keys[:, None] + offsets).ravel())
+
+
+def _near_reference(np, arrays, cells, finite):
+    """Rows that may have a candidate; every other row stays unmapped."""
+    inside = finite & ((cells >= arrays["low"]) & (cells < arrays["high"])).all(axis=1)
+    rows = np.flatnonzero(inside)
+    occupied = arrays["occupied"]
+    if occupied is None:
+        return rows
+    packed = _pack(cells[rows], arrays["low"], arrays["span"])
+    found = np.minimum(np.searchsorted(occupied, packed), len(occupied) - 1)
+    return rows[occupied[found] == packed]
 
 
 def _pack(cells, low, span):
@@ -113,19 +143,22 @@ def _match_batch(buckets, positions, cache):
         return None
     cells = np.floor(scaled).astype(np.int64)
     result = np.full(len(queries), -1, dtype=np.int64)
-    for start in range(0, len(queries), _QUERY_CHUNK):
-        stop = min(start + _QUERY_CHUNK, len(queries))
-        _match_chunk(np, arrays, queries[start:stop], cells[start:stop],
-                     finite[start:stop], result[start:stop])
+    candidates = _near_reference(np, arrays, cells, finite)
+    for start in range(0, len(candidates), _QUERY_CHUNK):
+        rows = candidates[start:start + _QUERY_CHUNK]
+        matched = np.full(len(rows), -1, dtype=np.int64)
+        _match_chunk(np, arrays, queries[rows], cells[rows], matched)
+        result[rows] = matched
     return result.tolist()
 
 
-def _match_chunk(np, arrays, queries, cells, finite, result):
+def _match_chunk(np, arrays, queries, cells, result):
+    """Match finite queries; ``result`` holds -1 for each on entry."""
     keys, points = arrays["keys"], arrays["points"]
     query_ids, distances, matches = [], [], []
     for delta in _NEIGHBOR_DELTAS:
         neighbor = cells + np.array(delta, dtype=np.int64)
-        inside = finite & ((neighbor >= arrays["low"]) & (neighbor < arrays["high"])).all(axis=1)
+        inside = ((neighbor >= arrays["low"]) & (neighbor < arrays["high"])).all(axis=1)
         rows = np.flatnonzero(inside)
         if not len(rows):
             continue

@@ -19,7 +19,7 @@ Clip playback is in [animation-playback.md](animation-playback.md).
 - Large Blend streams without VertexVG remaps, and rest-position morph matching,
   may use bounded NumPy batches that must equal the scalar paths (per-vertex
   failures, `sum()` rounding, unique-nearest ties); unusual inputs take the scalar
-  path. Surface graphs build on at most four same-origin module workers started
+  path. Surface graphs build on at most eight same-origin module workers started
   with Weight loading (copying only each view's bytes), with the cooperative
   main-thread build as fallback. Keep source and member order.
 
