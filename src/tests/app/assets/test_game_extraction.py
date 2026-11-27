@@ -663,6 +663,37 @@ def test_secondary_alignment_preserves_body_and_reports_rejected_companions(tmp_
     assert not (asset / "Rig.json").exists()
 
 
+@pytest.mark.parametrize("names", [["Rib_clip01"], ["Rib_clip01", "Rib_CLIP01"]])
+def test_secondary_companion_matches_package_name_case_insensitively(tmp_path, names):
+    # Unreal package names ignore case: a lone case variant pairs, case-only duplicates stay ambiguous.
+    root, _, record, client, rows = fixture(tmp_path)
+    layers = [CHARACTER + "/Skin01/RibbonAnim/" + name for name in names]
+    search, batch = client.search, client.batch
+    client.search = lambda query, kind, under: [p for p in search(query, kind, under) if p != LAYER] + (
+        layers if kind == "AnimSequence" else [])
+
+    def renamed(kind, packages, destination, format=None):
+        result = batch(kind, [package for package in packages if package not in layers], destination, format)
+        for package in packages:
+            if package in layers:
+                result[package] = batch(kind, [LAYER], destination / package.rsplit("/", 1)[-1], format)[LAYER]
+        return result
+
+    client.batch = renamed
+    output = tmp_path / "output"
+    result, _ = pipeline.build(client, str(root), record, output, "Character01", lambda *_: None, threading.Event())
+    data = list(struct.iter_unpack("<7f", (output / "Animation/Clip01.bin").read_bytes()))
+    if len(layers) == 1:
+        assert result["secondary"] == 1 and result["skipped_layers"] == 0
+        assert json.loads((output / "Animation/Clip01.json").read_text())["reference_layer"]["source"] == layers[0]
+        assert data[3] == (1, 2, 3, 0, 0, 1, 0)
+    else:
+        assert result["secondary"] == 0 and result["skipped_layers"] == 1
+        detail, = result["skipped_details"]
+        assert detail["source"] in layers and detail["base"] == BASE and "letter case" in detail["reason"]
+        assert data[3] == rows[3]
+
+
 def test_scaled_reference_extraction_identity_errors_and_ambiguity(tmp_path, monkeypatch):
     root, _asset, record, client, _rows = fixture(tmp_path, (.75, .75, .75))
     output = tmp_path / "output"

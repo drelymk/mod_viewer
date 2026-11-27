@@ -14,7 +14,6 @@ from core.ini.dnf import DNF_TRUE, dnf_and, dnf_or
 from . import paths as asset_paths
 from . import textures as asset_textures
 from .package_format import FORMAT, is_viewer_metadata
-from .wuwa_texture_names import texture_component_ordinals
 from .metadata import entries as _entries, texture_role, authored_range, authored_role
 
 
@@ -42,6 +41,34 @@ class TextureSemanticEvidence:
     # None permits legacy naming; an empty reference is explicitly invalid.
     file_reference: str | None = None
     authored: bool = False
+    # Shader slot of the primary captured pass, when the Metadata row proves it.
+    slot: int | None = None
+
+
+_SLOT_LABEL = re.compile(r"TextureSlot(\d+)", re.I)
+
+
+def _labelled_slots(row):
+    """Map row index to shader slot for role-labelled entries of the primary pass.
+
+    Metadata rows list that pass in slot order, naming unlabelled entries
+    ``TextureSlotNN`` and labelled ones by role (other passes trail as
+    ``...VariantNNN``). A labelled entry's slot is proven only between named
+    neighbours with no hidden gap; otherwise it stays unknown.
+    """
+    labels = [item[0] if isinstance(item, list) and item else None for item in row]
+    named = {index: int(match[1]) for index, label in enumerate(labels)
+             if isinstance(label, str) and (match := _SLOT_LABEL.fullmatch(label))}
+    slots = {}
+    for index, label in enumerate(labels):
+        if index in named or not isinstance(label, str):
+            continue
+        before = max((i for i in named if i < index), default=None)
+        after = min((i for i in named if i > index), default=None)
+        if (before is not None and after is not None
+                and named[after] - named[before] == after - before):
+            slots[index] = named[before] + index - before
+    return slots
 
 
 # Preserve the AssetTextureEvidence import name for existing callers.
@@ -129,7 +156,9 @@ def _texture_records(binding, raw):
         textures = entry.get("texture_hashes", entry.get("textureHashes"))
         if not isinstance(textures, list) or position >= len(textures):
             continue
-        for item in textures[position] or []:
+        row = textures[position] or []
+        row_slots = _labelled_slots(row)
+        for row_index, item in enumerate(row):
             if not isinstance(item, list) or len(item) < 3:
                 continue
             native_role = texture_role(item[0])
@@ -154,7 +183,8 @@ def _texture_records(binding, raw):
                 records.append(AssetTextureEvidence(
                     role, texture_hash or "", extension,
                     component_name=component_name,
-                    classification=classification, file_reference=file_reference, authored=authored))
+                    classification=classification, file_reference=file_reference, authored=authored,
+                    slot=row_slots.get(row_index) if native_wwmi else None))
         if records:
             return records
     return records
@@ -195,10 +225,11 @@ def _locate_texture(binding, evidence, candidates):
         path = candidate["path"]
         if asset_paths.relative_asset_path(asset_dir, path) is None:
             continue
-        if wwmi and not evidence.authored and (not asset_textures.component_texture_matches(
-                path, {0: binding.component_ordinal}, wwmi=True)
-                or not any(os.path.normcase(os.path.dirname(path)) == os.path.normcase(directory)
-                           for directory in directories)):
+        # The group pool is shared by sibling draws, so selection applies the
+        # same Metadata rule as direct Asset loading (ordinal and directory).
+        if wwmi and not any(asset_textures.metadata_texture_file(
+                path, authored=evidence.authored, ordinal=binding.component_ordinal,
+                directory=directory, asset_dir=asset_dir) for directory in directories):
             continue
         if _matches_original_texture(binding, evidence, path):
             paths.add(path)
@@ -382,22 +413,21 @@ def _unique_evidence(items):
     return result
 
 
-def _apply_slot_hashes(draw, evidence, declarations=(), geometry_hash=None, *, asset_slots=None):
+def _apply_slot_hashes(draw, evidence, declarations=(), geometry_hash=None):
     """Promote one draw's slot history using corroborated component evidence."""
     by_hash = {}
     for item in evidence:
         by_hash.setdefault(item.texture_hash, []).append(item)
-    diffuse_slots = {slot for slot, usages in (asset_slots or {}).items()
-                     if any(item.role == "diffuse" for usage in usages
-                            for item in by_hash.get(usage["texture_hash"], ()))}
+    # Only the Metadata names the primary pass's diffuse slot; TextureUsage mixes
+    # every captured pass and is diagnostics only.
+    diffuse_slots = {item.slot for item in evidence
+                     if item.role == "diffuse" and item.slot is not None}
     diffuse_slot = next(iter(diffuse_slots)) if len(diffuse_slots) == 1 else None
-    component = getattr(draw.asset_binding, "component_ordinal", None)
+    # The authored ps-tN binding already identifies the draw; a filename is only
+    # candidate evidence and never gates automatic assignment.
     component_slots = [item for item in draw.slot_textures
-                       if item.slot == diffuse_slot and (
-                           item.resource is None or (item.file and (
-                               texture_component_ordinals(item.file) is None
-                               or asset_textures.component_texture_matches(
-                                   item.file, {0: component}, wwmi=True))))]
+                       if item.slot == diffuse_slot
+                       and (item.resource is None or item.file)]
     # Multiple untracked runtime routes cannot be selected by slot number alone.
     defaults = {item.file for item in component_slots if not item.conditions}
     if len(defaults) > 1:
@@ -720,8 +750,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     draw.texture_provenance[item.role] = "mod_texture_hash"
             all_evidence = _unique_evidence(
                 evidence + role_hint_evidence)
-            _apply_slot_hashes(draw, evidence + role_hint_evidence, declarations, binding.geometry_hash,
-                               asset_slots=slots)
+            _apply_slot_hashes(draw, evidence + role_hint_evidence, declarations, binding.geometry_hash)
             _apply_hash_replacements(draw, all_evidence, index, allowed)
             _clear_null_texture_assignments(draw)
             # Use the existing Asset defaults only in states with no applicable

@@ -73,9 +73,10 @@ def test_native_wwmi_uses_ordinal_candidates_and_exact_role_references(tmp_path,
         return f"Components-{ordinal} t={native_hash}-{stem}.dds"
 
     for ordinal, entry in enumerate(raw["components"]):
-        entry["texture_hashes"] = [[["Diffuse", ".dds", "aaaaaaaa", texture_file(ordinal, "color")],
-                                    ["NormalMap", ".dds", "bbbbbbbb", texture_file(ordinal, "map")],
-                                    ["Unknown", ".dds", "cccccccc", texture_file(ordinal, "choice")]]]
+        entry["texture_hashes"] = [[["TextureSlot02", ".dds", "cccccccc", texture_file(ordinal, "choice")],
+                                    ["Diffuse", ".dds", "aaaaaaaa", texture_file(ordinal, "color")],
+                                    ["TextureSlot04", ".dds", "dddddddd", texture_file(ordinal, "choice")],
+                                    ["NormalMap", ".dds", "bbbbbbbb", texture_file(ordinal, "map")]]]
         for stem in ("color", "map", "choice"):
             (asset / texture_file(ordinal, stem)).write_bytes(f"synthetic {ordinal} {stem}".encode())
     path.write_text(json.dumps(raw), encoding="utf-8")
@@ -130,7 +131,7 @@ drawindexed = 3,0,0
     for binding, selected in (("", None), (r"Resource\WWMI\Diffuse = ResourceOwned", "owned.dds"),
                               ("ps-t3 = ResourceSlot", "Components-0-1 t=replacement.dds"),
                               ("ps-t3 = ResourceOwned", "owned.dds"),
-                              ("ps-t3 = ResourceForeign", None),
+                              ("ps-t3 = ResourceForeign", "Components-2 t=foreign.dds"),
                               (r"Resource\WWMI\Diffuse = ResourceOwned" + "\nps-t3 = ResourceSlot", "owned.dds"),
                               ("ps-t1 = ResourceSlot", None),
                               ("ps-t3 = ResourceSlot\nif $mode == 1\nps-t3 = ResourceOther\n"
@@ -167,6 +168,62 @@ drawindexed = 3,0,0
             key: mesh["tex_key"] for key, mesh in payload["meshes"].items()}
         assert {key: mesh.get("texture_variants") for key, mesh in semantic["meshes"].items()} == {
             key: mesh.get("texture_variants") for key, mesh in payload["meshes"].items()}
+
+@pytest.mark.parametrize(("labels", "expected"), [
+    (["TextureSlot00", "TextureSlot01", "TextureSlot02", "Diffuse", "TextureSlot04"], {3: 3}),
+    (["TextureSlot00", "Diffuse", "TextureSlot02"], {1: 1}),
+    (["TextureSlot00", "Diffuse", "TextureSlot03"], {}),
+    (["TextureSlot00", "TextureSlot01", "Diffuse"], {}),
+    (["Diffuse", "TextureSlot01"], {}),
+    (["TextureSlot00", "Diffuse", "TextureSlot02", "TextureSlot00Variant001",
+      "TextureSlot01Variant001"], {1: 1}),
+])
+def test_labelled_slots_are_proven_only_between_gapless_named_neighbours(labels, expected):
+    from app.assets.enrichment import _labelled_slots
+
+    row = [[label, ".dds", f"{index:08x}", "x.dds"] for index, label in enumerate(labels)]
+    assert _labelled_slots(row) == expected
+
+
+def test_only_metadata_proves_the_diffuse_slot():
+    from core.geometry.draw_call import SlotTextureBinding
+    from app.assets.enrichment import _apply_slot_hashes
+
+    # Another component's file name must not matter: the binding is authored.
+    bindings = [SlotTextureBinding(0, "ResourceNormal", "Components-3 t=normal.dds"),
+                SlotTextureBinding(3, "ResourceColor", "Components-3 t=color.dds")]
+
+    def resolve(slot):
+        draw = DrawCall(slot_textures=list(bindings))
+        draw.asset_binding = SimpleNamespace(component_ordinal=4)
+        evidence = [TextureSemanticEvidence("diffuse", "aaaaaaaa", slot=slot)]
+        _apply_slot_hashes(draw, evidence)
+        return draw.texture_default("diffuse")
+
+    assert resolve(3) == "Components-3 t=color.dds"
+    # Without Metadata proof no slot is assigned.
+    assert resolve(None) is None
+
+
+@pytest.mark.parametrize(("name", "authored", "directory", "ordinal", "expected"), [
+    ("Components-4 t=aaaaaaaa.dds", False, "Asset01/11111111", 4, True),
+    ("Components-0-4 t=aaaaaaaa.dds", False, "Asset01/11111111", 4, True),
+    ("Components-3 t=aaaaaaaa.dds", False, "Asset01/11111111", 4, False),
+    ("Components-4 t=aaaaaaaa.dds", False, "Asset01/22222222", 4, False),
+    ("Components-3 t=aaaaaaaa.dds", True, "Asset01/11111111", 4, True),
+    ("Components-4 t=aaaaaaaa.txt", True, "Asset01/11111111", 4, False),
+    ("../../Components-4 t=aaaaaaaa.dds", True, "Asset01/11111111", 4, False),
+])
+def test_metadata_texture_file_is_one_rule_for_asset_and_mod_loading(
+        tmp_path, name, authored, directory, ordinal, expected):
+    from app.assets.textures import metadata_texture_file
+
+    root = tmp_path / "assets"
+    reference = os.path.normpath(str(root / "Asset01" / "11111111" / name))
+    result = metadata_texture_file(
+        reference, authored=authored, ordinal=ordinal,
+        directory=str(root / directory), asset_dir=str(root / "Asset01"))
+    assert bool(result) is expected
 
 
 @pytest.mark.parametrize("reference", ["missing.dds", "../Other/color.dds", "../../../outside.dds",

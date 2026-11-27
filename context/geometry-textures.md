@@ -88,6 +88,15 @@
   replacement alone: it then applies only to the component its file name proves
   (existing filename association); a file naming no component keeps plain hash
   behavior. Diffuse hashes keep plain hash behavior.
+- Component filenames only build candidate pools. Automatic assignment (authored
+  `ps-tN`/semantic bindings, slot-proven diffuse) never checks them: a binding
+  authored in the draw's own override applies even to a file named for another
+  component, and that file also joins the pool. Asset-side default selection from
+  the group-shared pool still filters by the draw's ordinal.
+- The slot-proven WWMI diffuse comes from the Asset Metadata row, which lists the
+  primary captured pass in slot order (`TextureSlotNN`, role labels between them);
+  a labelled slot counts only between gapless named neighbours. TextureUsage mixes
+  every pass and never decides a slot; it stays diagnostics and candidate hashes.
 - Filename associations give choices, never roles. Selection (semantic, slot,
   conditional) runs once per draw in authored order, keeping no-mod-diffuse Asset
   eligibility and game-specific normal transport. Asset defaults pick unique files

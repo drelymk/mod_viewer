@@ -233,9 +233,10 @@ def _warning(component, ordinal, reason, message):
             "reason": reason, "message": message}
 
 
-def _explicit_textures(root, metadata_relative, component, files, texture_source, asset_dir=None, *, authored_only=False):
+def _explicit_textures(root, metadata_relative, component, ordinal, files, texture_source, asset_dir=None, *, authored_only=False):
     """Use proven metadata roles and exact files; numeric slots remain candidates."""
     by_role = {}
+    directory = os.path.dirname(os.path.join(root, metadata_relative))
     rows = component.get("texture_hashes")
     for row in rows if isinstance(rows, list) else ():
         for item in row if isinstance(row, list) else ():
@@ -246,9 +247,10 @@ def _explicit_textures(root, metadata_relative, component, files, texture_source
             authored = authored_role(component, 0, role)
             if authored_only and not authored:
                 continue
-            owned = (asset_dir and path and path.lower().endswith(_IMAGE_EXTENSIONS)
-                     and asset_paths.relative_asset_path(asset_dir, path) is not None)
-            if not path or (path not in files and not (authored and owned)):
+            path = asset_textures.metadata_texture_file(
+                path, authored=authored, ordinal=ordinal, asset_dir=asset_dir,
+                directory=directory)
+            if not path or not (authored or path in files):
                 continue
             if role == "normal_map":
                 role = texture_profile_for("wuwa").normal_transport_role
@@ -375,7 +377,7 @@ def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
             textures = {}
             if raw.get("format") == FORMAT or authored_range(component, 0):
                 textures = _explicit_textures(
-                    root, metadata_relative, component, [item.path for item in candidates], texture_source,
+                    root, metadata_relative, component, ordinal, component_files, texture_source,
                     asset_paths.safe_asset_dir(root, record.get("path", "")), authored_only=raw.get("format") != FORMAT)
             parts.append(AssetMeshPart(
                 key=key, label=label, asset_type="WWMI", asset_path=source_path,

@@ -57,6 +57,8 @@ Shared rules: [game-extract.md](game-extract.md). Playback contracts:
   transforms). Complete zero-based companions with equal endpoint-inclusive spacing
   (within Float32 rounding) may be aligned by trimming a longer layer or holding a
   shorter one's last pose; body frames, duration and other tracks stay byte-exact.
+  Companion paths match case-insensitively like Unreal packages (`Rib_X_loop` for
+  `X_Loop`); paths differing only in case are rejected as ambiguous.
   Never stretch time or pair by timing alone; copy only into unchanged
   reference-pose tracks and refuse existing base motion. Character names and numeric
   bone thresholds are never proof. Record timing, held/trimmed counts and rejected
