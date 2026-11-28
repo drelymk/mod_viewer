@@ -351,15 +351,16 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None, *,
     checked_ids = set()
     if remap:
         # The remapper dispatches custom_vertex_count threads; reads past the
-        # buffers return zero and writes are dropped, so an overstated count
-        # leaves every real vertex remapped. A short count would not.
+        # buffers return zero and writes are dropped. Vertices past the count
+        # keep their raw Blend bytes, so the count must cover every vertex this
+        # remapped draw reads. Other draws may still use the tail natively.
         vertices = len(raw_data) // source.stride if source.stride else 0
         if (not source.vertex_vg_file or remap.bone_count not in (512, 1024)
                 or not 1 <= remap.compact_count <= 256
                 or not 0 <= remap.remap_id < 1024
                 or not 1 <= remap.vertex_count <= 10_000_000
                 or remap.reverse_width not in (2, 4) or remap.forward_width not in (2, 4)
-                or not 1 <= vertices <= remap.vertex_count
+                or not vertices or any(vertex >= remap.vertex_count for vertex in used_vertices)
                 or len(raw_data) != vertices * source.stride
                 or len(vertex_vg_data) != vertices * source.vertex_vg_stride):
             raise SkinningPreviewError("invalid_blend_remap", "The WWMI blend-remap layout is invalid.")
