@@ -10,6 +10,10 @@ import numpy as np
 ROOT_MOTION_ATTRIBUTES = tuple(range(7))
 # Largest share of a clip's transform tracks that may name bones the Avatar does not have.
 MAX_UNRESOLVED_TRACKS = .1
+# A controller plays an outfit family's body clips (authored for the base outfit) on the
+# outfit's own skeleton, so a controller-paired body clip may also name the base outfit's
+# own bones; a clip authored for another skeleton still resolves almost nothing.
+MAX_PAIRED_UNRESOLVED_TRACKS = .5
 
 
 def dimension(binding):
@@ -126,11 +130,77 @@ def sample_channels(metadata, work, targets, reserved_bytes, quaternion_toleranc
     return sampled
 
 
-def convert(metadata, work, rig, avatar, morphs=None):
+def timing(metadata):
     start, stop = metadata["start"], metadata["stop"]
-    duration = stop - start
-    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (start, stop)) or not 0 < duration <= 3600:
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (start, stop)) or not 0 < stop - start <= 3600:
         raise ValueError("Native clip timing is unsupported.")
+    return float(start), float(stop)
+
+
+def has_curves(metadata):
+    return (metadata["acl_count"] + metadata["streamed_count"] + metadata["dense"].get("count", 0)
+            + len(metadata["constant"])) > 0
+
+
+def _overlay(layer, start, duration, targets, work, hash_to_bone, mask, morphs, output, morph_columns, policies):
+    """Write a synced override clip's masked transforms and facial curves over ``output``.
+
+    A synced layer follows the base state's normalized time. Transforms outside the mask,
+    scalar and Animator curves belong to the body and are ignored. Returns the written
+    ``(bone, attribute)`` identities.
+    """
+    layer_start, layer_stop = timing(layer)
+    layer_targets = layer_start + (targets - start) / duration * (layer_stop - layer_start)
+    sampled = sample_channels(layer, work, layer_targets, output.size * 4)
+    cursor, written, morph_names = 0, set(), set()
+    for binding in layer["bindings"]:
+        width = dimension(binding)
+        if cursor + width > sampled.shape[1]:
+            raise ValueError("The native curve bindings are incomplete.")
+        channel = sampled[:, cursor:cursor + width]
+        cursor += width
+        if binding["type"] != "Transform":
+            target = (morphs or {}).get((binding["path"], binding["attribute"]))
+            if (target is not None and binding["type"] == "SkinnedMeshRenderer" and binding["custom"] == 20
+                    and not binding["pointer"]):
+                name, full_weight = target
+                if name in morph_names:
+                    raise ValueError("The native layer clip has duplicate morph tracks.")
+                morph_names.add(name)
+                morph_columns[name] = channel[:, 0] / full_weight
+                policies.add(layer.get("blend_shape_clamp"))
+            continue
+        if binding["pointer"] or binding["attribute"] not in (1, 2, 3):
+            raise ValueError("The native layer clip has unsupported transform bindings.")
+        bone = hash_to_bone.get(binding["path"])
+        if bone is None or binding["path"] not in mask:
+            continue
+        identity = bone, binding["attribute"]
+        if identity in written:
+            raise ValueError("The native layer clip has duplicate transform tracks.")
+        written.add(identity)
+        if binding["attribute"] == 2:
+            lengths = np.linalg.norm(channel, axis=1)
+            if np.any(lengths < 1e-6):
+                raise ValueError("The native layer clip contains a zero quaternion.")
+            channel = channel / lengths[:, None]
+        offset = {1: 0, 2: 3, 3: 7}[binding["attribute"]]
+        output[:, bone, offset:offset + width] = channel
+    if cursor != sampled.shape[1]:
+        raise ValueError("The native curve bindings are incomplete.")
+    return written
+
+
+def convert(metadata, work, rig, avatar, morphs=None, *, layer=None, mask=frozenset(), max_unresolved=None):
+    """Convert one native clip to version-2 TQS data.
+
+    ``layer`` is an optional synced override clip (an outfit's skin layer) that replaces the
+    body's value for the bones whose path hashes are in ``mask`` (and for facial curves it
+    animates), following the body's normalized time. Returns ``(binary, frames, duration,
+    unsupported, morph, keyed, root_motion)``.
+    """
+    start, stop = timing(metadata)
+    duration = stop - start
     frames = max(2, round(duration * 60) + 1)
     if frames > 60000 or frames * len(rig["bones"]) * 40 > 128 * 1024 * 1024:
         raise ValueError("Native animation exceeds playback limits.")
@@ -146,7 +216,7 @@ def convert(metadata, work, rig, avatar, morphs=None):
     # track drives nothing; a clip for another skeleton leaves most tracks unresolved and fails.
     transforms = [binding["path"] for binding in metadata["bindings"] if binding["type"] == "Transform"]
     unresolved = sum(path not in hash_to_bone for path in transforms)
-    if unresolved > len(transforms) * MAX_UNRESOLVED_TRACKS:
+    if unresolved > len(transforms) * (MAX_UNRESOLVED_TRACKS if max_unresolved is None else max_unresolved):
         raise ValueError("The native clip has unsupported transform bindings.")
     morph_columns, motion_columns = {}, {}
     for binding in metadata["bindings"]:
@@ -192,7 +262,12 @@ def convert(metadata, work, rig, avatar, morphs=None):
                 raise ValueError("The native clip contains a zero quaternion.")
             channel = channel / lengths[:, None]
         output[:, bone, offset:offset + width] = channel
-    if cursor != total or not written or not np.isfinite(output).all() or np.any(np.abs(output) > 1e6):
+    if cursor != total or not written:
+        raise ValueError("The native animation transform table is invalid.")
+    policies = {metadata.get("blend_shape_clamp")} if morph_columns else set()
+    if layer is not None:
+        written |= _overlay(layer, start, duration, targets, work, hash_to_bone, mask, morphs, output, morph_columns, policies)
+    if not np.isfinite(output).all() or np.any(np.abs(output) > 1e6):
         raise ValueError("The native animation transform table is invalid.")
     root_motion = track = None
     if len(motion_columns) == len(ROOT_MOTION_ATTRIBUTES):
@@ -209,9 +284,9 @@ def convert(metadata, work, rig, avatar, morphs=None):
     morph = None
     binary = output.astype("<f4").tobytes()
     if morph_columns:
-        clamp = metadata.get("blend_shape_clamp")
-        if type(clamp) is not bool:
+        if len(policies) != 1 or type(next(iter(policies))) is not bool:
             raise ValueError("The native blend-shape weight policy is unavailable.")
+        clamp = next(iter(policies))
         weights = np.column_stack(list(morph_columns.values())).astype("<f4")
         if not np.isfinite(weights).all() or np.any(np.abs(weights) > 1e6):
             raise ValueError("The native clip has invalid morph weights.")

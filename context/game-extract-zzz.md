@@ -87,6 +87,21 @@ Shared rules: [game-extract.md](game-extract.md). ZZMI mod palette proof is in
   one controller; different objects sharing a name are skipped. Leaves bind by
   pointer to converted clips sharing one clip key; sequence names carry the
   controller suffix.
+- Skin layers: a controller's Base Layer (motion set 0) plays body clips, often a
+  parent outfit family's, and one full-weight synced override layer on the base
+  state machine (motion set above 0, with a skeleton mask) plays the outfit's own
+  bones. A state's body and skin leaves, bound by pointer, are one converted clip:
+  the body, then the skin clip at the body's normalized time writing only masked
+  bones and the facial curves it animates. Additive, other-state-machine, ambiguous
+  or part-weight layers pair nothing. A controller-paired body clip may leave half
+  its transform tracks unresolved (the parent outfit's bones; another skeleton
+  resolves almost none); an unpaired family clip keeps the 10% limit. A skin clip a
+  controller overlays is never exported alone; block copies converting differently
+  stay separate clips and leave their states out of sequences. A clip replaces its
+  earlier skin-only clip by the skin clip's source. A clip keying no bone a captured
+  mesh is skinned to (a companion's own bones; its controller's states cannot be
+  paired with body clips) is skipped and reported, and an earlier extraction's clip
+  of that source is dropped from the preserved library.
 - Root motion: keep a clip's complete Animator `MotionT`/`MotionQ` muscle set (an
   incomplete set stays an omitted channel) as the optional root-motion track.
 
