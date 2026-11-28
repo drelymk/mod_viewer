@@ -111,11 +111,9 @@ def _parse_cb(lines, marker):
 
 
 def _status_binder(lines, marker, outputs):
-    if not lines:
-        return None
     # A literal flag write to a mod variable never changes a binding, so it may
     # appear anywhere in the list; the bindings around it stay exact.
-    lines = [line for line in lines if line != "vb6 = null" and not _match(_LITERAL_FLAG, line)]
+    lines = [line for line in lines or () if line != "vb6 = null" and not _match(_LITERAL_FLAG, line)]
     if not lines:
         return None
     bypass = _match(r"(resource\w+) = ref vb0", lines[0])
@@ -184,16 +182,12 @@ def _pixel_run(lines, index):
 
 
 def _frame_gate(lines, index, frame):
-    """Parse the exporter's frame-gate prelude of a merge-status component.
+    """Parse a frame gate: a local mirroring the toggled frame id that, on change,
+    assigns only the component's literal merge constants and literal flags.
 
-    A per-component local mirrors the toggled frame id; on a change it assigns
-    the component's literal merge constants and literal flags (typically a reset
-    of its own status). Gate variables decide only when a merge may run, never
-    which palette results, so nothing else is accepted inside the gate: no
-    nesting, calls, resources or non-literal values. Returns the index after the
-    closing endif plus the offset and count matches, or None.
+    Returns (index after its endif, offset match, count match) or None.
     """
-    declared = _match(r"local (\$\w+)", lines[index]) if frame is not None and index + 2 < len(lines) else None
+    declared = frame is not None and _match(r"local (\$\w+)", lines[index])
     if not declared or lines[index + 1:index + 3] != [f"if {declared[1]} != {frame}", f"{declared[1]} = {frame}"]:
         return None
     end = _block_end(lines, index + 1)
@@ -257,23 +251,20 @@ def _status_component(lines, merger, state, output, frame=None):
         if lines[cursor + 1:cursor + 3] != guard or lines[cursor + 5:cursor + 7] != [f"run = {merger}", "endif"]:
             return None
         merged = cursor + 7
-    elif gate := _frame_gate(lines, cursor + 1, frame):
-        # Hybrid form: the frame gate supplies the merge constants and the merge
-        # block below it only runs the shared merge list under its own status.
-        base, offset, count = gate[0] - 1, gate[1], gate[2]
-        local = _match(r"if (\$\w+) != 2", lines[base + 1]) if base + 1 < len(lines) else None
-        if not local or lines[base + 2:base + 6] != [f"{state} = {local[1]}", f"run = {merger}",
-                                                     f"{local[1]} = {state}", "endif"]:
-            return None
-        merged = base + 6
     else:
-        local = _match(r"if (\$\w+) != 2", lines[cursor + 1])
-        offset = _match(re.escape(_OFFSET) + r" = (\d+)", lines[cursor + 2])
-        count = _match(re.escape(_COUNT) + r" = (\d+)", lines[cursor + 3])
-        if not local or lines[cursor + 4:cursor + 8] != [f"{state} = {local[1]}", f"run = {merger}",
-                                                         f"{local[1]} = {state}", "endif"]:
+        # An optional frame gate may supply the merge constants; the status
+        # block then only runs the shared merge list.
+        gate = _frame_gate(lines, cursor + 1, frame)
+        start, offset, count = gate or (cursor + 1, None, None)
+        local = _match(r"if (\$\w+) != 2", lines[start]) if start < len(lines) else None
+        if not gate:
+            offset = _match(re.escape(_OFFSET) + r" = (\d+)", lines[start + 1])
+            count = _match(re.escape(_COUNT) + r" = (\d+)", lines[start + 2])
+            start += 2
+        if not local or lines[start + 1:start + 5] != [f"{state} = {local[1]}", f"run = {merger}",
+                                                       f"{local[1]} = {state}", "endif"]:
             return None
-        merged = cursor + 8
+        merged = start + 5
     if not offset or not count:
         return None
     row = fields[0][1], int(fields[1][1]), int(fields[2][1]), int(offset[1]), int(count[1])

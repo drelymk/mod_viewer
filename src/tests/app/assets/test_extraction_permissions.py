@@ -108,13 +108,18 @@ def _assert_inherited(directory, extra_files=()):
         assert any(entry[-1] == "BG" and "ID" in entry[1] for entry in entries), (path, dacl)
 
 
+def _grant_guests(directory):
+    """Give a directory an inheritable Guests marker its parent lacks."""
+    subprocess.run(
+        [str(Path(os.environ["SystemRoot"]) / "System32" / "icacls.exe"),
+         str(directory), "/grant", "*S-1-5-32-546:(OI)(CI)(RX)", "/Q"],
+        check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+
+
 def test_rig_install_repairs_protected_asset_permissions(tmp_path):
     category = tmp_path / "PlayerCharacterData"
     category.mkdir()
-    subprocess.run(
-        [str(Path(os.environ["SystemRoot"]) / "System32" / "icacls.exe"),
-         str(category), "/grant", "*S-1-5-32-546:(OI)(CI)(RX)", "/Q"],
-        check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    _grant_guests(category)
     # mkdtemp gives the Asset the owner-only protected ACL that locks out non-elevated users.
     asset = Path(tempfile.mkdtemp(dir=category))
     (asset / "extraction_report.json").write_bytes(b"report")
@@ -135,11 +140,7 @@ def test_exports_inherit_actual_destination_permissions(tmp_path, monkeypatch, k
     root = tmp_path / "library"
     category = root / "PlayerCharacterData"
     category.mkdir(parents=True)
-    # Give the category an inheritable marker absent from the library root.
-    subprocess.run(
-        [str(Path(os.environ["SystemRoot"]) / "System32" / "icacls.exe"),
-         str(category), "/grant", "*S-1-5-32-546:(OI)(CI)(RX)", "/Q"],
-        check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    _grant_guests(category)
     dump = make_capture(tmp_path)
     if kind == "standalone":
         report = export(extract(analyze(dump), Selection("Sample")), category)
