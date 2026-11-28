@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import re
 import sys
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -16,6 +17,7 @@ import pytest
 from app.assets import extraction, folders, permissions
 from app.assets.extractor.discovery import analyze
 from app.assets.extractor.export import Selection, export, extract
+from app.bridge.rig_extraction import install_package
 from app.settings import paths
 from tests.support.extraction_data import make_capture
 
@@ -104,6 +106,28 @@ def _assert_inherited(directory, extra_files=()):
         assert "P" not in dacl.split("(", 1)[0], (path, dacl)
         entries = [entry.split(";") for entry in re.findall(r"\(([^()]*)\)", dacl)]
         assert any(entry[-1] == "BG" and "ID" in entry[1] for entry in entries), (path, dacl)
+
+
+def test_rig_install_repairs_protected_asset_permissions(tmp_path):
+    category = tmp_path / "PlayerCharacterData"
+    category.mkdir()
+    subprocess.run(
+        [str(Path(os.environ["SystemRoot"]) / "System32" / "icacls.exe"),
+         str(category), "/grant", "*S-1-5-32-546:(OI)(CI)(RX)", "/Q"],
+        check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    # mkdtemp gives the Asset the owner-only protected ACL that locks out non-elevated users.
+    asset = Path(tempfile.mkdtemp(dir=category))
+    (asset / "extraction_report.json").write_bytes(b"report")
+    assert "P" in _dacl(asset).split("(", 1)[0]
+    stage = Path(tempfile.mkdtemp(prefix=".rig-extract-", dir=category))
+    output = stage / "output"
+    (output / "Animation").mkdir(parents=True)
+    (output / "Rig.json").write_bytes(b"rig")
+    (output / "Animation" / "manifest.json").write_bytes(b"animation")
+    (output / "RigExtraction.json").write_bytes(b"report")
+    install_package(asset, output, stage)
+    assert (asset / "Rig.json").read_bytes() == b"rig"
+    _assert_inherited(asset)
 
 
 @pytest.mark.parametrize("kind", ["standalone", "library"])

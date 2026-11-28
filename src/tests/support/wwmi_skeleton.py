@@ -131,6 +131,29 @@ filename = effect.dds
 """
 
 
+def hybrid_merged_skeleton_ini():
+    """Merge-status template whose components sit behind a toggled frame gate.
+
+    The gate assigns each component's merge constants and resets its status;
+    the status block below it only runs the shared merge list.
+    """
+    text = modern_merged_skeleton_ini()
+    text = text.replace("global $merge = 0", "global $epoch = 0\nglobal $merge = 0")
+    text = text.replace("$status02 = 0\nResourcePoseA",
+                        "$status02 = 0\nif $epoch\n$epoch = 0\nelse\n$epoch = 1\nendif\nResourcePoseA")
+    for number in (1, 2):
+        offset, count = (0, 2) if number == 1 else (2, 1)
+        old = (f"if $status0{number} != 2\n$\\WWMIv1\\vg_offset = {offset}\n$\\WWMIv1\\vg_count = {count}\n"
+               f"$merge = $status0{number}\nrun = CommandListCollect\n$status0{number} = $merge\nendif")
+        new = (f"local $seen0{number}\nif $seen0{number} != $epoch\n$seen0{number} = $epoch\n"
+               f"$\\WWMIv1\\vg_offset = {offset}\n$\\WWMIv1\\vg_count = {count}\n$status0{number} = 0\nendif\n"
+               f"if $status0{number} != 2\n$merge = $status0{number}\nrun = CommandListCollect\n"
+               f"$status0{number} = $merge\nendif")
+        assert old in text
+        text = text.replace(old, new)
+    return text
+
+
 def modern_merged_skeleton_ini(*, remapped=False, influences=4, map_size=512):
     """Render a neutral merge-status template, optionally with one proxy pair."""
     text = stock_merged_skeleton_ini()

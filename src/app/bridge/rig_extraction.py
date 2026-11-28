@@ -45,6 +45,9 @@ def install_package(asset, output, stage):
     backup.mkdir()
     installed, saved = [], []
     try:
+        # An Asset made from a temp-staged directory keeps that owner-only protected ACL, and
+        # sidecars published into it would inherit it; restore the Asset's own inheritance first.
+        inherit_directory_permissions(asset, recursive=False)
         for name in _OUTPUTS:
             target = asset / name
             if target.is_symlink() or not (output / name).exists():
