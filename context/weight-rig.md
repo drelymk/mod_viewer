@@ -100,7 +100,8 @@ Clip playback is in [animation-playback.md](animation-playback.md).
 - Stock remap adapters use full R16 VertexVG IDs with unchanged weights, verifying
   forward/reverse maps on positive influences; 512 default or explicit 512/1024
   maps, 4/8 influences, R16/R32 tables. Blend and VertexVG hold equal vertex counts;
-  `custom_vertex_count` may overstate but never understate. Tables read lazily
+  `custom_vertex_count` may overstate but must cover every vertex the remapped draw
+  uses; an unremapped tail may serve other draws natively. Tables read lazily
   through ModSource/BufferStore; invalid or truncated maps fail Weight explicitly.
   Shared Asset palettes may reach 1024 entries when a verified proxy program
   projects each drawn palette to R8.
