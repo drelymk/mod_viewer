@@ -314,6 +314,40 @@ def test_exporter_variants_keep_the_exact_layout_proof(remapped, edits, extra):
     assert draws and all(draw.skinning_merged_layout == expected["textureoverridepart01"].layout for draw in draws)
 
 
+_TRIPLE = ("ResourceProxyBlend = ref ResourcePartBlend\nResourceProxyA = ref ResourcePartA\n"
+           "ResourceProxyB = ref ResourcePartB\n")
+
+
+@pytest.mark.parametrize("remapped", [False, True])
+@pytest.mark.parametrize("between,triple,proven", [
+    ("ps-t0 = ResourceEffect\n", "same", True),
+    ("", "same", True),
+    # Cleanup nulls the proxies, so a block without its own triple skins natively.
+    ("", "none", None),
+    ("", "other", False),
+    ("vb4 = ResourcePoints\n", "same", False),
+])
+def test_consecutive_guarded_draw_blocks_share_one_component_proof(remapped, between, triple, proven):
+    text = modern_merged_skeleton_ini(remapped=remapped)
+    expected = stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=text))
+    second = {"same": _TRIPLE if remapped else "", "none": "",
+              "other": _TRIPLE.replace("ResourcePartA\n", "ResourcePartB\n", 1)}[triple]
+    split = text.replace("drawindexed = 3, 0, 0\n", "drawindexed = 3, 0, 0\nrun = CommandListCleanup\nendif\n"
+                         f"{between}if ResourcePoseA !== null\nhandling = skip\n{second}"
+                         "run = CommandListChecks\nrun = CommandListBind\n", 1)
+    assert split != text
+    sections = parse_sections("source-01.ini", text=split)
+    proofs = stock_wwmi_merged_layouts(sections)
+    if not (proven if proven is not None else not remapped):
+        assert proofs == {}
+        return
+    assert {name: proof._replace(helpers=frozenset()) for name, proof in proofs.items()} == {
+        name: proof._replace(helpers=frozenset()) for name, proof in expected.items()}
+    draws = [draw for group in build_draw_groups(sections, extract_resources(sections)) for draw in group["draws"]]
+    assert len(draws) >= 2 and all(
+        draw.skinning_merged_layout == expected["textureoverridepart01"].layout for draw in draws)
+
+
 @pytest.mark.parametrize("template", [stock_merged_skeleton_ini, modern_merged_skeleton_ini])
 def test_layout_past_the_u8_palette_keeps_its_exact_proof(template):
     # Exporters merge every component even past 256 bones; the merger drops the

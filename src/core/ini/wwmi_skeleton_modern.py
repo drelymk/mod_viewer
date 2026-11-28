@@ -272,16 +272,19 @@ def _status_component(lines, merger, state, output, frame=None):
         # Merge-only component: it contributes its bones to the shared skeleton
         # but issues no draw; only pixel state may follow.
         return (row, local[1], None) if _pixel_run(lines, merged + 1) == len(lines) else None
-    if lines[merged:merged + 2] != [f"if {output} !== null", "handling = skip"]:
+    # Exporters may split one component's draws into consecutive guarded blocks,
+    # each binding and cleaning up on its own; only pixel or flag state may sit
+    # between and after them, inside and after the gate.
+    guard, bodies, close = [f"if {output} !== null", "handling = skip"], [], merged
+    while lines[close:close + 2] == guard:
+        end = _block_end(lines, close)
+        if end is None:
+            return None
+        bodies.append(lines[close + 2:end])
+        close = _pixel_run(lines, end + 1)
+    if not bodies or lines[close:close + 1] != ["endif"] or _pixel_run(lines, close + 1) != len(lines):
         return None
-    end = _block_end(lines, merged)
-    if end is None:
-        return None
-    # Pixel or flag state may follow the draw block, inside and after the gate.
-    close = _pixel_run(lines, end + 1)
-    if lines[close:close + 1] != ["endif"] or _pixel_run(lines, close + 1) != len(lines):
-        return None
-    return row, local[1], lines[merged + 2:end]
+    return row, local[1], tuple(bodies)
 
 
 def _proxy_start(body, proxies, binder):
@@ -508,23 +511,30 @@ def modern_wwmi_merged_layouts(commands, plain, external_neutral=frozenset()):
         parsed = _status_component(lines, merger, state, outputs[0], frame)
         if not parsed:
             return {}
-        row, status, body = parsed
-        values = None
-        if body is None:
+        row, status, bodies = parsed
+        if bodies is None:
             components[name], component_proxies[name] = row, None
             statuses.append(status)
             continue
-        start = _proxy_start(body, proxies, binder) if proxies else None
-        if start is not None:
-            assignments = [_match(re.escape(proxy) + r" = ref (resource\w+)", line)
-                           for proxy, line in zip(proxies, body[start:start + 3])]
-            if len(assignments) != 3 or not all(assignments):
+        # Cleanup nulls the proxies after every block, so each block must bind
+        # the same triple (or none) for the component to keep one palette proof.
+        block_values = set()
+        for body in bodies:
+            values = None
+            start = _proxy_start(body, proxies, binder) if proxies else None
+            if start is not None:
+                assignments = [_match(re.escape(proxy) + r" = ref (resource\w+)", line)
+                               for proxy, line in zip(proxies, body[start:start + 3])]
+                if len(assignments) != 3 or not all(assignments):
+                    return {}
+                values = tuple(item[1] for item in assignments)
+                body = body[:start] + body[start + 3:]
+            if not _draw_body(body, binder, checks, cleanups[0], shaders):
                 return {}
-            values = tuple(item[1] for item in assignments)
-            body = body[:start] + body[start + 3:]
-        if not _draw_body(body, binder, checks, cleanups[0], shaders):
+            block_values.add(values)
+        if len(block_values) != 1:
             return {}
-        components[name], component_proxies[name] = row, values
+        components[name], component_proxies[name] = row, block_values.pop()
         statuses.append(status)
     expected_resets = [f"{status} = 0" for status in statuses] if state else []
     if not components or len(statuses) != len(set(statuses)) or resets != expected_resets:

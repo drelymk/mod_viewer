@@ -109,7 +109,11 @@ Shared rules: [game-extract.md](game-extract.md). Playback contracts:
   not name this component. Unreadable or map-less ABPs, several ABPs per component and
   sequences outside the prop folder change nothing (name pairing alone). Bake `prop-track-v1` tracks
   (per frame and bone, asset-space translation + quaternion relative to the rigid
-  socket rest). Prop sequences keep their PSA scale keys (the game hides props by
+  socket rest). A sequence authored in character space (every frame's root `pose * rest^-1`
+  within 5 cm and 5 degrees of the socket's own clip world, which itself leaves the
+  origin) already carries the socket's motion: it bakes as `pose * rest^-1 * anchor^-1`
+  into a second prop with a null socket, never played on top of the socket (that
+  applied the hand's motion twice; Phoebe's staff in `Stand2`). Prop sequences keep their PSA scale keys (the game hides props by
   scaling a bone to 0 and resizes them); a key is relative to the bone's rest scale (a
   key of 1 draws the built size, as frame dumps show for a rest scale other than 1).
   A prop whose sequences scale any bone off its rest scale bakes every track as

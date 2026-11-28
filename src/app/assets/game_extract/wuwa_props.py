@@ -446,7 +446,8 @@ def extract(client, root, record, captured, palettes, mesh_package, body_exports
     # Effects come first: an animation a clip's effect plays is never a blueprint prop's.
     resolved = wuwa_effect_props.resolve(client, effects, cancel)
     wuwa_blueprint_props.extract(client, own, names, worlds, clips, writer, cancel,
-                                 wuwa_effect_props.claimed(resolved[0]), shown or {})
+                                 wuwa_effect_props.claimed(resolved[0]), shown or {},
+                                 wuwa_effect_props.ClipPoses(library, rig))
     wuwa_effect_props.extract(client, resolved, rig, library, writer, cancel)
     if writer.materials:
         _attach_textures(client, root, record, captured, palettes, body_exports, writer.materials, library, cancel)

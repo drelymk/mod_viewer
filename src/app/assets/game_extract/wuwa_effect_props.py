@@ -280,7 +280,7 @@ def claimed(uses):
     return {(use["clip"], use["refs"][1]) for use in uses if use["refs"]}
 
 
-class _Poses:
+class ClipPoses:
     """Bone poses of the Asset's own converted clips, read lazily."""
 
     def __init__(self, library, rig):
@@ -363,7 +363,7 @@ def extract(client, resolved, rig, library, writer, cancel):
     uses, skipped = resolved
     names = [bone["name"] for bone in rig["bones"]]
     worlds = rest_worlds(rig["bones"], affine=True)
-    poses = _Poses(library, rig)
+    poses = ClipPoses(library, rig)
 
     def skip(source, clip, reason):
         skipped.setdefault((source, reason), set()).add(clip)
