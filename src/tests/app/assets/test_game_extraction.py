@@ -1911,6 +1911,84 @@ def test_prop_scale_keys_hide_and_resize_props():
     assert set(entries) == {"C"} and failures == {} and extra == {"track_layout": "prop-track-v2"}
 
 
+def test_prop_sequences_authored_in_character_space_play_without_the_socket(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.assets.game_extract import wuwa_blueprint_props as props, wuwa_effect_props
+
+    identity = [0, 0, 0, 1]
+    rig = dict(bones=[dict(name="Root", parent=-1, translation=[0, 0, 0], rotation=identity, scale=[1, 1, 1]),
+                      dict(name="Hand", parent=0, translation=[10, 0, 0], rotation=identity, scale=[1, 1, 1])])
+    prop_bones = [dict(name="Prop", parent=-1, translation=[0, 0, 0], rotation=identity, scale=[1, 1, 1])]
+    # The hand rises 5 then 6 over the clip; the root stays.
+    frames = np.zeros((2, 2, 7), "<f4")
+    frames[..., 6] = 1
+    frames[:, 1, :3] = [[10, 0, 5], [10, 0, 6]]
+    (tmp_path / "Clip01.bin").write_bytes(frames.tobytes())
+    (tmp_path / "Clip01.json").write_text(json.dumps(dict(layout="frame-major-tq-f32le", frame_count=2, bone_count=2,
+                                                          duration=1, data_file="Clip01.bin")))
+    poses = wuwa_effect_props.ClipPoses(tmp_path, rig)
+
+    def sequence(translations):
+        records = [(*translation, 0, 0, 0, 1, 1, 1, 1) for translation in translations]
+        return struct.pack("<20f", *[value for record in records for value in record])
+
+    hand_world = np.asarray([[10, 0, 5], [10, 0, 6]], dtype=float)
+    on_hand = sequence(hand_world + [0, 1, 0])
+    # A root pose on the socket's own world at every frame carries its motion; a rest-pose one,
+    # one far from the socket, or a socket that stays at the origin does not.
+    hands = props.poses(poses.frames("Clip01", 0, 1)[0][[0, 1]], rig["bones"])[:, 1]
+    assert props.in_component_space(on_hand, 2, prop_bones, hands)
+    assert not props.in_component_space(sequence([[0, 0, 0]] * 2), 2, prop_bones, hands)
+    assert not props.in_component_space(sequence(hand_world + [0, 30, 0]), 2, prop_bones, hands)
+    assert not props.in_component_space(on_hand, 2, prop_bones, np.stack([np.eye(4)] * 2))
+    assert not props.in_component_space(on_hand, 1, prop_bones, hands)
+
+    # Baked without the socket, the staff's rest skin at the socket's rest world lands on the pose;
+    # socket-relative baking leaves a rest-pose sequence at the identity.
+    anchor = np.eye(4)
+    anchor[:3, 3] = [10, 0, 0]
+    fixed = np.frombuffer(props.bake(on_hand, 2, prop_bones, anchor, component=True), "<f4").reshape(2, 1, 7)
+    np.testing.assert_allclose(fixed[:, 0, :3], [[0, 1, 5], [0, 1, 6]], atol=1e-5)
+    held = np.frombuffer(props.bake(sequence([[0, 0, 0]] * 2), 2, prop_bones, anchor), "<f4").reshape(2, 1, 7)
+    np.testing.assert_allclose(held[:, 0, :3], 0, atol=1e-5)
+
+    class Writer:
+        def __init__(self):
+            self.skipped, self.kinds = [], {}
+
+        def write(self, data, track=False):
+            digest = hashlib.sha256(data).hexdigest()
+            self.kinds[digest] = np.frombuffer(data, "<f4").reshape(2, 1, 7)[:, 0, :3].round(3).tolist()
+            return f"Props/{digest[:32]}.bin", digest
+
+    package = "Client/Content/Aki/Character/Prop/Clip01"
+    sequences = {package: sequence(hand_world + [0, 1, 0])}
+    monkeypatch.setattr(props, "list_packages", lambda *_: list(sequences))
+    monkeypatch.setattr(props, "sequence_items", lambda *_: {name: dict(Properties=dict(
+        Skeleton=dict(ObjectPath="Client/Content/Aki/Character/Prop/Skeleton01.0"), NumFrames=2, SequenceLength=1.0)) for name in sequences})
+    monkeypatch.setattr(props, "prepare", lambda _client, name, *_: (2, sequences[name], 1.0))
+    clips = {"Clip01": [("Clip01", 2, 1)]}
+
+    def run(**extra):
+        writer = Writer()
+        found = props._tracks(SimpleNamespace(), dict(bones=prop_bones), "Client/Content/Aki/Character/Prop/Skeleton01", "Folder", clips, anchor, writer,
+                              threading.Event(), **extra)
+        return writer, found
+
+    # Without clip poses nothing changes: every pair plays on the socket.
+    writer, (tracks, _extra, (loose, _loose_extra)) = run()
+    assert set(tracks) == {"Clip01"} and loose == {}
+    # A character-space sequence moves to the socketless result, baked without the socket.
+    writer, (tracks, _extra, (loose, _loose_extra)) = run(poses_of=poses, socket=1)
+    assert tracks == {} and set(loose) == {"Clip01"}
+    assert writer.kinds[loose["Clip01"]["sha256"]] == [[0, 1, 5], [0, 1, 6]]
+    assert (loose["Clip01"]["start"], loose["Clip01"]["end"]) == (0.0, 1.0)
+    # A socket-relative sequence stays with the socket.
+    sequences[package] = sequence([[0, 0, 0]] * 2)
+    _writer, (tracks, _extra, (loose, _loose_extra)) = run(poses_of=poses, socket=1)
+    assert set(tracks) == {"Clip01"} and loose == {}
+
+
 @pytest.mark.parametrize("socket,attached,start,settings,expected", [
     # Without a socket: the mesh's origin, while the root rests at spawn.
     (None, True, 0, {}, ("fixed", "origin")),
@@ -1940,7 +2018,7 @@ def test_effect_placement_reproduces_the_notify_attachment(tmp_path, socket, att
                                                           duration=3, data_file="Clip01.bin")))
     notify = dict(socket=socket, attached=attached, start=start, settings=settings)
     use = dict(clip="Clip01", notify=notify)
-    poses = wuwa_effect_props._Poses(tmp_path, rig)
+    poses = wuwa_effect_props.ClipPoses(tmp_path, rig)
     try:
         kind, where = wuwa_effect_props.placement(use, ["Root", "Bone01", "Bone02"], poses)
     except ValueError as error:
@@ -2051,7 +2129,7 @@ def test_prop_components_choose_their_own_side_through_animation_blueprint_and_n
     clips = {name: [(name, 3, 2)] for name in ("Clip01", "Dodge", "Dodge_2")}
 
     def tracks(component, shown, siblings=maps):
-        found, _ = props._tracks(client, dict(bones=[]), root + "Prop/Hand/Model/Skeleton01", "Folder", clips, None, writer, cancel,
+        found, *_ = props._tracks(client, dict(bones=[]), root + "Prop/Hand/Model/Skeleton01", "Folder", clips, None, writer, cancel,
                                  owner=props.ownership(component, folders, siblings), component=component, shown=shown)
         return {clip: track["file"] for clip, track in found.items()}
 

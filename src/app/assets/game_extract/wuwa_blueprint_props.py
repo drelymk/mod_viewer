@@ -27,7 +27,10 @@ like ribbon layers' ``Rib_`` names: the game pairs them in its animation bluepri
 Each pair is baked
 into per-frame prop bone transforms relative to the socket (``prop-track-v1``, or
 ``prop-track-v2`` affine rows when the prop scales: the game hides props by scaling a bone
-to zero), and a prop shows only while its paired animation runs.
+to zero), and a prop shows only while its paired animation runs. A sequence authored in
+the character's space, already on the socket's own clip world at every frame, carries the
+socket's motion itself: it is baked in that space and written as a second prop without a
+socket, since playing it on top of the socket would apply the motion twice.
 """
 
 import numpy as np
@@ -247,19 +250,28 @@ def convert(client, package, item, bones, cache):
     return frames, binary
 
 
-def _deltas(binary, frames, bones, anchor, offsets=None):
-    """(frames, bones, 4, 4) asset-space transforms that move each prop bone's rest skin to its
-    pose, relative to the prop's placement ``anchor``; ``offsets`` ((frames, 4, 4) matrices in
-    the placement's frame) move the whole pose first. A socket's own clip motion is applied
-    on top during playback."""
+def _locals(binary, frames, bones):
+    """(frames, bones, 10) float locals of a converted prop sequence."""
     data = np.frombuffer(binary, "<f4", count=frames * len(bones) * 10).reshape(frames, len(bones), 10).astype(float)
     if not np.isfinite(data).all():
         raise ValueError("The prop animation is invalid.")
+    return data
+
+
+def _deltas(binary, frames, bones, anchor, offsets=None, component=False):
+    """(frames, bones, 4, 4) asset-space transforms that move each prop bone's rest skin to its
+    pose, relative to the prop's placement ``anchor``; ``offsets`` ((frames, 4, 4) matrices in
+    the placement's frame) move the whole pose first. A socket's own clip motion is applied
+    on top during playback. With ``component`` the pose is already in the character's space
+    (the sequence carries the socket's motion itself), so the transforms stay unconjugated
+    and the prop is played without a socket."""
     rest = np.asarray(rest_worlds(bones, affine=True))
-    pose = poses(data, bones)
+    pose = poses(_locals(binary, frames, bones), bones)
     if offsets is not None:
         pose = np.asarray(offsets, dtype=float)[:, None] @ pose
-    delta = anchor @ pose @ np.linalg.inv(rest) @ np.linalg.inv(anchor)
+    delta = pose @ np.linalg.inv(rest) @ np.linalg.inv(anchor)
+    if not component:
+        delta = anchor @ delta
     if not (np.isfinite(delta).all() and np.abs(delta).max() <= 1e6):
         raise ValueError("The prop animation is invalid.")
     return delta
@@ -286,9 +298,49 @@ def _pack(delta, affine):
     return track.astype("<f4").tobytes()
 
 
-def bake(binary, frames, bones, anchor, affine=False, offsets=None):
+def bake(binary, frames, bones, anchor, affine=False, offsets=None, component=False):
     """Track bytes of one converted prop sequence (see :func:`_deltas` and :func:`_pack`)."""
-    return _pack(_deltas(binary, frames, bones, anchor, offsets), affine)
+    return _pack(_deltas(binary, frames, bones, anchor, offsets, component), affine)
+
+
+# A sequence whose root poses sit on the socket's own world this closely (cm, degrees)
+# at every frame carries the socket's motion itself.
+_ON_SOCKET_DISTANCE = 5.0
+_ON_SOCKET_ANGLE = 5.0
+
+
+def _separation(a, b):
+    """(translation distance, rotation angle in degrees) between matching 4x4 transforms."""
+    def basis(matrix):
+        rotation = matrix[..., :3, :3]
+        return rotation / np.maximum(np.linalg.norm(rotation, axis=-2, keepdims=True), 1e-12)
+    relative = np.swapaxes(basis(a), -1, -2) @ basis(b)
+    cosine = np.clip((np.trace(relative, axis1=-2, axis2=-1) - 1) / 2, -1, 1)
+    return np.linalg.norm(a[..., :3, 3] - b[..., :3, 3], axis=-1), np.degrees(np.arccos(cosine))
+
+
+def in_component_space(binary, frames, bones, socket_worlds):
+    """Whether a prop sequence stores its root bones in the character's space, on the socket.
+
+    A socket-relative sequence keeps its roots at their rest pose while the socket moves
+    them, so each root's ``pose * rest^-1`` stays near the identity. Some sequences are
+    authored in character space instead: ``pose * rest^-1`` equals the socket's own clip
+    world at every frame, so playing it on top of the socket would apply the socket's
+    motion twice. ``socket_worlds`` are the socket's asset-space clip worlds per frame.
+    Only a socket that actually moves away from the origin tells the two readings apart;
+    otherwise (and for a short or unreadable clip) the sequence reads as socket-relative.
+    """
+    count = min(frames, len(socket_worlds))
+    roots = [index for index, bone in enumerate(bones) if bone["parent"] < 0]
+    if count < 2 or not roots:
+        return False
+    rest = np.asarray(rest_worlds(bones, affine=True))[roots]
+    placed = poses(_locals(binary, frames, bones)[:count], bones)[:, roots] @ np.linalg.inv(rest)
+    world = np.asarray(socket_worlds, dtype=float)[:count]
+    distance, angle = _separation(placed, world[:, None])
+    away_distance, away_angle = _separation(world, np.eye(4))
+    return bool((distance <= _ON_SOCKET_DISTANCE).all() and (angle <= _ON_SOCKET_ANGLE).all()
+                and ((away_distance > _ON_SOCKET_DISTANCE) | (away_angle > _ON_SOCKET_ANGLE)).any())
 
 
 def sequence_items(client, packages, cancel):
@@ -312,15 +364,15 @@ def prepare(client, package, item, bones, references):
     return frames, binary, float(item["Properties"]["SequenceLength"])
 
 
-def write_tracks(writer, prepared, bones, anchor):
+def write_tracks(writer, prepared, bones, anchor, component=False):
     """(package -> track entry, package -> reason it failed, extra prop manifest fields) of one
     prop's prepared sequences, each (frames, local transforms, duration, offsets or None). A prop any of whose tracks scales (bone scale keys or offsets)
     bakes every track as ``prop-track-v2`` affine rows (the viewer reads one layout per prop);
-    others stay rigid."""
+    others stay rigid. ``component`` bakes character-space sequences (see :func:`_deltas`)."""
     deltas, failures = {}, {}
     for package, (frames, binary, _duration, offsets) in sorted(prepared.items()):
         try:
-            deltas[package] = _deltas(binary, frames, bones, anchor, offsets)
+            deltas[package] = _deltas(binary, frames, bones, anchor, offsets, component)
         except ValueError as error:
             failures[package] = str(error)
     affine = not all(_rigid(delta) for delta in deltas.values())
@@ -369,13 +421,16 @@ def ownership(variable, folders, maps):
 
 
 def _tracks(client, mesh, skeleton, folder, clips, anchor, writer, cancel, claimed=frozenset(), owner=None,
-            component=None, shown=None):
-    """(clip id -> written track entry, manifest fields) for every paired prop sequence of one
-    prop mesh. Sequences are prepared once each, then written together with one layout.
+            component=None, shown=None, poses_of=None, socket=None):
+    """(clip id -> written track entry, manifest fields, the same for clips played without
+    the socket) for every paired prop sequence of one prop mesh. Sequences are prepared once
+    each, then written together with one layout.
 
     A (clip id, sequence) pair in ``claimed`` is played by one of the clip's effects instead.
     ``owner`` (see ``ownership``) and ``shown`` (clip id -> component names its notifies
     show) apply the animation blueprint rules of the module docstring to ``component``.
+    With the Asset's clip poses ``poses_of`` and the ``socket`` bone index, a pair whose
+    sequence is authored in character space on the socket moves to the socketless result.
     """
     items = {package: item for package, item in sequence_items(
         client, list_packages(client, "AnimSequence", folder, cancel)[:MAX_SEQUENCES], cancel).items()
@@ -417,20 +472,44 @@ def _tracks(client, mesh, skeleton, folder, clips, anchor, writer, cancel, claim
         except (ValueError, KeyError, TypeError) as error:
             writer.skipped.append(dict(source=package, reason=str(error) if isinstance(error, ValueError)
                                        else "The prop animation is incomplete."))
-    entries, failures, extra = write_tracks(writer, prepared, mesh["bones"], anchor)
-    for package, reason in sorted(failures.items()):
-        writer.skipped.append(dict(source=package, reason=reason))
-    # The prop shows while its animation plays from the clip's start.
-    tracks = {clip_id: dict(entries[package], start=0.0, end=entries[package]["duration"])
-              for clip_id, package in sorted(paired.items()) if package in entries}
-    return tracks, extra
+    # A pair whose sequence carries the socket's own motion plays without the socket.
+    fixed = {clip_id: package for clip_id, package in paired.items()
+             if package in prepared and poses_of is not None and socket is not None
+             and _carries_socket(poses_of, clip_id, prepared[package], mesh["bones"], socket)}
+
+    def written(pairs_, component):
+        wanted = {package: prepared[package] for package in set(pairs_.values()) if package in prepared}
+        entries, failures, extra = write_tracks(writer, wanted, mesh["bones"], anchor, component)
+        for package, reason in sorted(failures.items()):
+            writer.skipped.append(dict(source=package, reason=reason))
+        # The prop shows while its animation plays from the clip's start.
+        return {clip_id: dict(entries[package], start=0.0, end=entries[package]["duration"])
+                for clip_id, package in sorted(pairs_.items()) if package in entries}, extra
+
+    tracks, extra = written({clip_id: package for clip_id, package in paired.items() if clip_id not in fixed}, False)
+    return tracks, extra, written(fixed, True)
 
 
-def extract(client, own, names, worlds, clips, writer, cancel, claimed=frozenset(), shown=None):
+def _carries_socket(poses_of, clip_id, sequence, bones, socket):
+    """Whether the sequence prepared for a clip is in the character's space on the socket
+    (see :func:`in_component_space`); an unreadable clip pose says no."""
+    frames, binary, *_ = sequence
+    try:
+        # Every frame: an end past the clip's duration clamps to its last frame.
+        data, indices = poses_of.frames(clip_id, 0.0, 3600.0)
+        worlds = poses(data[indices], poses_of.bones)[:, socket]
+    except (ValueError, KeyError, TypeError, IndexError):
+        return False
+    return in_component_space(binary, frames, bones, worlds)
+
+
+def extract(client, own, names, worlds, clips, writer, cancel, claimed=frozenset(), shown=None, poses_of=None):
     """Add the blueprint props of the verified mesh's model rows (``own``) to ``writer``.
 
     ``claimed`` (clip id, sequence) pairs belong to the clips' effects and never pair.
     ``shown`` maps clip ids to the component names their submesh notifies show.
+    ``poses_of`` gives the Asset's clip poses, which tell sequences authored in character
+    space (written as a second, socketless prop) from socket-relative ones.
     """
     anims, abp_cache = {}, {}
     found = components(client, {row["blueprint"] for row in own.values() if row["blueprint"]}, cancel, anims)
@@ -458,9 +537,10 @@ def extract(client, own, names, worlds, clips, writer, cancel, claimed=frozenset
             mesh, exports, parts = mesh_parts(client, package, anchor)
             if not 0 < len(mesh["bones"]) <= MAX_PROP_BONES:
                 raise ValueError("The prop skeleton is unsupported.")
-            tracks, extra = _tracks(client, mesh, skeleton_of(exports), prop_folder(package), clips, anchor, writer, cancel, claimed,
-                                    ownership(variable, folders, maps), variable, shown)
-            if not tracks:
+            tracks, extra, (loose, loose_extra) = _tracks(
+                client, mesh, skeleton_of(exports), prop_folder(package), clips, anchor, writer, cancel, claimed,
+                ownership(variable, folders, maps), variable, shown, poses_of, names.index(socket))
+            if not tracks and not loose:
                 raise ValueError("No clip has a paired animation for the prop.")
         except ExtractionCancelled:
             raise
@@ -468,4 +548,7 @@ def extract(client, own, names, worlds, clips, writer, cancel, claimed=frozenset
             writer.skipped.append(dict(kind="blueprint", source=package or variable,
                                        reason=str(error) if isinstance(error, ValueError) else "The prop could not be read."))
             continue
-        writer.add(package, parts, socket=names.index(socket), bone_count=len(mesh["bones"]), tracks=tracks, **extra)
+        if tracks:
+            writer.add(package, parts, socket=names.index(socket), bone_count=len(mesh["bones"]), tracks=tracks, **extra)
+        if loose:
+            writer.add(package, parts, socket=None, bone_count=len(mesh["bones"]), tracks=loose, **loose_extra)
