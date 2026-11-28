@@ -7,7 +7,7 @@ from core.ini.draw_groups import build_draw_groups
 from core.ini.sections import extract_resources, parse_sections
 from core.ini.wwmi_skeleton import stock_wwmi_merged_layouts
 from tests.support.wwmi_skeleton import stock_merged_skeleton_ini
-from tests.support.wwmi_skeleton import modern_merged_skeleton_ini
+from tests.support.wwmi_skeleton import hybrid_merged_skeleton_ini, modern_merged_skeleton_ini
 
 
 def test_stock_layout_follows_direct_draws_and_survives_weight_changes(tmp_path):
@@ -295,6 +295,9 @@ def _variant(text, edits, extra=""):
     ([("run = CommandListCleanup\nendif\nendif\n", "run = CommandListCleanup\nendif\n$active = 1\nendif\n"
                                                     "ps-t0 = ResourceEffect\nCP3\n")], ""),
     ([("[CommandListCleanup]\nvb0 = ref ResourceSaved\n", "[CommandListCleanup]\nvb0 = ref ResourceSaved\n$active = 1\n")], ""),
+    # A literal flag write may sit at either end of the binder list.
+    ([("endif\n[CommandListChecks]", "endif\n$active = 1\n[CommandListChecks]")], ""),
+    ([("[CommandListBind]\n", "[CommandListBind]\n$active = 1\n")], ""),
     ([("drawindexed = 3, 0, 0", "run = CommandListToggles\n$mode == 1,2\ndrawindexed = 3, 0, 0")], _TOGGLES),
     ([(_OPTIONAL_DRAW, "run = CommandListExtra\n")], _EXTRA),
     ([("endif\nif ResourcePoseA !== null\nhandling = skip\nendif\nendif\n[ResourcePoseA]",
@@ -334,6 +337,9 @@ def test_layout_past_the_u8_palette_keeps_its_exact_proof(template):
     ([("match_index_count = 6\n", "match_index_count = 6\nif $mode == 1\nvb4 = ResourcePoints\nendif\n")], ""),
     ([("run = CommandListCleanup\nendif\nendif\n", "run = CommandListCleanup\nendif\nendif\nvs-cb4 = ResourcePoints\n")], ""),
     ([("ps-t17 = ResourceEffect", "ResourcePoseA = ref ps-t17")], ""),
+    # Only literal writes to plain variables are ignored inside the binder list.
+    ([("endif\n[CommandListChecks]", "endif\n$\\WWMIv1\\vg_count = 9\n[CommandListChecks]")], ""),
+    ([("endif\n[CommandListChecks]", "endif\n$active = $mode\n[CommandListChecks]")], ""),
 ])
 def test_unsafe_exporter_look_alikes_stay_unproven(edits, extra):
     text = _variant(modern_merged_skeleton_ini(), edits, extra)
@@ -371,6 +377,46 @@ def test_modified_merge_status_or_proxy_program_stays_unproven(before, after):
     text = modern_merged_skeleton_ini(remapped=True)
     assert before in text
     assert stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=text.replace(before, after))) == {}
+
+
+def test_frame_gated_merge_status_components_prove_the_same_layout():
+    # The gate variables only time the merge; the proven layout is the literal
+    # constants, identical to the ungated template however the gate is ordered.
+    expected = {name: proof.layout for name, proof in stock_wwmi_merged_layouts(
+        parse_sections("source-01.ini", text=modern_merged_skeleton_ini())).items()}
+    assert len(expected) == 2
+    text = hybrid_merged_skeleton_ini()
+    reordered = text.replace("$\\WWMIv1\\vg_offset = 0\n$\\WWMIv1\\vg_count = 2\n$status01 = 0\n",
+                             "$status01 = 0\n$\\WWMIv1\\vg_count = 2\n$\\WWMIv1\\vg_offset = 0\n")
+    no_reset = text.replace("$\\WWMIv1\\vg_count = 1\n$status02 = 0\nendif", "$\\WWMIv1\\vg_count = 1\nendif")
+    assert reordered != text and no_reset != text
+    for variant in (text, reordered, no_reset):
+        sections = parse_sections("source-01.ini", text=variant)
+        proofs = stock_wwmi_merged_layouts(sections)
+        assert {name: proof.layout for name, proof in proofs.items()} == expected
+        draws = [draw for group in build_draw_groups(sections, extract_resources(sections)) for draw in group["draws"]]
+        assert draws and all(draw.skinning_merged_layout == expected["textureoverridepart01"] for draw in draws)
+
+
+@pytest.mark.parametrize("before,after", [
+    # The gate must follow the frame id the publish list toggles.
+    ("if $seen01 != $epoch", "if $seen01 != $mode"),
+    ("if $epoch\n$epoch = 0\nelse\n$epoch = 1\nendif\n", ""),
+    # Only literal constants and literal flags may sit inside the gate.
+    ("$\\WWMIv1\\vg_count = 2\n$status01 = 0", "$\\WWMIv1\\vg_count = $mode\n$status01 = 0"),
+    ("$\\WWMIv1\\vg_count = 2\n$status01 = 0", "$status01 = 0"),
+    ("$\\WWMIv1\\vg_offset = 0\n$\\WWMIv1\\vg_count = 2", "$\\WWMIv1\\vg_offset = 0\n$\\WWMIv1\\vg_offset = 1\n$\\WWMIv1\\vg_count = 2"),
+    ("$status01 = 0\nendif", "run = CommandListCollect\n$status01 = 0\nendif"),
+    ("$status01 = 0\nendif", "vs-cb4 = ResourcePoints\n$status01 = 0\nendif"),
+    ("$status01 = 0\nendif", "if $mode == 1\n$status01 = 0\nendif\nendif"),
+    ("$status01 = 0\nendif", "$status01 = 0\nelse\n$status01 = 1\nendif"),
+    # Merge constants never move into the status block of a gated component.
+    ("$merge = $status01\nrun", "$\\WWMIv1\\vg_offset = 5\n$merge = $status01\nrun"),
+])
+def test_frame_gate_accepts_only_timing_scaffolding(before, after):
+    text = hybrid_merged_skeleton_ini()
+    assert before in text
+    assert stock_wwmi_merged_layouts(parse_sections("source-01.ini", text=text.replace(before, after, 1))) == {}
 
 
 _NATIVE_INI = r"""[Constants]

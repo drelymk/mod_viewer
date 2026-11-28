@@ -13,6 +13,8 @@ _BLEND_REMAP = r"customshader\wwmiv1\blendremapper"
 _SKELETON_REMAP = r"customshader\wwmiv1\skeletonremapper"
 # A literal flag set, including namespaced variables but never the WWMI API.
 _FLAG = r"\$(?!\\wwmiv1\\)[\w\\]+ = -?\d+(?:\.\d+)?"
+# A literal write to a plain mod variable (no namespace, never the WWMI API).
+_LITERAL_FLAG = r"\$\w+ = -?\d+(?:\.\d+)?"
 _CHECK = r"checktextureoverride = (?:ps-t\d+|vs-cb[34])"
 
 
@@ -109,9 +111,11 @@ def _parse_cb(lines, marker):
 
 
 def _status_binder(lines, marker, outputs):
+    # A literal flag write to a mod variable never changes a binding, so it may
+    # appear anywhere in the list; the bindings around it stay exact.
+    lines = [line for line in lines or () if line != "vb6 = null" and not _match(_LITERAL_FLAG, line)]
     if not lines:
         return None
-    lines = [line for line in lines if line != "vb6 = null"]
     bypass = _match(r"(resource\w+) = ref vb0", lines[0])
     if not bypass or len(lines) < 11 or not _match(r"ib = resource\w+", lines[1]):
         return None
@@ -177,6 +181,29 @@ def _pixel_run(lines, index):
     return index
 
 
+def _frame_gate(lines, index, frame):
+    """Parse a frame gate: a local mirroring the toggled frame id that, on change,
+    assigns only the component's literal merge constants and literal flags.
+
+    Returns (index after its endif, offset match, count match) or None.
+    """
+    declared = frame is not None and _match(r"local (\$\w+)", lines[index])
+    if not declared or lines[index + 1:index + 3] != [f"if {declared[1]} != {frame}", f"{declared[1]} = {frame}"]:
+        return None
+    end = _block_end(lines, index + 1)
+    if end is None:
+        return None
+    offset = count = None
+    for line in lines[index + 3:end]:
+        if (item := _match(re.escape(_OFFSET) + r" = (\d+)", line)) and offset is None:
+            offset = item
+        elif (item := _match(re.escape(_COUNT) + r" = (\d+)", line)) and count is None:
+            count = item
+        elif not _match(_FLAG, line):
+            return None
+    return end + 1, offset, count
+
+
 def _status_component(lines, merger, state, output, frame=None):
     # 3DMigoto ignores unrecognised bare entries such as a stray "CP3".
     lines = [line for line in lines or () if "=" in line
@@ -225,13 +252,19 @@ def _status_component(lines, merger, state, output, frame=None):
             return None
         merged = cursor + 7
     else:
-        local = _match(r"if (\$\w+) != 2", lines[cursor + 1])
-        offset = _match(re.escape(_OFFSET) + r" = (\d+)", lines[cursor + 2])
-        count = _match(re.escape(_COUNT) + r" = (\d+)", lines[cursor + 3])
-        if not local or lines[cursor + 4:cursor + 8] != [f"{state} = {local[1]}", f"run = {merger}",
-                                                         f"{local[1]} = {state}", "endif"]:
+        # An optional frame gate may supply the merge constants; the status
+        # block then only runs the shared merge list.
+        gate = _frame_gate(lines, cursor + 1, frame)
+        start, offset, count = gate or (cursor + 1, None, None)
+        local = _match(r"if (\$\w+) != 2", lines[start]) if start < len(lines) else None
+        if not gate:
+            offset = _match(re.escape(_OFFSET) + r" = (\d+)", lines[start + 1])
+            count = _match(re.escape(_COUNT) + r" = (\d+)", lines[start + 2])
+            start += 2
+        if not local or lines[start + 1:start + 5] != [f"{state} = {local[1]}", f"run = {merger}",
+                                                       f"{local[1]} = {state}", "endif"]:
             return None
-        merged = cursor + 8
+        merged = start + 5
     if not offset or not count:
         return None
     row = fields[0][1], int(fields[1][1]), int(fields[2][1]), int(offset[1]), int(count[1])
@@ -454,7 +487,7 @@ def modern_wwmi_merged_layouts(commands, plain, external_neutral=frozenset()):
         if any(plain.get(name) != [] for name in proxies):
             return {}
     cleanups = [name for name, lines in plain.items() if name.startswith("commandlist") and lines
-                and [line for line in lines if not _match(r"\$\w+ = -?\d+(?:\.\d+)?", line)] == cleanup_body]
+                and [line for line in lines if not _match(_LITERAL_FLAG, line)] == cleanup_body]
     if len(cleanups) != 1:
         return {}
     checks = {name for name, lines in plain.items() if name.startswith("commandlist") and lines

@@ -19,6 +19,8 @@ rules they must follow.
 - Windows: published directories and reports inherit the destination parent's ACL,
   not temp-directory ACLs. Skip ACL resets only when the volume has no persistent
   ACL support; query, permission or apply failures abort and keep the prior Asset.
+  Rig installs also restore the Asset folder's own inheritance first, so a
+  temp-staged protected Asset never passes owner-only ACLs to its sidecars.
 - Viewer exports carry the `mod-viewer` marker, which never identifies a game.
   ZZMI/GIMI keep `hash.json`; WWMI uses native `Metadata.json`, `TextureUsage.json`
   and `Component N.fmt/.vb/.ib`.

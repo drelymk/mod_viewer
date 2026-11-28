@@ -91,8 +91,12 @@ Clip playback is in [animation-playback.md](animation-playback.md).
 - WWMI stock merged adapter: frame-state and merge-status programs verify merger
   inputs/outputs, publishing, native CB/Blend bindings, direct or verified-helper
   draw ownership and every component's merge offset/count (skipped ones included).
-  Layouts may exceed 256 bones (each component at most 256, total at most 1024);
-  out-of-range writes drop. Verified shared R8 streams keep raw palette IDs without
+  Gate variables (frame id, per-component locals, status resets) only time a merge,
+  so a merge-status component may sit behind a frame gate of literal constants and
+  flags that follows the toggled frame id; layout identity is those constants,
+  never the gating; literal flag writes to plain variables are ignored in the binder
+  and cleanup lists. Layouts may exceed 256 bones (each component at most 256,
+  total at most 1024); out-of-range writes drop. Verified shared R8 streams keep raw palette IDs without
   adding `vg_offset` (which stays provenance); namespace/domain keys separate them
   from legacy offset-decoded sources. Translate saved legacy Weight IDs once, only
   for exact loaded verified sources, without writing metadata on load; presets keep

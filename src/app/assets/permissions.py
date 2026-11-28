@@ -27,8 +27,12 @@ def _volume_supports_acls(directory):
     return bool(flags.value & 0x00000008)  # FILE_PERSISTENT_ACLS
 
 
-def inherit_directory_permissions(directory):
-    """Reset generated Windows files to their current parent's inherited ACLs."""
+def inherit_directory_permissions(directory, recursive=True):
+    """Reset generated Windows files to their current parent's inherited ACLs.
+
+    Without recursion only the directory itself is reset; Windows propagates the
+    restored inheritance to descendants that already inherit from it.
+    """
     if sys.platform != "win32":
         return
     try:
@@ -36,7 +40,7 @@ def inherit_directory_permissions(directory):
             return
         executable = Path(os.environ["SystemRoot"]) / "System32" / "icacls.exe"
         subprocess.run(
-            [str(executable), str(directory), "/reset", "/T", "/L", "/Q"],
+            [str(executable), str(directory), "/reset", *(["/T"] if recursive else []), "/L", "/Q"],
             check=True, capture_output=True,
             creationflags=subprocess.CREATE_NO_WINDOW)
     except (OSError, subprocess.CalledProcessError) as error:
