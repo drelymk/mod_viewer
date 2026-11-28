@@ -98,7 +98,16 @@ Shared rules: [game-extract.md](game-extract.md). Playback contracts:
   pairs these in animation blueprints): the prop sequence in the prop mesh's folder
   on its skeleton named after the clip exactly or with `_<suffix>` (longest clip name
   wins), same frame interval, no longer than the clip; it pairs with every same-named
-  clip it fits, and a clip paired twice is not guessed. Bake `prop-track-v1` tracks
+  clip it fits, and a clip paired twice is not guessed, except through the component's
+  own animation blueprint: the template's `AnimClass` ABP lists its sequences in keyed
+  `{"Key", "Value": AnimSequence}` maps, and exactly one candidate among them is the
+  pair (a left/right pair of one name on a shared mesh) only for clips whose submesh
+  control notify (`MeshName`, visible-at-start on) shows that component. A sequence
+  only a sibling component's ABP lists is never this component's (the other hand's
+  motion), and a clip with no name pairing pairs through the exact key it is listed
+  under (`SpDodge_2` -> `SpDodge2`) unless a sibling lists that key and the notifies do
+  not name this component. Unreadable or map-less ABPs, several ABPs per component and
+  sequences outside the prop folder change nothing (name pairing alone). Bake `prop-track-v1` tracks
   (per frame and bone, asset-space translation + quaternion relative to the rigid
   socket rest). Prop sequences keep their PSA scale keys (the game hides props by
   scaling a bone to 0 and resizes them); a key is relative to the bone's rest scale (a
@@ -132,7 +141,7 @@ Shared rules: [game-extract.md](game-extract.md). Playback contracts:
 - Effect timing: spawn at the notify's absolute start; the mesh plays after its
   group delay; each level has a `StartTime`/`LoopTime`/`EndTime` lifetime that ends
   after their sum without a loop, or with one lives until the notify ends and then
-  plays out unless `FasterStop` (default on) stops it. Hide when either level ends
+  plays out unless `FasterStop` (default on) stops it. A mesh model's `LoopTime` of exactly -1 is an unbounded loop (lives until the notify ends, then only `EndTime`); inferred from the game's 65 such models, never a group's, not from its script. Other negative stages are rejected. Hide when either level ends
   and never after the clip (`ContinuousLoop` only concerns particle groups).
   Settings are classified by `wuwa_effect_settings`: handled, ignored, or blocking
   unless at a neutral value. Unknown settings never drop a mesh; the prop's report

@@ -424,12 +424,13 @@ def mesh_parts(client, package, world):
 
 
 def extract(client, root, record, captured, palettes, mesh_package, body_exports, rig, clips, effects, library,
-            cancel):
+            cancel, shown=None):
     """Write the character's blueprint and effect props under ``library/Props``.
 
     ``palettes`` maps proven captured component numbers of the verified mesh to their
     palettes; ``clips`` maps the Asset's own clip names to their (id, frame count, length)s;
-    ``effects`` maps the Asset's own clip ids to (length, effect notify facts). Returns
+    ``effects`` maps the Asset's own clip ids to (length, effect notify facts); ``shown``
+    maps them to the component names their submesh notifies show. Returns
     (entries, skipped). Only props with clip tracks are exported; the regular weapon is
     never exported (see the module docstring).
     """
@@ -445,7 +446,7 @@ def extract(client, root, record, captured, palettes, mesh_package, body_exports
     # Effects come first: an animation a clip's effect plays is never a blueprint prop's.
     resolved = wuwa_effect_props.resolve(client, effects, cancel)
     wuwa_blueprint_props.extract(client, own, names, worlds, clips, writer, cancel,
-                                 wuwa_effect_props.claimed(resolved[0]))
+                                 wuwa_effect_props.claimed(resolved[0]), shown or {})
     wuwa_effect_props.extract(client, resolved, rig, library, writer, cancel)
     if writer.materials:
         _attach_textures(client, root, record, captured, palettes, body_exports, writer.materials, library, cancel)

@@ -66,6 +66,21 @@ EFFECT_SETTINGS = frozenset(("EffectDataAssetRef", "SocketName", "Attached", "Fa
 MAX_EFFECT_NOTIFIES = 64
 
 
+def notify_states(row, rows, kind):
+    """(notify, exported notify object or None) for each notify state of class ``kind`` on the
+    exported sequence ``row``; a name exported twice is never guessed between."""
+    objects = {}
+    for item in rows:
+        if isinstance(item, dict) and item.get("Type") == kind and isinstance(item.get("Name"), str):
+            objects[item["Name"]] = None if item["Name"] in objects else item
+    notifies = (row.get("Properties") or {}).get("Notifies")
+    for notify in notifies if isinstance(notifies, list) else []:
+        state = notify.get("NotifyStateClass") if isinstance(notify, dict) else None
+        name = state.get("ObjectName") if isinstance(state, dict) else None
+        if isinstance(name, str) and name.startswith(kind + "'"):
+            yield notify, objects.get(name[len(kind) + 1:].rstrip("'").rsplit(":", 1)[-1])
+
+
 def effect_notifies(row, rows):
     """The effect notify states of one exported sequence ``row`` as plain facts:
     ``[{effect, socket, attached, faster_stop, start, duration, link, settings}]``.
@@ -74,19 +89,8 @@ def effect_notifies(row, rows):
     default are stored, and no notify stores it on). ``settings`` maps every other property
     of the notify object to its value (``{"(unreadable)": None}`` when the object cannot be
     read). Nothing here is validated."""
-    objects = {}
-    for item in rows:
-        if isinstance(item, dict) and item.get("Type") == EFFECT_NOTIFY and isinstance(item.get("Name"), str):
-            # A name exported twice is never guessed between.
-            objects[item["Name"]] = None if item["Name"] in objects else item
-    notifies = (row.get("Properties") or {}).get("Notifies")
     found = []
-    for notify in notifies if isinstance(notifies, list) else []:
-        state = notify.get("NotifyStateClass") if isinstance(notify, dict) else None
-        name = state.get("ObjectName") if isinstance(state, dict) else None
-        if not isinstance(name, str) or not name.startswith(EFFECT_NOTIFY + "'"):
-            continue
-        target = objects.get(name[len(EFFECT_NOTIFY) + 1:].rstrip("'").rsplit(":", 1)[-1])
+    for notify, target in notify_states(row, rows, EFFECT_NOTIFY):
         properties = target.get("Properties") if isinstance(target, dict) else None
         properties = properties if isinstance(properties, dict) else {}
         reference, socket = properties.get("EffectDataAssetRef"), properties.get("SocketName")
@@ -100,6 +104,25 @@ def effect_notifies(row, rows):
         if len(found) == MAX_EFFECT_NOTIFIES:
             break
     return found
+
+
+SUBMESH_NOTIFY = "TsAnimNotifyStateSubMeshControl_C"
+# The notify's "visible at start" flag (the game's own Chinese property name).
+SUBMESH_VISIBLE = "开始是否可见"
+
+
+def shown_components(row, rows):
+    """Sorted blueprint component names (``MeshName``) the exported sequence ``row``'s submesh
+    control notifies make visible. Only a notify whose visible-at-start flag is on counts;
+    notify windows are not read, so a name only says the clip shows that component."""
+    shown = set()
+    for _notify, target in notify_states(row, rows, SUBMESH_NOTIFY):
+        properties = target.get("Properties") if isinstance(target, dict) else None
+        properties = properties if isinstance(properties, dict) else {}
+        mesh = properties.get("MeshName")
+        if isinstance(mesh, str) and mesh and properties.get(SUBMESH_VISIBLE) is True:
+            shown.add(mesh)
+    return sorted(shown)
 
 
 def sequence(file, morph_names=(), *, skeleton=None):
@@ -118,7 +141,8 @@ def sequence(file, morph_names=(), *, skeleton=None):
         slim["TrackToSkeletonMapTable"] = [dict(BoneTreeIndex=row["BoneTreeIndex"]) for row in table
                                            if isinstance(row, dict) and "BoneTreeIndex" in row]
     return dict(Type="AnimSequence", Name=matches[0].get("Name"), Properties=slim,
-                MorphWeights=sample_curves(matches[0], morph_names), Effects=effect_notifies(matches[0], rows))
+                MorphWeights=sample_curves(matches[0], morph_names), Effects=effect_notifies(matches[0], rows),
+                Shown=shown_components(matches[0], rows))
 
 
 def animation_reference(client, skeleton, rig):
@@ -708,6 +732,8 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     # Each clip's own effect notify windows, for props the game spawns while they run.
     clip_effects = {item["id"]: (entries[item["id"]]["duration"], bases[item["source"]].get("Effects") or [])
                     for item in provenance}
+    # The blueprint components each clip's own notifies show.
+    clip_shown = {item["id"]: frozenset(bases[item["source"]].get("Shown") or []) for item in provenance}
     sequences, skipped_sequences, sequence_error = [], [], None
     try:
         montages = sorted(list_packages(client, "AnimMontage", character_root, cancel))[:montage_sequences.MAX_MONTAGES]
@@ -753,7 +779,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     try:
         props, skipped_props = wuwa_props.extract(
             client, Path(root), record, captured, {index: palette_by_component[index] for index in proven if index not in companions},
-            mesh_package, mesh_document, rig, own_clips, clip_effects, library, cancel)
+            mesh_package, mesh_document, rig, own_clips, clip_effects, library, cancel, shown=clip_shown)
     except ExtractionCancelled:
         raise
     except (ValueError, KeyError, TypeError, IndexError, OSError) as error:

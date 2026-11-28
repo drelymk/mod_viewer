@@ -24,7 +24,9 @@ level. Each level (group, model) has a three-stage
 lifetime (``StartTime``/``LoopTime``/``EndTime``): without a loop it ends by itself
 after their sum; with one it lives until the notify ends, then plays out its lifetime
 (``Start + Loop + End`` minus its time wrapped into the loop) unless the notify stops
-it at once (``FasterStop``, the default). The mesh hides when either level ends, and
+it at once (``FasterStop``, the default). A mesh model's ``LoopTime`` of -1 is a loop
+with no limit (see ``lifetime``): it lives until the notify ends, then plays out only
+``EndTime`` unless stopped at once. The mesh hides when either level ends, and
 never later than the clip. ``ContinuousLoop`` only concerns particle groups.
 
 An animation whose skeleton converts onto the mesh's own bones is baked into a
@@ -91,10 +93,20 @@ def _number(value, default=0.0):
     return float(value)
 
 
-def lifetime(properties):
-    """(StartTime, LoopTime, EndTime) of a group or model, or a ValueError."""
+UNBOUNDED = -1.0
+
+
+def lifetime(properties, unbounded=False):
+    """(StartTime, LoopTime, EndTime) of a group or model, or a ValueError.
+
+    A mesh model (``unbounded``) may set ``LoopTime`` to exactly -1: a loop with no time
+    limit, so it lives until its notify ends. The game's own script was not read; the
+    reading follows from every such model in the game (65 across the roles, none on a
+    group) living in clips whose notify spans the whole clip and whose animation is
+    never longer than that window. Any other negative stage is rejected.
+    """
     stages = tuple(_number(properties.get(key)) for key in ("StartTime", "LoopTime", "EndTime"))
-    if stages[0] < 0 or stages[1] < 0 or stages[2] < 0:
+    if stages[0] < 0 or stages[2] < 0 or (stages[1] < 0 and not (unbounded and stages[1] == UNBOUNDED)):
         raise ValueError("The effect lifetime starts before its spawn.")
     return stages
 
@@ -161,7 +173,7 @@ def mesh_model(exports):
     if properties.get("Looping") not in (None, False):
         return refs, None, "The effect mesh animation loops."
     try:
-        stages = lifetime(properties)
+        stages = lifetime(properties, unbounded=True)
         policy.level_transform(properties)
     except ValueError as error:
         return refs, None, str(error)
@@ -186,6 +198,9 @@ def finish(stages, begin, stop, immediately):
     """When one effect level ends, as ``EffectLifeTime`` runs it: it began at ``begin``
     and its notify stops it at ``stop`` (at once when ``immediately``)."""
     start, loop, end = stages
+    if loop < 0:
+        # An unbounded loop lives until the stop, then plays out only its end stage.
+        return stop if immediately else stop + end
     stamp = start + loop + end
     if loop <= 0:
         # No loop: the lifetime ends by itself, or at the stop when it has none.
