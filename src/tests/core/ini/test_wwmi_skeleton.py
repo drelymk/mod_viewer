@@ -255,15 +255,17 @@ def test_merge_status_and_proxy_decode_lifecycle(tmp_path, remapped, influences,
         with pytest.raises(SkinningPreviewError, match="layout"):
             decode_skinning(source, raw, (0,), vertex[:-2], **tables)
         # The remapper's extra threads only read zeros and drop writes past the
-        # buffers; a short count would leave real vertices unremapped.
+        # buffers. A short count leaves the tail unremapped, which is safe only
+        # while this draw never reads it (another draw may use the tail natively).
         from dataclasses import replace
-        for declared, ok in ((4, True), (2, False)):
+        for declared, used, ok in ((4, (2, 0), True), (2, (0,), True), (2, (2, 0), False)):
             counted = replace(source, blend_remap=replace(source.blend_remap, vertex_count=declared))
             if ok:
-                assert decode_skinning(counted, raw, (2, 0), vertex, **tables).indices == decoded.indices
+                assert decode_skinning(counted, raw, used, vertex, **tables).indices == (
+                    decoded.indices if used == (2, 0) else decoded.indices[influences * 4:])
             else:
                 with pytest.raises(SkinningPreviewError, match="layout"):
-                    decode_skinning(counted, raw, (0,), vertex, **tables)
+                    decode_skinning(counted, raw, used, vertex, **tables)
 
 
 _TOGGLES = "\n[CommandListToggles]\nif $mode == 1\n$flag = 2\nendif\n"
