@@ -854,7 +854,7 @@ def test_install_transaction_rolls_back_every_sidecar(tmp_path, monkeypatch):
         (output / "RigExtraction.json").write_bytes(b"new report")
         return directory, output
     directory, output = stage("stage01")
-    def permissions(path):
+    def permissions(path, **_):
         if path.name == "Animation":
             raise OSError("synthetic permission failure")
     monkeypatch.setattr("app.bridge.rig_extraction.inherit_directory_permissions", permissions)
@@ -862,7 +862,7 @@ def test_install_transaction_rolls_back_every_sidecar(tmp_path, monkeypatch):
         install_package(asset, output, directory)
     assert sidecar_revision(asset) == before
     directory, output = stage("stage02")
-    monkeypatch.setattr("app.bridge.rig_extraction.inherit_directory_permissions", lambda _: None)
+    monkeypatch.setattr("app.bridge.rig_extraction.inherit_directory_permissions", lambda *_, **__: None)
     install_package(asset, output, directory)
     assert (asset / "Rig.json").read_bytes() == b"new rig"
     assert (directory / "previous/Animation/manifest.json").read_bytes() == b"old animation"
@@ -905,7 +905,7 @@ def test_job_picker_authorization_cancellation_revision_and_save_lifecycle(tmp_p
         (output / "RigExtraction.json").write_bytes(b"report")
         return dict(bones=2, clips=1, imported=1, secondary=1, skipped=0), capture(root, record)[1]
     monkeypatch.setattr("app.assets.game_extract.wwmi.build", build)
-    monkeypatch.setattr("app.bridge.rig_extraction.inherit_directory_permissions", lambda _: None)
+    monkeypatch.setattr("app.bridge.rig_extraction.inherit_directory_permissions", lambda *_, **__: None)
     def finish(job):
         deadline = time.monotonic() + 5
         while service.status(job)["status"] == "running" or service._active:
@@ -962,7 +962,7 @@ def test_index_failure_is_reported_without_rescanning_required_indexes(tmp_path,
     selected = str(asset)
     service = RigExtraction(lambda _: (selected, entry, {}, record))
     monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
-    monkeypatch.setattr("app.bridge.rig_extraction.inherit_directory_permissions", lambda _: None)
+    monkeypatch.setattr("app.bridge.rig_extraction.inherit_directory_permissions", lambda *_, **__: None)
     calls = []
     backend = backends.require_backend(kind)
     monkeypatch.setattr(backend, "capture", lambda *_: ([], {}))
@@ -1718,6 +1718,12 @@ def _scale(*keys, axes=("Curve", "Curve[1]", "Curve[2]"), mode="RCIM_Linear"):
     ("model", dict(REFS, StartTime=0.1, LoopTime=1, EndTime=1.2, ContinuousLoop=True, Looping=False),
      ((MESH, BASE), (0.1, 1.0, 1.2), None)),
     ("model", dict(REFS, Looping=True), ((MESH, BASE), None, "The effect mesh animation loops.")),
+    # A mesh model's loop of exactly -1 has no time limit; other negative stages, and a group's, are rejected.
+    ("model", dict(REFS, LoopTime=-1.0, EndTime=1.0), ((MESH, BASE), (0.0, -1.0, 1.0), None)),
+    ("model", dict(REFS, LoopTime=-2.0), ((MESH, BASE), None, "The effect lifetime starts before its spawn.")),
+    ("model", dict(REFS, StartTime=-1.0, LoopTime=-1.0), ((MESH, BASE), None, "The effect lifetime starts before its spawn.")),
+    ("group", [dict(Type="EffectModelGroup_C", Properties=dict(LoopTime=-1.0, EffectData=[dict(Key=MESH_KEY, Value=0.0)]))],
+     ([(MODEL01, 0.0)], None, "The effect lifetime starts before its spawn.")),
     ("model", dict(REFS, HideFrames=2),
      ((MESH, BASE), None, "The effect mesh model has settings the viewer does not support: HideFrames.")),
     # Scale curves only drive the mesh with bUseCurve, and cubic keys are not reproduced.
@@ -1742,6 +1748,10 @@ def _scale(*keys, axes=("Curve", "Curve[1]", "Curve[2]"), mode="RCIM_Linear"):
     ("visible", (dict(start=1, duration=4.1, faster_stop=False), 0, (0, 1, 0.5), (0.5, 1, 0)), (1.0, 5.5)),
     ("visible", (dict(start=1, duration=8.5, faster_stop=False), 0, (0, 1, 2), (0, 1, 2)), (1.0, 10.0)),
     ("visible", (dict(start=1, duration=1, faster_stop=True), 1, (0, 1, 0), (0, 1, 0)), None),
+    # An unbounded model loop lives until the notify stops it: at once, or after its end stage.
+    ("visible", (dict(start=1, duration=4, faster_stop=True), 0, None, (0, -1, 1)), (1.0, 5.0)),
+    ("visible", (dict(start=1, duration=4, faster_stop=False), 0, None, (0, -1, 1)), (1.0, 6.0)),
+    ("visible", (dict(start=1, duration=8.5, faster_stop=False), 0, None, (0, -1, 2)), (1.0, 10.0)),
 ])
 def test_effect_props_follow_the_game_effect_lifetimes(check, value, expected):
     from app.assets.game_extract import wuwa_effect_props
@@ -1961,3 +1971,121 @@ def test_prop_sequences_pair_with_clips_by_exact_name_and_frame_interval(sequenc
 
     clips = {"Attack01": [("Attack01", 3, 2)], "Attack01_End": [("Attack01_End", 3, 2)]}
     assert pairs(sequences, clips) == expected
+
+
+@pytest.mark.parametrize("preferred,expected", [
+    # Left and right sequences of one name fit: only the component's own animation blueprint breaks the tie.
+    (None, {}), (set(), {}), ({"R"}, {"Clip01": "R"}), ({"L"}, {"Clip01": "L"}), ({"L", "R"}, {}), ({"Other"}, {}),
+])
+def test_prop_animation_blueprint_only_breaks_ties_between_fitting_sequences(preferred, expected):
+    from app.assets.game_extract.wuwa_blueprint_props import pairs
+
+    clips = {"Clip01": [("Clip01", 3, 2)], "Clip02": [("Clip02", 3, 2)]}
+    sequences = {"L": ("Clip01", 3, 2), "R": ("Clip01", 3, 2), "Only": ("Clip02", 3, 2)}
+    # A clip with a single fitting sequence pairs whether or not the blueprint lists it.
+    assert pairs(sequences, clips, preferred) == {**expected, "Clip02": "Only"}
+
+
+def test_prop_components_choose_their_own_side_through_animation_blueprint_and_notify(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.assets.game_extract import wuwa_blueprint_props as props
+
+    root = "Client/Content/Aki/Character/"
+    base, left, right = root + "Role/BP_Base", root + "Prop/Hand/ABP_Hand", root + "Prop/Hand/ABP_Hand_R"
+    mesh = root + "Prop/Hand/Model/Hand"
+
+    def sequence(side, name="Clip01"):
+        return root + "Prop/Hand/CommonAnim/" + side + "/" + name
+
+    def template(variable, abp):
+        return [dict(Type="SCS_Node", Name="Node_" + variable, Properties=dict(
+                    InternalVariableName=variable, AttachToName="Socket01", ParentComponentOrVariableName="CharacterMesh0")),
+                dict(Type="SkeletalMeshComponent", Name=variable + "_GEN_VARIABLE", Properties=dict(
+                    SkeletalMesh=dict(ObjectPath=mesh + ".0"), AnimClass=dict(ObjectPath=abp + ".4")))]
+
+    def entry(key, clip_sequence):
+        return {"Key": key, "Value": dict(ObjectName="AnimSequence'x'", ObjectPath=clip_sequence + ".1")}
+
+    # Both sides play Clip01; only the right side plays Dodge (as Dodge_2 too, whose sequence name differs).
+    documents = {base: template("Left", left) + template("Right", right),
+                 left: [dict(Type="AnimBlueprint", Properties=dict(Maps=[entry("Clip01", sequence("L"))]))],
+                 right: [dict(Type="AnimBlueprint", Properties=dict(Maps=[
+                     entry("Clip01", sequence("R")), entry("Dodge", sequence("R", "Dodge")), entry("Dodge_2", sequence("R", "Dodge2"))]))]}
+
+    def export(kind, package, destination):
+        if package not in documents:
+            raise ValueError("missing")
+        file = tmp_path / (package.rsplit("/", 1)[-1] + ".json")
+        file.write_text(json.dumps(documents[package]))
+        return [file]
+
+    client = SimpleNamespace(export=export, work=tmp_path)
+    cancel = threading.Event()
+    anims = {}
+    assert props.components(client, {base}, cancel, anims) == {"Left": {(mesh, "Socket01")}, "Right": {(mesh, "Socket01")}}
+    assert anims == {"Left": {left}, "Right": {right}}
+    cache = {}
+    maps = {"Left": props.animation_map(client, left, cache, cancel), "Right": props.animation_map(client, right, cache, cancel)}
+    assert maps["Left"] == {"Clip01": {sequence("L")}}
+    assert maps["Right"]["Dodge_2"] == {sequence("R", "Dodge2")}
+    # An unreadable animation blueprint, or one without keyed sequence maps, says nothing.
+    assert props.animation_map(client, root + "Prop/Hand/Missing", cache, cancel) is None
+    documents[root + "Prop/Hand/Empty"] = [dict(Type="AnimBlueprint", Properties={})]
+    assert props.animation_map(client, root + "Prop/Hand/Empty", cache, cancel) is None
+    folders = {"Left": "Hand", "Right": "Hand"}
+    assert props.ownership("Left", folders, {"Left": None, "Right": maps["Right"]}) is None
+    assert props.ownership("Left", folders, maps)["foreign"] == {sequence("R"), sequence("R", "Dodge"), sequence("R", "Dodge2")}
+    assert props.ownership("Right", folders, maps)["foreign"] == {sequence("L")}
+    # A sibling in another folder owns nothing of this one.
+    assert props.ownership("Left", {"Left": "Hand", "Right": "Other"}, maps)["foreign"] == set()
+
+    sequences = {sequence("L"): ("Clip01", 3, 2), sequence("R"): ("Clip01", 3, 2),
+                 sequence("R", "Dodge"): ("Dodge", 3, 2), sequence("R", "Dodge2"): ("Dodge2", 3, 2)}
+    monkeypatch.setattr(props, "list_packages", lambda *_: list(sequences))
+    monkeypatch.setattr(props, "sequence_items", lambda *_: {package: dict(Properties=dict(
+        Skeleton=dict(ObjectPath=root + "Prop/Hand/Model/Skeleton01.0"), NumFrames=3, SequenceLength=2)) for package in sequences})
+    monkeypatch.setattr(props, "prepare", lambda *args: (3, b"", 2.0))
+    monkeypatch.setattr(props, "write_tracks", lambda writer, prepared, *_: (
+        {package: dict(file=package, sha256="", frame_count=3, duration=2.0) for package in prepared}, {}, {}))
+    writer = SimpleNamespace(skipped=[])
+    clips = {name: [(name, 3, 2)] for name in ("Clip01", "Dodge", "Dodge_2")}
+
+    def tracks(component, shown, siblings=maps):
+        found, _ = props._tracks(client, dict(bones=[]), root + "Prop/Hand/Model/Skeleton01", "Folder", clips, None, writer, cancel,
+                                 owner=props.ownership(component, folders, siblings), component=component, shown=shown)
+        return {clip: track["file"] for clip, track in found.items()}
+
+    dodges = {"Dodge": sequence("R", "Dodge"), "Dodge_2": sequence("R", "Dodge2")}
+    # Each component takes its own side of a tie, and only for the clips whose notifies show it.
+    assert tracks("Right", {"Clip01": {"Right"}}) == {"Clip01": sequence("R"), **dodges}
+    assert tracks("Left", {"Clip01": {"Left"}}) == {"Clip01": sequence("L")}
+    assert tracks("Left", {"Clip01": {"Right"}}) == {}
+    # No notify at all: the tie stays unresolved, while sequences only this side plays pair by name or exact key.
+    assert tracks("Right", {}) == dodges
+    # The right side's sequences are never the left component's, even when they pair by name.
+    assert tracks("Left", {}) == {}
+    # A clip a sibling also lists by key needs the notify to name this component.
+    rivals = {"Left": {**maps["Left"], "Dodge_2": frozenset({sequence("L")})}, "Right": maps["Right"]}
+    assert tracks("Right", {}, rivals) == {"Dodge": sequence("R", "Dodge")}
+    assert tracks("Right", {"Dodge_2": {"Right"}}, rivals) == dodges
+    # Without an animation blueprint a component pairs by name alone, as before.
+    assert tracks("Right", {}, {"Left": None, "Right": None}) == {"Dodge": sequence("R", "Dodge")}
+    assert writer.skipped == []
+
+
+def test_submesh_notifies_show_components_only_with_visible_flag():
+    from app.assets.game_extract.pipeline import SUBMESH_VISIBLE, shown_components
+
+    def notify(name):
+        return dict(NotifyStateClass=dict(ObjectName="TsAnimNotifyStateSubMeshControl_C'Clip01:" + name + "'"))
+
+    def state(name, mesh, visible):
+        return dict(Type="TsAnimNotifyStateSubMeshControl_C", Name=name, Properties={"MeshName": mesh, SUBMESH_VISIBLE: visible})
+
+    rows = [state("N_1", "OtherCase02", True), state("N_2", "OtherCase01", False), state("N_3", "OtherCase03", None)]
+    row = dict(Properties=dict(Notifies=[notify("N_1"), notify("N_2"), notify("N_3"), notify("N_4"),
+                                         dict(NotifyStateClass=dict(ObjectName="AnimNotifyStateEffect_C'Clip01:N_1'"))]))
+    assert shown_components(row, rows) == ["OtherCase02"]
+    assert shown_components(dict(Properties={}), rows) == []
+    # A name exported twice is never guessed between.
+    assert shown_components(row, rows + [state("N_1", "OtherCase04", True)]) == []
