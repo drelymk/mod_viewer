@@ -17,7 +17,7 @@ import pytest
 from app.assets import index
 from app.assets.animations import AnimationSessions, read_clip
 from app.assets.animation_morphs import read_morphs
-from app.assets.game_extract import (zzz_animation, zzz_index, zzz_morphs, zzz_native, zzz_pipeline,
+from app.assets.game_extract import (zzz_animation, zzz_index, zzz_layers, zzz_morphs, zzz_native, zzz_pipeline,
                                      unity_dds, zzz_prop_textures, zzz_props, zzz_runtime)
 from app.assets.game_extract.pipeline import rest_worlds
 from app.assets.game_extract.runtime import ExtractionCancelled
@@ -661,7 +661,7 @@ def test_controller_clips_follow_every_leaf_of_one_read_per_indexed_controller()
     def row(kind, cab, path_id, block="B1"):
         return dict(name="Item", type=kind, block=block, cab=cab, offset=0, file_ordinal=0, path_id=path_id)
     clip_rows = [row("AnimationClip", "CAB-Clips", number) for number in (1, 2, 3)]
-    converted = {zzz_index.identity(clip): (f"clip{clip['path_id']}", 1.0) for clip in clip_rows}
+    pointers = {("cab-clips", clip["path_id"]): {(f"clip{clip['path_id']}", 1.0)} for clip in clip_rows}
     # Two index copies of one controller, plus one that cannot be read.
     controllers = [row("AnimatorController", "CAB-Ctrl", 10), row("AnimatorController", "CAB-Ctrl", 10, "B2"),
                    row("AnimatorController", "CAB-Ctrl", 11)]
@@ -677,8 +677,7 @@ def test_controller_clips_follow_every_leaf_of_one_read_per_indexed_controller()
             # A blend motion's every leaf counts; a pointer to an unconverted clip plays nothing.
             return dict(states=[dict(motions=[dict(leaves=[leaf(1), leaf(2)])]), dict(motions=[dict(leaves=[leaf(9)])])])
     keys = [("cab-ctrl", 10), ("cab-ctrl", 11), ("cab-ctrl", 12)]
-    played = zzz_pipeline._controller_clips(Client(), clip_rows + controllers, keys, clip_rows, converted,
-                                            threading.Event())
+    played = zzz_pipeline._controller_clips(Client(), clip_rows + controllers, keys, pointers, threading.Event())
     assert played == {("cab-ctrl", 10): {"clip1", "clip2"}} and sorted(reads) == [10, 11]
 
 
@@ -1507,3 +1506,210 @@ def test_zzz_runtime_manifest_integrity_containment_and_cancellation(tmp_path):
     cancel.set()
     with pytest.raises(ExtractionCancelled):
         zzz_runtime.ensure_runtime(cancel, bundle)
+
+
+def _native_clip(work, name, bindings, values, stop=1.0, **extra):
+    """A synthetic two-key native clip: ``values`` holds one row per key and one column per channel."""
+    values = np.asarray(values, dtype="<f4")
+    (work / f"samples-{name}.bin").write_bytes(values.tobytes())
+    return dict(name=name, start=0, stop=stop, file=f"samples-{name}.bin", times=[0, stop], acl_count=values.shape[1],
+                streamed_count=0, streamed=[], dense=dict(count=0), constant=[], bindings=bindings, **extra)
+
+
+def _translation(path):
+    return dict(path=path, attribute=1, type="Transform", custom=0, pointer=0)
+
+
+def test_zzz_skin_layer_overrides_only_masked_bones_and_facial_curves_at_normalized_time(tmp_path):
+    _root, _asset, _record, avatar, _mesh, _rows, client = fixture(tmp_path)
+    rig = dict(bones=[dict(translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])] * 3)
+    body = _native_clip(client.work, "body", [_translation(100)], [[1, 0, 0], [2, 0, 0]])
+    # The layer is twice as long; both bones it keys exist, but only path hash 0 is in its mask.
+    shape = dict(path=0, attribute=123, type="SkinnedMeshRenderer", custom=20, pointer=0)
+    layer = _native_clip(client.work, "layer", [_translation(0), _translation(100), _translation(999), shape],
+                         [[0, 5, 0, 7, 7, 7, 1, 1, 1, 0], [0, 9, 0, 7, 7, 7, 1, 1, 1, 100]], stop=2.0,
+                         blend_shape_clamp=True)
+    morphs = {(0, 123): ("Shape01", 100)}
+    data, frames, duration, omitted, morph, keyed, _root_motion = zzz_animation.convert(
+        body, client.work, rig, avatar, morphs, layer=layer, mask=frozenset({0}))
+    poses = np.frombuffer(data, "<f4", count=frames * 3 * 10).reshape(frames, 3, 10)
+    assert duration == 1 and frames == 61 and omitted == 0 and keyed == [1, 2]
+    # The body keeps the unmasked bone; the masked bone follows the layer's normalized time.
+    assert poses[30, 2, :3] == pytest.approx([1.5, 0, 0])
+    assert poses[0, 1, :3] == pytest.approx([0, 5, 0]) and poses[30, 1, :3] == pytest.approx([0, 7, 0])
+    assert poses[60, 1, :3] == pytest.approx([0, 9, 0])
+    assert morph["names"] == ["Shape01"] and morph["clamp"] is True
+    assert morph["weights"][:, 0] == pytest.approx(np.linspace(0, 1, frames))
+    # Without a mask the layer writes no transforms; the root stays at its rest pose.
+    bare = zzz_animation.convert(body, client.work, rig, avatar, morphs, layer=layer)
+    assert bare[5] == [2] and np.frombuffer(bare[0], "<f4", count=frames * 30).reshape(frames, 3, 10)[30, 1, :3] == pytest.approx([0, 0, 0])
+    # A body and layer that disagree on the blend-shape weight policy have no single policy.
+    body_shape = _native_clip(client.work, "shape", [_translation(100), shape], [[1, 0, 0, 0], [2, 0, 0, 50]],
+                              blend_shape_clamp=False)
+    with pytest.raises(ValueError, match="weight policy"):
+        zzz_animation.convert(body_shape, client.work, rig, avatar, morphs, layer=layer, mask=frozenset({0}))
+
+
+@pytest.mark.parametrize("layers, expected, reason", [
+    (None, None, None),
+    ([dict(state_machine=0, motion_set=0)], None, None),
+    # Additive layers and layers over another state machine are not skin layers.
+    ([dict(state_machine=0, motion_set=0), dict(state_machine=1, motion_set=1, blend_mode=0, weight=1.0),
+      dict(state_machine=0, motion_set=1, blend_mode=1, weight=1.0), dict(state_machine=0, motion_set=0, blend_mode=0)],
+     None, None),
+    ([dict(state_machine=0, motion_set=0), dict(state_machine=0, motion_set=1, blend_mode=0, weight=1.0, name="Skin")],
+     "Skin", None),
+    ([dict(state_machine=0, motion_set=0), dict(state_machine=0, motion_set=1, blend_mode=0, weight=1.0),
+      dict(state_machine=0, motion_set=2, blend_mode=0, weight=1.0)], None, "ambiguous"),
+    ([dict(state_machine=0, motion_set=0), dict(state_machine=0, motion_set=1, blend_mode=0, weight=0.5)],
+     None, "partly weighted"),
+    ([dict(state_machine=1, motion_set=0)], None, "no base body layer"),
+])
+def test_zzz_skin_layer_is_the_one_full_weight_override_over_the_base_state_machine(layers, expected, reason):
+    controller = dict(layers=layers) if layers is not None else {}
+    if reason:
+        with pytest.raises(ValueError, match=reason):
+            zzz_layers.skin_layer(controller)
+    else:
+        assert (zzz_layers.skin_layer(controller) or {}).get("name") == expected
+    mask = zzz_layers.mask_hashes(dict(skeleton_mask=[dict(path_hash=5, weight=1.0), dict(path_hash=6, weight=0.0),
+                                                      dict(path_hash=7, weight=0.5), dict(path_hash="x", weight=1.0)]))
+    assert mask == {5, 7} and zzz_layers.mask_hashes(None) == frozenset()
+
+
+def test_zzz_states_pair_body_and_skin_leaves_by_pointer_keeping_block_copies():
+    def clip(path_id, block="B1"):
+        return dict(name=f"Clip{path_id}", type="AnimationClip", block=block, cab="CAB-Clips", offset=0, file_ordinal=0,
+                    path_id=path_id)
+    rows = [clip(1), clip(2), clip(2, "B2"), clip(3), clip(4)]
+    lookup = zzz_layers.clip_lookup(rows + [dict(rows[0], type="Mesh", path_id=9)])
+    assert sorted(lookup) == [("cab-clips", number) for number in (1, 2, 3, 4)] and len(lookup[("cab-clips", 2)]) == 2
+
+    def leaf(number):
+        return dict(cab="cab-clips", path_id=number)
+
+    def state(name, body, skin=None, **extra):
+        motions = [dict(leaves=[leaf(number) for number in body])]
+        if skin is not None:
+            motions.append(dict(leaves=[leaf(number) for number in skin]))
+        return dict(name=name, motions=motions, **extra)
+    controller = dict(states=[
+        state("Plain", [1], [2]), state("Again", [1], [2]), state("Body only", [3], []),
+        state("Tree", [1, 3], [2, 4]), state("Mismatch", [1, 3], [2]), state("Mirrored", [1], [2], mirror=True),
+        state("Missing", [1], [99]), state("Empty", []), "not a state"])
+    layer = dict(motion_set=1)
+    pairs, skipped = zzz_layers.state_pairs(controller, lookup, layer)
+    summary = [([row["path_id"] for row in pair["body"]], [row["path_id"] for row in pair["skin"] or ()],
+                pair["state_indices"]) for pair in pairs]
+    # Repeated pairs are kept once with every plain state; blend-tree leaves are never plain states.
+    assert summary == [([1], [2, 2], [0, 1]), ([3], [], [2]), ([3], [4], [])]
+    assert skipped == [dict(name="Mismatch", reason="The state's body and skin blend trees differ."),
+                       dict(name="Mirrored", reason="Runtime-mirrored states are not converted."),
+                       dict(name="Missing", reason="A clip pointer is missing from the index.")]
+    # Without a skin layer every state is body only.
+    bare, _skipped = zzz_layers.state_pairs(controller, lookup, None)
+    assert all(pair["skin"] is None for pair in bare)
+    with pytest.raises(ValueError, match="too many states"):
+        zzz_layers.state_pairs(dict(states=[{}] * (zzz_layers.MAX_STATES + 1)), lookup, None)
+    job = dict(body=rows[0], skin=rows[1], mask=frozenset({1, 2}))
+    assert zzz_layers.pair_source(job) != zzz_layers.pair_source({**job, "mask": frozenset({1})})
+    assert zzz_layers.pair_source(job) == zzz_layers.pair_source(dict(job))
+
+
+def _install_output(output, asset):
+    for file in output.iterdir():
+        if file.is_dir():
+            shutil.copytree(file, asset / file.name)
+        else:
+            shutil.copyfile(file, asset / file.name)
+
+
+def test_zzz_extraction_plays_skin_layer_clips_over_their_controllers_body_clips(tmp_path):
+    root, asset, record, _avatar, _mesh, rows, client = fixture(tmp_path)
+    skin_row = rows[-1]
+    body_row = {**skin_row, "name": "Avatar_Type01_Base_Ani_Clip01", "path_id": 70}
+    controller_row = {**skin_row, "name": "Avatar_Type01Character01_Controller", "type": "AnimatorController",
+                      "path_id": 60}
+
+    def leaf(path_id):
+        return dict(leaves=[dict(cab="CAB-01", path_id=path_id)])
+    controller = dict(
+        layers=[dict(name="Base Layer", state_machine=0, motion_set=0, blend_mode=0, weight=0.0, skeleton_mask=[]),
+                dict(name="Skin Layer", state_machine=0, motion_set=1, blend_mode=0, weight=1.0,
+                     skeleton_mask=[dict(path_hash=0, weight=1.0), dict(path_hash=100, weight=0.0)])],
+        states=[dict(name="Move", path="Base Layer.Move", transitions=[], motions=[leaf(70), leaf(2)])],
+        selectors=[], any_state=[])
+    native = client.read
+
+    def read(row):
+        if row["type"] == "AnimatorController":
+            return deepcopy(controller)
+        if row["type"] == "AnimationClip" and row["path_id"] == 70:
+            return _native_clip(client.work, "body", [_translation(100)], [[1, 0, 0], [2, 0, 0]])
+        if row["type"] == "AnimationClip" and row["path_id"] == 2:
+            # The family's own clip only keys the outfit bone (and one the mask leaves to the body).
+            return _native_clip(client.work, "skin", [_translation(0), _translation(100)],
+                                [[0, 5, 0, 9, 9, 9], [0, 5, 0, 9, 9, 9]])
+        return native(row)
+    client.read = read
+    cancel = threading.Event()
+    # Before the controller is indexed the family clip converts on its own, keying everything it names.
+    first = tmp_path / "first"
+    zzz_pipeline.build(client, root, record, first, "Character01", lambda *_: None, cancel, rows)
+    old = json.loads((first / "Animation/manifest.json").read_text())["clips"]
+    assert len(old) == 1 and "layers" not in json.loads((first / "Animation" / old[0]["file"]).read_text())
+    _install_output(first, asset)
+
+    rows += [body_row, controller_row]
+    output = tmp_path / "output"
+    report, _ = zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, cancel, rows)
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    # The body clip (another family) and the skin clip are one clip that replaces the skin-only one in place.
+    assert report["clips"] == report["imported"] == 1 and [entry["id"] for entry in manifest["clips"]] == [old[0]["id"]]
+    entry = manifest["clips"][0]
+    assert entry["name"] == skin_row["name"]
+    rig = validate_rig(json.loads((output / "Rig.json").read_text()))
+    metadata, data = read_clip(str(output / "Animation"), entry, rig)
+    poses = np.frombuffer(data, "<f4", count=metadata["frame_count"] * 30).reshape(-1, 3, 10)
+    assert poses[30, 2, :3] == pytest.approx([1.5, 0, 0]) and poses[30, 1, :3] == pytest.approx([0, 5, 0])
+    assert metadata["keyed_bones"] == [1, 2] and metadata["layers"] == dict(
+        body_source=zzz_index.identity(body_row), body_name=body_row["name"], skin_source=zzz_index.identity(skin_row),
+        skin_name=skin_row["name"], mask_bones=1)
+    # A body clip for another skeleton (tracks the Avatar lacks) cannot be paired.
+    read_body = client.read
+    client.read = lambda row: (_native_clip(client.work, "body", [_translation(998), _translation(999)],
+                                            [[1, 0, 0, 1, 0, 0], [2, 0, 0, 2, 0, 0]])
+                               if row["type"] == "AnimationClip" and row["path_id"] == 70 else read_body(row))
+    # Neither is the skin clip exported on its own as a skirt-only clip.
+    with pytest.raises(ValueError, match="No compatible ZZZ animation clips"):
+        zzz_pipeline.build(client, root, record, tmp_path / "unpaired", "Character01", lambda *_: None, cancel, rows)
+
+
+def test_zzz_extraction_skips_clips_that_move_no_bone_a_captured_mesh_uses(tmp_path):
+    root, asset, record, avatar, _mesh, rows, client = fixture(tmp_path)
+    # A companion's bone: part of the Avatar, but no captured mesh is skinned to it.
+    avatar["bones"].append(dict(path="Root/Companion01", hash=200, parent=0, translation=[0, 0, 0],
+                                rotation=[0, 0, 0, 1], scale=[1, 1, 1]))
+    companion = {**rows[-1], "name": "Avatar_Type01_Character01_Ani_Companion", "path_id": 80}
+    rows.append(companion)
+    native, moved = client.read, [100]
+
+    def read(row):
+        if row["type"] == "AnimationClip" and row["path_id"] == 80:
+            return _native_clip(client.work, "companion", [_translation(moved[0])], [[1, 0, 0], [2, 0, 0]])
+        return native(row)
+    client.read = read
+    cancel = threading.Event()
+    first = tmp_path / "first"
+    assert zzz_pipeline.build(client, root, record, first, "Character01", lambda *_: None, cancel, rows)[0]["clips"] == 2
+    _install_output(first, asset)
+    # Later the clip keys only the companion's bone: it is reported and an earlier copy leaves the library.
+    moved[0] = 200
+    output = tmp_path / "output"
+    report, _ = zzz_pipeline.build(client, root, record, output, "Character01", lambda *_: None, cancel, rows)
+    assert report["clips"] == report["imported"] == 1
+    assert report["skipped_details"] == [dict(source=zzz_index.identity(companion), name=companion["name"],
+                                              reason="The clip moves no bone the model's meshes use.")]
+    manifest = json.loads((output / "Animation/manifest.json").read_text())
+    assert [entry["name"] for entry in manifest["clips"]] != [companion["name"]] and len(manifest["clips"]) == 1
+    assert len(list((output / "Animation").glob("*.bin"))) == 1

@@ -10,7 +10,7 @@ import numpy as np
 from app.assets import animation_keys
 from app.assets.animations import read_clip
 from app.assets.rig import validate_rig
-from . import animator_sequences, zzz_animation, zzz_index, zzz_morphs, zzz_props
+from . import animator_sequences, zzz_animation, zzz_index, zzz_layers, zzz_morphs, zzz_props
 from .native import humanoid_controls
 from .pipeline import manifest_props, report_props, clip_id, document, preserve_library, reusable_clip_key, sub_skeleton_map, write_document
 from .runtime import ExtractionCancelled, check_cancelled, clear_samples
@@ -372,26 +372,17 @@ def _controller_label(family, name):
     return "_".join(token for token in tokens if token and token != "Controller")
 
 
-def _clip_pointers(clips, converted):
-    """(CAB casefold, PathID) -> the converted (key, duration) values of the clip rows at that pointer."""
-    pointers = {}
-    for row in clips:
-        if zzz_index.identity(row) in converted:
-            pointers.setdefault((row["cab"].casefold(), row["path_id"]), set()).add(converted[zzz_index.identity(row)])
-    return pointers
-
-
-def _controller_clips(client, index, keys, clips, converted, cancel):
+def _controller_clips(client, index, keys, pointers, cancel):
     """{controller key: converted clip ids its states' motion leaves play} for the indexed, readable keys.
 
-    A key is (CAB casefold, PathID). Index copies of one controller share one read; a controller
-    that is not indexed or cannot be read is left out.
+    A key is (CAB casefold, PathID); ``pointers`` maps a clip's (CAB casefold, PathID) to the
+    converted ``(key, duration)`` values it contributes to. Index copies of one controller share
+    one read; a controller that is not indexed or cannot be read is left out.
     """
     wanted, copies = set(keys), {}
     for row in index:
         if row["type"] == "AnimatorController" and (row["cab"].casefold(), row["path_id"]) in wanted:
             copies.setdefault((row["cab"].casefold(), row["path_id"]), []).append(row)
-    pointers = _clip_pointers(clips, converted)
     result = {}
     for key in sorted(copies):
         rows = sorted(copies[key], key=zzz_index.identity)
@@ -415,20 +406,18 @@ def _controller_clips(client, index, keys, clips, converted, cancel):
     return result
 
 
-def _sequences(client, index, family, clips, converted, cancel):
-    """Authored sequences of the character's controllers (battle, then suffixed ones).
+def _family_controllers(client, index, family, cancel):
+    """The readable controllers of the character's family (battle, then suffixed ones), as ``dict(label, controller)``.
 
-    Index copies of one controller (the same CAB and PathID in several blocks) are one
-    object; different objects sharing a name are never guessed between. Leaves bind
-    by pointer to converted clips, whose copies dedupe to one clip key.
+    Index copies of one controller (the same CAB and PathID in several blocks) are one object;
+    different objects sharing a name are never guessed between.
     """
     named = {}
     for row in index:
         label = _controller_label(family, row["name"]) if row["type"] == "AnimatorController" else None
         if label is not None:
             named.setdefault((label, row["name"]), []).append(row)
-    pointers = _clip_pointers(clips, converted)
-    result, seen, total = [], set(), 0
+    result = []
     for label, name in sorted(named)[:MAX_CONTROLLERS]:
         rows = sorted(named[(label, name)], key=zzz_index.identity)
         if len({(row["cab"].casefold(), row["path_id"]) for row in rows}) != 1:
@@ -440,22 +429,25 @@ def _sequences(client, index, family, clips, converted, cancel):
             raise
         except (ValueError, KeyError, TypeError):
             continue
-        states = controller.get("states") if isinstance(controller, dict) else None
-        steps = {}
-        for number, state in enumerate(states if isinstance(states, list) else []):
-            motions = state.get("motions") if isinstance(state, dict) else None
-            body = motions[0] if isinstance(motions, list) and motions else None
-            leaves = body.get("leaves") if isinstance(body, dict) else None
-            if (not isinstance(state, dict) or state.get("mirror") or state.get("mirror_param")
-                    or not isinstance(leaves, list) or len(leaves) != 1):
-                continue
-            leaf = leaves[0]
-            if not isinstance(leaf, dict) or not isinstance(leaf.get("cab"), str) or type(leaf.get("path_id")) is not int:
-                continue
-            found = pointers.get((leaf["cab"].casefold(), leaf["path_id"]), set())
-            if len(found) == 1:
-                steps[number] = next(iter(found))
-        for item in animator_sequences.derive(controller, steps, animator_sequences.FRAME_COUNT,
+        if isinstance(controller, dict):
+            result.append(dict(label=label, name=name, controller=controller))
+    return result
+
+
+def _sequences(controllers, pair_states):
+    """Authored sequences of the character's controllers (battle, then suffixed ones).
+
+    ``pair_states[n]`` maps the plain states of controller ``n`` to the sets of converted clips of
+    their body and skin clip pair; a controller whose layers were not paired has no sequences.
+    """
+    result, seen, total = [], set(), 0
+    for number, entry in enumerate(controllers):
+        if number not in pair_states:
+            continue
+        # A state whose clip pair has block copies converting differently stays unresolved.
+        steps = {state: next(iter(values)) for state, values in pair_states[number].items() if len(values) == 1}
+        label = entry["label"]
+        for item in animator_sequences.derive(entry["controller"], steps, animator_sequences.FRAME_COUNT,
                                               f"{label} · " if label else ""):
             if item["id"] in seen or total + len(item["steps"]) > animator_sequences.MAX_SEQUENCE_TOTAL_STEPS:
                 continue
@@ -465,6 +457,66 @@ def _sequences(client, index, family, clips, converted, cancel):
             if len(result) == animator_sequences.MAX_SEQUENCES:
                 return result
     return result
+
+
+def _discard_clip(library, entries, existing, source):
+    """Remove a clip an earlier extraction wrote (owned by ``source``) that this one now rejects."""
+    for key in [key for key, metadata in existing.items() if metadata.get("source") == source]:
+        entry, metadata = entries.pop(key), existing.pop(key)
+        for name in (entry["file"], metadata["data_file"]):
+            if not any(name in (other["file"], existing[other_key]["data_file"]) for other_key, other in entries.items()):
+                (library / name).unlink(missing_ok=True)
+
+
+def _convert_job(client, job, rig, avatar, morphs):
+    """Convert one body clip row with its skin-layer clip row.
+
+    Returns ``(result, layered)`` where ``result`` is :func:`zzz_animation.convert`'s tuple.
+    """
+    try:
+        body = client.read(job["body"])
+        skin = client.read(job["skin"]) if job["skin"] is not None else None
+        if skin is not None and not zzz_animation.has_curves(skin):
+            skin = None  # An empty skin clip leaves the body motion unchanged.
+        return zzz_animation.convert(body, client.work, rig, avatar, morphs, layer=skin, mask=job["mask"],
+                                     max_unresolved=job["unresolved"]), skin is not None
+    finally:
+        # Sample buffers belong to a single clip.
+        clear_samples(client.work)
+
+
+def _paired_jobs(controllers, index):
+    """Conversion jobs for every controller's paired states, plus the plain states each job plays.
+
+    A job is one body clip row and its skin clip row (a clip with copies in several blocks gives
+    one job per combination, as unproven copies stay separate clips). Returns ``(jobs, pair_states,
+    skipped)``; ``pair_states[n]`` (filled while converting) exists only for controllers whose
+    layers were paired. A job repeating across controllers (same rows and mask) is converted once.
+    """
+    lookup = zzz_layers.clip_lookup(index)
+    jobs, job_index, pair_states, skipped = [], {}, {}, []
+    for number, entry in enumerate(controllers):
+        label = entry["name"]
+        try:
+            layer = zzz_layers.skin_layer(entry["controller"])
+            pairs, pair_skipped = zzz_layers.state_pairs(entry["controller"], lookup, layer)
+        except ValueError as error:
+            skipped.append(dict(name=label, reason=str(error)))
+            continue
+        skipped += [{**item, "name": f"{label} / {item['name']}"} for item in pair_skipped]
+        pair_states[number] = {}
+        mask = zzz_layers.mask_hashes(layer)
+        for pair in pairs:
+            for body in pair["body"]:
+                for skin in pair["skin"] or (None,):
+                    key = zzz_index.identity(body), skin and zzz_index.identity(skin), mask if skin else frozenset()
+                    job = job_index.get(key)
+                    if job is None:
+                        job = job_index[key] = dict(body=body, skin=skin, mask=key[2], states=[],
+                                                    unresolved=zzz_animation.MAX_PAIRED_UNRESOLVED_TRACKS)
+                        jobs.append(job)
+                    job["states"] += [(number, state) for state in pair["state_indices"]]
+    return jobs, pair_states, skipped
 
 
 def build(client, root, record, output, query, progress, cancel, index=None):
@@ -486,57 +538,90 @@ def build(client, root, record, output, query, progress, cancel, index=None):
     clips = [row for row in index if row["type"] == "AnimationClip" and row["name"].startswith(chosen["family"] + "_Ani_")]
     if not clips or len(clips) > 4096:
         raise ValueError("No bounded character animation set was found for the verified ZZZ Avatar.")
-    imported, skipped, provenance, seen, converted = 0, [], [], {}, {}
-    for number, row in enumerate(clips):
-        progress("convert", number, len(clips))
+    # The controllers play body clips (often the base outfit's) under the family's masked skin
+    # layer, so clips come from paired states first; family clips no state pairs convert on their own.
+    controllers = _family_controllers(client, index, chosen["family"], cancel)
+    jobs, pair_states, skipped = _paired_jobs(controllers, index)
+    used = {zzz_index.identity(row) for job in jobs for row in (job["body"], job["skin"]) if row is not None}
+    for row in clips:
+        if zzz_index.identity(row) not in used:
+            jobs.append(dict(body=row, skin=None, mask=frozenset(), unresolved=None, states=[]))
+    if len(jobs) > 4096:
+        raise ValueError("No bounded character animation set was found for the verified ZZZ Avatar.")
+    # A clip keying no bone any captured mesh is skinned to (a companion's own bones) moves nothing of the model.
+    skinned = {bone for palette in rig["components"] for bone in palette["bone_map"].values()}
+    imported, provenance, seen, claimed = 0, [], {}, set()
+    # (CAB casefold, PathID) -> the (clip key, duration) values of the converted clips a clip takes part in.
+    pointers = {}
+    for number, job in enumerate(jobs):
+        progress("convert", number, len(jobs))
         check_cancelled(cancel)
-        source = zzz_index.identity(row)
+        skin = job["skin"]
+        name = (skin or job["body"])["name"]
+        if skin:
+            # The skin clip's own identity keeps a re-extraction replacing its earlier skin-only clip.
+            source = zzz_index.identity(skin)
+            if source in claimed:
+                source = zzz_layers.pair_source(job)
+            claimed.add(source)
+        else:
+            source = zzz_index.identity(job["body"])
         try:
-            metadata = client.read(row)
-            binary, frames, duration, unsupported, morph, keyed, root_motion = zzz_animation.convert(
-                metadata, client.work, rig, avatar, facial["bindings"])
+            (binary, frames, duration, unsupported, morph, keyed, root_motion), layered = _convert_job(
+                client, job, rig, avatar, facial["bindings"])
         except ExtractionCancelled:
             raise
         except (ValueError, KeyError, TypeError) as error:
             reason = str(error) if isinstance(error, ValueError) else "Unsupported or incompatible native clip."
-            skipped.append(dict(source=source, name=row["name"], reason=reason))
+            skipped.append(dict(source=source, name=name, reason=reason))
             continue
-        finally:
-            # Sample buffers belong to a single clip.
-            clear_samples(client.work)
+        if skinned.isdisjoint(keyed):
+            skipped.append(dict(source=source, name=name, reason="The clip moves no bone the model's meshes use."))
+            _discard_clip(library, entries, existing, source)
+            continue
         digest = hashlib.sha256(binary).hexdigest()
-        duplicate = row["name"], digest
+        duplicate = name, digest
         if duplicate in seen:
-            converted[source] = seen[duplicate]
-            continue
-        key = reusable_clip_key(entries, existing, source, row["name"], {digest})
-        if key is None:
-            key = clip_id(row["name"], source, set(entries))
-            if (library / (key + ".json")).exists() or (library / (key + ".bin")).exists():
-                raise ValueError("Extracted clips conflict with preserved user files.")
-        metadata = dict(format="mod-viewer-animation", version=2, coordinate_space="asset", layout="frame-major-tqs-f32le",
-                        skeleton_id=rig["id"], frame_count=frames, bone_count=len(rig["bones"]), duration=duration,
-                        data_file=key + ".bin", sha256=digest, source=source, omitted_non_transform_channels=unsupported,
-                        keyed_bones=keyed)
-        if morph:
-            metadata["morphs"] = zzz_morphs.export_glb(facial, morph, frames, duration, library)
-            metadata["blend_shape_clamp"] = morph["clamp"]
-        if root_motion:
-            metadata["root_motion"] = root_motion
-        (library / (key + ".bin")).write_bytes(binary)
-        write_document(library / (key + ".json"), metadata, 1024 * 1024)
-        entry = dict(id=key, name=row["name"][:128], file=key + ".json", duration=duration)
-        read_clip(str(library), entry, rig, validated_morphs=validated_morphs)
-        entries[key], existing[key] = entry, metadata
-        seen[duplicate] = converted[source] = (key, duration)
-        provenance.append(dict(id=key, source=source, omitted_non_transform_channels=unsupported,
-                               facial_glb=metadata.get("morphs", {}).get("file")))
-        imported += 1
-        if len(entries) > 1024 or sum(file.stat().st_size for file in library.rglob("*") if file.is_file()) > 2 * 1024 ** 3:
-            raise ValueError("The extracted animation library exceeds its size limit.")
+            value = seen[duplicate]
+        else:
+            key = reusable_clip_key(entries, existing, source, name, {digest})
+            if key is None:
+                key = clip_id(name, source, set(entries))
+                if (library / (key + ".json")).exists() or (library / (key + ".bin")).exists():
+                    raise ValueError("Extracted clips conflict with preserved user files.")
+            metadata = dict(format="mod-viewer-animation", version=2, coordinate_space="asset", layout="frame-major-tqs-f32le",
+                            skeleton_id=rig["id"], frame_count=frames, bone_count=len(rig["bones"]), duration=duration,
+                            data_file=key + ".bin", sha256=digest, source=source, omitted_non_transform_channels=unsupported,
+                            keyed_bones=keyed)
+            if layered:
+                metadata["layers"] = dict(body_source=zzz_index.identity(job["body"]), body_name=job["body"]["name"],
+                                          skin_source=zzz_index.identity(skin), skin_name=skin["name"],
+                                          mask_bones=len(job["mask"]))
+            if morph:
+                metadata["morphs"] = zzz_morphs.export_glb(facial, morph, frames, duration, library)
+                metadata["blend_shape_clamp"] = morph["clamp"]
+            if root_motion:
+                metadata["root_motion"] = root_motion
+            (library / (key + ".bin")).write_bytes(binary)
+            write_document(library / (key + ".json"), metadata, 1024 * 1024)
+            entry = dict(id=key, name=name[:128], file=key + ".json", duration=duration)
+            read_clip(str(library), entry, rig, validated_morphs=validated_morphs)
+            entries[key], existing[key] = entry, metadata
+            value = seen[duplicate] = (key, duration)
+            provenance.append(dict(id=key, source=source, omitted_non_transform_channels=unsupported,
+                                   facial_glb=metadata.get("morphs", {}).get("file")))
+            imported += 1
+            if len(entries) > 1024 or sum(file.stat().st_size for file in library.rglob("*") if file.is_file()) > 2 * 1024 ** 3:
+                raise ValueError("The extracted animation library exceeds its size limit.")
+        for row in (job["body"], skin):
+            if row is None:
+                continue
+            pointers.setdefault((row["cab"].casefold(), row["path_id"]), set()).add(value)
+        for position, state in job["states"]:
+            pair_states[position].setdefault(state, set()).add(value)
     if not imported:
         raise ValueError("No compatible ZZZ animation clips could be converted. Existing Asset files were preserved.")
-    sequences = _sequences(client, index, chosen["family"], clips, converted, cancel)
+    sequences = _sequences(controllers, pair_states)
     # Weapons the capture never drew; a failure leaves the clips unaffected.
     props, skipped_props, prop_error = [], [], None
     try:
@@ -547,7 +632,7 @@ def build(client, root, record, output, query, progress, cancel, index=None):
             client, chosen, rig, index, library, cancel,
             lambda family, row, named=mesh_name_hint(index): named(family, row["name"]),
             captured, asset, clips=written, alternates=True,
-            controller_clips=lambda keys: _controller_clips(client, index, keys, clips, converted, cancel))
+            controller_clips=lambda keys: _controller_clips(client, index, keys, pointers, cancel))
     except ExtractionCancelled:
         raise
     except (ValueError, KeyError, TypeError, OSError) as error:

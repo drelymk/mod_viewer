@@ -14,7 +14,7 @@ import numpy as np
 
 from . import gi_index
 from .mecanim import LAST, TDOF
-from .zzz_animation import dimension, sample_channels
+from .zzz_animation import dimension, has_curves, sample_channels, timing
 
 MAX_STATES = 4096
 # Hands more than a tenth of the human scale from the clip's own IK goals mean the
@@ -125,19 +125,6 @@ def human_mapping(avatar, solver):
     return index
 
 
-def has_curves(metadata):
-    return (metadata["acl_count"] + metadata["streamed_count"] + metadata["dense"].get("count", 0)
-            + len(metadata["constant"])) > 0
-
-
-def _timing(metadata):
-    start, stop = metadata["start"], metadata["stop"]
-    if (not all(isinstance(v, (int, float)) and np.isfinite(v) for v in (start, stop))
-            or not 0 < stop - start <= 3600):
-        raise ValueError("Native clip timing is unsupported.")
-    return float(start), float(stop)
-
-
 def _bindings(metadata, sampled):
     cursor = 0
     for binding in metadata["bindings"]:
@@ -215,7 +202,7 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None, 
     ``point_tracks`` maps each such point the clip animates to its frame-major local
     (xyz, xyzw) transforms.
     """
-    start, stop = _timing(body)
+    start, stop = timing(body)
     duration = stop - start
     frames = max(2, round(duration * 60) + 1)
     bones = len(rig["bones"])
@@ -280,7 +267,7 @@ def convert_state(body, streamer, work, rig, avatar, solver, mask, facial=None, 
         output[:, avatar_node + 1, 0:3] = local_t[:, node]
         output[:, avatar_node + 1, 3:7] = local_q[:, node]
     if streamer is not None:
-        s_start, s_stop = _timing(streamer)
+        s_start, s_stop = timing(streamer)
         # Synced layers follow the base state's normalized time.
         layer_targets = s_start + (targets - start) / duration * (s_stop - s_start)
         layer_morphs = set()
